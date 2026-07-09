@@ -110,3 +110,18 @@ tbody tr:last-child td { border-bottom: none; }
 .legend .swatch { width: 10px; height: 10px; border-radius: 3px; }
 .empty { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
 code.inline { background: var(--grid); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+/* user-input controls */
+.ctrl-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: transparent; color: var(--ink-2); font-size: 12px; cursor: pointer;
+}
+.chip:hover { border-color: var(--muted); }
+.chip.on { background: var(--series-1); color: #fff; border-color: var(--series-1); }
+.chip.on-block { background: var(--neg); color: #fff; border-color: var(--neg); }
+.views-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
+.vrow { display: grid; grid-template-columns: 72px 1fr 66px 74px; align-items: center; gap: 10px; }
+.vrow .sym { font-weight: 600; font-size: 13px; }
+input[type="range"] { accent-color: var(--series-1); width: 100%; }

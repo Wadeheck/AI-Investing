@@ -25,7 +25,32 @@ export interface DecisionRow {
   score: number;
   confidence: number;
   expected_return?: number;
+  user_view?: number;
   rationale: string;
+}
+
+export interface ControlsInfo {
+  stance: string;
+  decisiveness: number;
+  risk_appetite?: number;
+  views: Record<string, number>;
+  blocklist: string[];
+  focus: string[];
+}
+
+export interface ComparisonAsset {
+  symbol: string;
+  your_qty: number;
+  your_pnl: number;
+  formula_qty: number;
+  formula_pnl: number;
+}
+
+export interface ComparisonInfo {
+  your_equity: number;
+  formula_equity: number;
+  input_value: number;
+  assets: ComparisonAsset[];
 }
 
 export interface StateData {
@@ -36,6 +61,8 @@ export interface StateData {
   cash: number;
   briefing: string;
   formula: FormulaInfo;
+  controls?: ControlsInfo;
+  comparison?: ComparisonInfo;
   positions: PositionRow[];
   decisions: DecisionRow[];
 }
@@ -46,6 +73,7 @@ export interface HistoryPoint {
   cash: number;
   version: number;
   trades_learned: number;
+  shadow_equity?: number;
 }
 
 export interface HistoryData {

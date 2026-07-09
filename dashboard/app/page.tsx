@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { EquityChart, type Series } from "@/components/charts";
+import { Controls } from "@/components/controls";
 import {
   BacktestPanel,
   Briefing,
+  ComparisonPanel,
   DecisionsFeed,
   FormulaPanel,
   PositionsTable,
@@ -46,8 +48,15 @@ export default function Page() {
   let equitySeries: Series[] = [];
   let equityTitle = "Equity";
   if (livePts.length >= 2) {
-    equitySeries = [{ label: "equity", color: "var(--series-1)", values: livePts.map((p) => p.equity) }];
-    equityTitle = "Equity — live";
+    equitySeries = [{ label: "you", color: "var(--series-1)", values: livePts.map((p) => p.equity) }];
+    if (livePts.some((p) => typeof p.shadow_equity === "number")) {
+      equitySeries.push({
+        label: "formula-only",
+        color: "var(--series-2)",
+        values: livePts.map((p) => p.shadow_equity ?? p.equity),
+      });
+    }
+    equityTitle = "Equity — you vs formula-only";
   } else if (backtest) {
     equitySeries = [
       { label: "default", color: "var(--series-1)", values: backtest.equity_curve_default },
@@ -58,6 +67,10 @@ export default function Page() {
 
   const mode = state?.mode ?? "—";
   const halted = state?.halted;
+  const symbols = Array.from(new Set([
+    ...(state?.decisions?.map((d) => d.symbol) ?? []),
+    ...(state?.positions?.map((p) => p.symbol) ?? []),
+  ]));
 
   return (
     <div className="wrap">
@@ -88,10 +101,18 @@ export default function Page() {
       <StatTiles state={state} history={history} />
 
       <div className="grid" style={{ marginTop: 16 }}>
+        <Controls symbols={symbols} />
+      </div>
+
+      <div className="grid" style={{ marginTop: 16 }}>
         <div className="card">
           <h2>{equityTitle}</h2>
           <EquityChart series={equitySeries} />
         </div>
+      </div>
+
+      <div className="grid" style={{ marginTop: 16 }}>
+        <ComparisonPanel state={state} />
       </div>
 
       <div className="grid cols-2" style={{ marginTop: 16 }}>

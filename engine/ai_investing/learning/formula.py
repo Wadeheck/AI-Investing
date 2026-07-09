@@ -50,13 +50,15 @@ class FormulaModel:
     def conviction(self, feats: dict[str, float]) -> float:
         return math.tanh(self.gain * self.raw(feats))
 
-    def target_weight(self, feats: dict[str, float]) -> float:
-        c = self.conviction(feats)
+    def target_from_conviction(self, c: float) -> float:
         sign = 1.0 if c >= 0 else -1.0
         if self.entry_threshold >= 1.0:
             return 0.0
         mag = max(0.0, abs(c) - self.entry_threshold) / (1.0 - self.entry_threshold)
         return max(-1.0, min(1.0, sign * mag * self.size_scale))
+
+    def target_weight(self, feats: dict[str, float]) -> float:
+        return self.target_from_conviction(self.conviction(feats))
 
     def weight_of(self, name: str) -> float:
         try:

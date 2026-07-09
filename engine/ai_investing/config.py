@@ -182,6 +182,7 @@ class Settings:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))
     heartbeat_path: str = field(default_factory=lambda: _get("HEARTBEAT_PATH", str(PROJECT_ROOT / "data" / "heartbeat.json")))
+    user_views_path: str = field(default_factory=lambda: _get("USER_VIEWS_PATH", str(PROJECT_ROOT / "data" / "views.json")))
 
 
 settings = Settings()

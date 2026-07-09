@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 
 from ai_investing.alerts import get_notifier
-from ai_investing.brokers import get_broker
+from ai_investing.brokers import PaperBroker, get_broker
 from ai_investing.config import Settings
 from ai_investing.data import get_provider
 from ai_investing.data import news as news_mod
@@ -20,7 +20,8 @@ from ai_investing.models import Asset, AssetClass, Order, OrderStatus, OrderType
 from ai_investing.safety import CircuitBreaker, DataGuard, validate_settings, write_heartbeat
 from ai_investing.signals import default_signals
 from ai_investing.storage import Journal
-from ai_investing.strategy import DecisionEngine, RegimeGate, RiskManager, build_market_stats
+from ai_investing.strategy import (DecisionEngine, RegimeGate, RiskManager, UserViews,
+                                   build_market_stats)
 
 
 class Runner:
@@ -41,7 +42,8 @@ class Runner:
         # --- learning engine ---
         self.store = ParamStore(settings.params_path)
         self.model, rls = self.store.load()
-        self.engine = DecisionEngine(default_signals(), model=self.model)
+        self.user_views = UserViews.load(settings.user_views_path)
+        self.engine = DecisionEngine(default_signals(), model=self.model, user_views=self.user_views)
         lc = settings.learning
         self.rls = rls or RLSLearner.initialize(
             self.model.weights, prior_confidence=lc.prior_confidence,
@@ -77,6 +79,24 @@ class Runner:
         self.guard = DataGuard(settings.safety)
         self._last_prices: dict[str, float] = {}
 
+        # --- shadow "formula-only" portfolio (ignores your input) for the comparison ---
+        self._shadow_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "shadow.json")
+        self.shadow_broker = self._load_shadow(settings.starting_cash)
+        self.shadow_engine = DecisionEngine(default_signals(), model=self.model, user_views=UserViews())
+        self.shadow_risk = RiskManager(settings.risk, regime_gate=self.regime)
+
+    def _load_shadow(self, starting_cash: float) -> PaperBroker:
+        # Persist the shadow only in LIVE mode (so it accumulates like the live account).
+        # In paper mode it resets each run, matching the paper broker, for a fair A/B.
+        if self.settings.live:
+            try:
+                with open(self._shadow_path) as fh:
+                    return PaperBroker.from_state(json.load(fh), allow_short=self.settings.risk.allow_short)
+            except (OSError, json.JSONDecodeError, KeyError):
+                pass
+        return PaperBroker(starting_cash, allow_short=self.settings.risk.allow_short)
+
     def _build_watchlist(self) -> list[Asset]:
         stocks = [Asset(s, AssetClass.STOCK) for s in self.settings.stock_watchlist]
         crypto = [Asset(s, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
@@ -86,6 +106,8 @@ class Runner:
     # -- one full evaluation/execution/learning pass ------------------------
     def run_cycle(self) -> dict:
         self._cycles += 1
+        self.user_views = UserViews.load(self.settings.user_views_path)   # live edits take effect
+        self.engine.user_views = self.user_views
         bars_by_key = {a.key: self.provider.get_bars(a, limit=250) for a in self.assets}
         prices = {k: (b[-1].close if b else 0.0) for k, b in bars_by_key.items()}
         self._stats = build_market_stats(bars_by_key, lookback=20)
@@ -127,6 +149,9 @@ class Runner:
         if context.get("briefing"):
             print(f"[briefing] {context['briefing']}")
 
+        # Shadow "formula-only" portfolio — what the model would do ignoring your input.
+        self._run_shadow(prices, context, bars_by_key, bad_data)
+
         executed: list[Order] = []
 
         # 1) Circuit breaker: daily / trailing / inception drawdown + per-day caps.
@@ -145,10 +170,17 @@ class Runner:
         for o in self.risk.stop_orders(portfolio, prices, market=self._stats):
             executed.append(self._execute(o, prices, guard_slippage=False))
 
-        # 3) Decisions — excluding symbols the data guard flagged.
+        # 2b) Exit any position you've blocked / de-focused (your input, applied).
+        for key, pos in list(self.broker.get_positions().items()):
+            if not self.user_views.is_allowed(pos.asset.symbol):
+                side = Side.SELL if pos.qty > 0 else Side.BUY
+                executed.append(self._execute(
+                    Order(pos.asset, side, abs(pos.qty), reason="user blocked"), prices, guard_slippage=False))
+
+        # 3) Decisions — excluding data-guard-flagged and user-blocked symbols.
         portfolio = self.broker.portfolio()
         equity = portfolio.equity(prices)
-        active = [a for a in self.assets if a.key not in bad_data]
+        active = [a for a in self.assets if a.key not in bad_data and self.user_views.is_allowed(a.symbol)]
         decisions = [self.engine.decide(a, bars_by_key[a.key], context) for a in active]
         features_by_key = {d.asset.key: d.features for d in decisions}
         for d in decisions:
@@ -230,6 +262,55 @@ class Runner:
             self.model.weights = list(self.rls.theta)
         if samples and self._cycles % lc.save_every == 0:
             self.store.save(self.model, self.rls, journal=self.journal)
+
+    # -- shadow "formula-only" portfolio (the comparison baseline) ----------
+    def _run_shadow(self, prices, context, bars_by_key, bad_data) -> None:
+        """Trade a parallel paper portfolio on pure model conviction (no user input),
+        so we can measure whether YOUR input helped or hurt vs. following the formula."""
+        b = self.shadow_broker
+        for o in self.shadow_risk.stop_orders(b.portfolio(), prices, market=self._stats):
+            self._shadow_fill(o, prices)
+        port = b.portfolio()
+        equity = port.equity(prices)
+        active = [a for a in self.assets if a.key not in bad_data]
+        decisions = [self.shadow_engine.decide(a, bars_by_key[a.key], context) for a in active]
+        for o in self.shadow_risk.size_orders(decisions, port, prices, equity,
+                                              market=self._stats, model=self.model):
+            self._shadow_fill(o, prices)
+        if self.settings.live:
+            try:
+                with open(self._shadow_path, "w") as fh:
+                    json.dump(b.state(), fh)
+            except OSError:
+                pass
+
+    def _shadow_fill(self, order: Order, prices: dict[str, float]) -> None:
+        mid = prices.get(order.asset.key, 0.0)
+        ms = self._stats.get(order.asset.key)
+        eff = self.costs.effective_price(order.side, mid, order.qty,
+                                         ms.adv if ms else None, ms.vol if ms else None)
+        self.shadow_broker.submit(order, eff)
+
+    def _comparison(self, real_portfolio, prices) -> dict:
+        shadow = self.shadow_broker.portfolio()
+        real_pos = {p.asset.symbol: p for p in real_portfolio.positions.values()}
+        shad_pos = {p.asset.symbol: p for p in shadow.positions.values()}
+        assets = []
+        for s in sorted(set(real_pos) | set(shad_pos)):
+            rp, sp = real_pos.get(s), shad_pos.get(s)
+            ref = rp or sp
+            px = prices.get(ref.asset.key, ref.avg_price)
+            assets.append({
+                "symbol": s,
+                "your_qty": round(rp.qty, 4) if rp else 0.0,
+                "your_pnl": round(rp.unrealized_pnl(px), 2) if rp else 0.0,
+                "formula_qty": round(sp.qty, 4) if sp else 0.0,
+                "formula_pnl": round(sp.unrealized_pnl(px), 2) if sp else 0.0,
+            })
+        your_eq = real_portfolio.equity(prices)
+        formula_eq = shadow.equity(prices)
+        return {"your_equity": round(your_eq, 2), "formula_equity": round(formula_eq, 2),
+                "input_value": round(your_eq - formula_eq, 2), "assets": assets}
 
     # -- execution helpers --------------------------------------------------
     def _execute(self, order: Order, prices: dict[str, float], guard_slippage: bool = True) -> Order:
@@ -348,6 +429,13 @@ class Runner:
                 "gain": self.model.gain,
                 "entry_threshold": self.model.entry_threshold,
             },
+            "controls": {
+                "stance": self.user_views.stance,
+                "decisiveness": self.user_views.decisiveness,
+                "views": self.user_views.views,
+                "blocklist": self.user_views.blocklist,
+                "focus": self.user_views.focus,
+            },
             "positions": [
                 {"symbol": p.asset.symbol, "qty": p.qty, "avg_price": p.avg_price,
                  "price": prices.get(k, p.avg_price),
@@ -358,10 +446,12 @@ class Runner:
             "decisions": [
                 {"symbol": d.asset.symbol, "direction": d.direction.value,
                  "score": round(d.score, 3), "confidence": round(d.confidence, 3),
-                 "expected_return": round(d.expected_return, 5), "rationale": d.rationale}
+                 "expected_return": round(d.expected_return, 5),
+                 "user_view": round(d.user_view, 3), "rationale": d.rationale}
                 for d in decisions
             ],
         }
+        state["comparison"] = self._comparison(portfolio, prices)
         data_dir = os.path.dirname(os.path.abspath(self.settings.state_path))
         try:
             os.makedirs(data_dir, exist_ok=True)
@@ -386,6 +476,7 @@ class Runner:
         points.append({
             "ts": state["ts"], "equity": round(state["equity"], 2), "cash": round(state["cash"], 2),
             "version": self.model.version, "trades_learned": self.samples_seen,
+            "shadow_equity": round(state.get("comparison", {}).get("formula_equity", state["equity"]), 2),
         })
         with open(path, "w") as fh:
             json.dump({"updated": state["ts"], "points": points[-500:]}, fh)

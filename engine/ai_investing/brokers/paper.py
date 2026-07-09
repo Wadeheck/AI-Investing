@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai_investing.brokers.base import BrokerAdapter
-from ai_investing.models import Order, OrderStatus, OrderType, Position, Side
+from ai_investing.models import Asset, AssetClass, Order, OrderStatus, OrderType, Position, Side
 
 
 class PaperBroker(BrokerAdapter):
@@ -76,3 +76,23 @@ class PaperBroker(BrokerAdapter):
         order.filled_price = price
         order.status = OrderStatus.FILLED
         return order
+
+    # -- persistence (used by the shadow / formula-only portfolio) ----------
+    def state(self) -> dict:
+        return {"cash": self._cash, "positions": [
+            {"symbol": p.asset.symbol, "asset_class": p.asset.asset_class.value,
+             "exchange": p.asset.exchange, "quote": p.asset.quote,
+             "qty": p.qty, "avg_price": p.avg_price}
+            for p in self._positions.values()]}
+
+    @classmethod
+    def from_state(cls, d: dict, allow_short: bool = False) -> "PaperBroker":
+        b = cls(float(d.get("cash", 0.0)), allow_short=allow_short)
+        for p in d.get("positions", []):
+            try:
+                asset = Asset(p["symbol"], AssetClass(p["asset_class"]),
+                              exchange=p.get("exchange", ""), quote=p.get("quote", "USD"))
+                b._positions[asset.key] = Position(asset, float(p["qty"]), float(p["avg_price"]))
+            except (KeyError, ValueError):
+                continue
+        return b

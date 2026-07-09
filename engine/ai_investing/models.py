@@ -85,6 +85,7 @@ class Decision:
     rationale: str = ""
     features: dict = field(default_factory=dict)   # feature vector φ used by the formula
     expected_return: float = 0.0                    # raw = θ·φ, pre-squash
+    user_view: float = 0.0                          # your tilt on this asset, -1..+1
 
 
 @dataclass

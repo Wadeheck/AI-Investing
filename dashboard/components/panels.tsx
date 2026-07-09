@@ -90,6 +90,7 @@ export function DecisionsFeed({ state }: { state: StateData | null }) {
               <span className="why">
                 {typeof d.expected_return === "number" ? `E[r] ${pct(d.expected_return)} · ` : ""}
                 conv {d.score >= 0 ? "+" : ""}{d.score.toFixed(2)}
+                {d.user_view ? ` · you ${d.user_view > 0 ? "+" : ""}${d.user_view.toFixed(2)}` : ""}
               </span>
             </div>
           ))}
@@ -191,6 +192,54 @@ export function BacktestPanel({ backtest }: { backtest: BacktestData | null }) {
         <span className="muted">provider: {backtest.provider}</span>
         <span className="muted">assets: {backtest.assets?.join(", ")}</span>
       </div>
+    </div>
+  );
+}
+
+export function ComparisonPanel({ state }: { state: StateData | null }) {
+  const c = state?.comparison;
+  if (!c) {
+    return (
+      <div className="card">
+        <h2>You vs the formula</h2>
+        <div className="empty">Run a cycle — this compares your decisions with the formula-only portfolio.</div>
+      </div>
+    );
+  }
+  const usd = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(2)}`;
+  const overrides = c.assets.filter((a) => Math.abs(a.your_qty - a.formula_qty) > 1e-6);
+  const ahead = c.input_value >= 0;
+  return (
+    <div className="card">
+      <h2>
+        You vs the formula{" "}
+        {overrides.length > 0 && <span className="badge">{overrides.length} override{overrides.length > 1 ? "s" : ""}</span>}
+      </h2>
+      <div className="grid cols-2" style={{ gap: 12 }}>
+        <div className="kpi"><div className="label">You (with your input)</div><div className="value">{money(c.your_equity)}</div></div>
+        <div className="kpi"><div className="label">Formula-only</div><div className="value">{money(c.formula_equity)}</div></div>
+      </div>
+      <div className={`delta ${ahead ? "pos" : "neg"}`} style={{ marginTop: 10, fontSize: 15, fontWeight: 600 }}>
+        Your input: {ahead ? "+" : ""}{usd(c.input_value)} — {ahead ? "ahead of" : "behind"} the formula
+      </div>
+      {overrides.length > 0 && (
+        <table style={{ marginTop: 12 }}>
+          <thead>
+            <tr><th>Symbol</th><th>Your qty</th><th>Your P&amp;L</th><th>Formula qty</th><th>Formula P&amp;L</th></tr>
+          </thead>
+          <tbody>
+            {overrides.map((a) => (
+              <tr key={a.symbol}>
+                <td>{a.symbol}</td>
+                <td>{a.your_qty.toFixed(3)}</td>
+                <td className={cls(a.your_pnl)}>{usd(a.your_pnl)}</td>
+                <td>{a.formula_qty.toFixed(3)}</td>
+                <td className={cls(a.formula_pnl)}>{usd(a.formula_pnl)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

@@ -127,6 +127,46 @@ python3 -m ai_investing.backtest.main --optimize --save   # walk-forward curate 
 python3 -m ai_investing.main --formula                     # show the current formula
 ```
 
+## Your input — the decisive factor
+The formula blends signals + news + sentiment into a `model_conviction`; **your view then
+tilts it, and can override it**:
+
+```
+final = (1 − w)·model_conviction + w·your_view ,  w = decisiveness × |your view|
+        then scaled by your risk stance × risk appetite
+```
+
+Set it the easy way in the **dashboard** — per-asset bullish↔bearish sliders, a risk-stance
+selector, decisiveness + **risk-appetite** dials, and block toggles. It writes `data/views.json`,
+which the engine re-reads **every cycle** (live). Or from the CLI:
+
+```bash
+python3 -m ai_investing.main --view NVDA=0.8 --view TSLA=-0.5   # bullish NVDA, bearish TSLA
+python3 -m ai_investing.main --stance cautious                  # aggressive|normal|cautious|defensive|cash
+python3 -m ai_investing.main --risk-appetite 0.3               # 0..1 — scales your position sizing
+python3 -m ai_investing.main --block DOGE/USD                   # never trade it
+python3 -m ai_investing.main --show-views
+```
+
+A strong view with high decisiveness wins; no view means the model runs untouched.
+**Safety limits (circuit breaker, caps) always override your input** — you can't tell it to
+keep losing.
+
+### Your input vs. the formula
+The engine runs a **shadow "formula-only" portfolio** in parallel that ignores your input, so
+you can see whether your overrides help or hurt. The dashboard shows both equity curves plus a
+per-override table; from the CLI:
+
+```bash
+python3 -m ai_investing.main --compare
+# You (with your input):   $100,000.00
+# Formula-only (no input): $99,998.78
+# Value of your input:     $1.22   (your input is AHEAD)   ← e.g. you skipped a TSLA trade that lost
+```
+
+So when you say "don't trade TSLA" but the formula buys it, you see exactly what that trade did
+and whether skipping it was right.
+
 ## Dashboard (`dashboard/`)
 A Next.js control room: equity curve (live or backtest), stat tiles, the **evolving
 formula weights** (θ bars), the walk-forward comparison, open positions, the decisions
@@ -231,6 +271,10 @@ capped and you get paged":
       data guards, config preflight, dead-man's switch) ✅
 - [x] **M9 — Execution price protection** (limit orders, intraday timeframe, native
       exchange stops) + SECURITY.md ✅
+- [x] **M10 — Your input as the decisive factor** (per-asset views, risk stance, blocklist;
+      dashboard controls + CLI; safety still overrides) ✅
+- [x] **M11 — Risk appetite + you-vs-formula comparison** (shadow "formula-only" portfolio,
+      per-override table, dual equity curve, `--compare`) ✅
 - [~] **M5 — Alt-data live**: CoinGecko crypto-hype working; Polygon options (key) + Reddit
       social (best-effort) wired into hype/sentiment. Next: paid options/social + on-chain flows.
 

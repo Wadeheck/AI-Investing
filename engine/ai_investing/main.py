@@ -102,6 +102,70 @@ def _breaker(reset: bool) -> None:
     print("Breaker state:", cb.status())
 
 
+def _show_views() -> None:
+    from ai_investing.strategy import UserViews
+    v = UserViews.load(settings.user_views_path)
+    print(f"stance:        {v.stance}   decisiveness: {v.decisiveness}   risk_appetite: {v.risk_appetite}")
+    print(f"views:         {v.views or '(none)'}")
+    print(f"blocklist:     {v.blocklist or '(none)'}")
+    print(f"focus (only):  {v.focus or '(none)'}")
+
+
+def _edit_views(args) -> None:
+    """Set your input from the CLI (or edit the dashboard / data/views.json directly)."""
+    from ai_investing.strategy import UserViews
+    from ai_investing.strategy import user_views as uv_mod
+    v = UserViews.load(settings.user_views_path)
+    if args.stance:
+        if args.stance.lower() not in uv_mod.STANCE_MULT:
+            print(f"unknown stance '{args.stance}'; choose: {', '.join(uv_mod.STANCE_MULT)}")
+            return
+        v.stance = args.stance.lower()
+    if args.decisiveness is not None:
+        v.decisiveness = max(0.0, min(1.0, args.decisiveness))
+    if args.risk_appetite is not None:
+        v.risk_appetite = max(0.0, min(1.0, args.risk_appetite))
+    for item in (args.view or []):
+        sym, _, val = item.partition("=")
+        try:
+            v.views[sym.strip().upper()] = max(-1.0, min(1.0, float(val)))
+        except ValueError:
+            print(f"bad --view '{item}' (use SYM=VALUE, e.g. NVDA=0.8)")
+    for sym in (args.block or []):
+        if sym.upper() not in v.blocklist:
+            v.blocklist.append(sym.upper())
+    for sym in (args.unblock or []):
+        if sym.upper() in v.blocklist:
+            v.blocklist.remove(sym.upper())
+    v.save(settings.user_views_path)
+    print(f"Saved -> {settings.user_views_path}\n")
+    _show_views()
+
+
+def _compare() -> None:
+    """Your portfolio (with your input) vs the formula-only portfolio."""
+    import json
+    try:
+        with open(settings.state_path) as fh:
+            c = json.load(fh).get("comparison")
+    except (OSError, json.JSONDecodeError):
+        c = None
+    if not c:
+        print("No comparison yet — run a cycle first (python3 -m ai_investing.main --once).")
+        return
+    you, formula, delta = c["your_equity"], c["formula_equity"], c["input_value"]
+    verdict = "your input is AHEAD" if delta > 0 else ("your input is BEHIND" if delta < 0 else "even")
+    print(f"You (with your input):   ${you:,.2f}")
+    print(f"Formula-only (no input): ${formula:,.2f}")
+    print(f"Value of your input:     ${delta:,.2f}   ({verdict})\n")
+    rows = c.get("assets") or []
+    if rows:
+        print(f"  {'symbol':<10} {'your qty':>10} {'your P&L':>10} {'formula qty':>12} {'formula P&L':>12}")
+        for a in rows:
+            print(f"  {a['symbol']:<10} {a['your_qty']:>10.4f} {a['your_pnl']:>10.2f} "
+                  f"{a['formula_qty']:>12.4f} {a['formula_pnl']:>12.2f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autonomous AI investing engine (paper-first).")
     parser.add_argument("--once", action="store_true", help="run a single cycle and exit")
@@ -115,6 +179,15 @@ def main() -> None:
     parser.add_argument("--watchdog", action="store_true", help="dead-man's switch: check heartbeat, alert/flatten if stale")
     parser.add_argument("--breaker-status", action="store_true", help="print the circuit-breaker state and exit")
     parser.add_argument("--breaker-reset", action="store_true", help="clear a latched circuit-breaker halt and exit")
+    parser.add_argument("--show-views", action="store_true", help="print your current views/stance and exit")
+    parser.add_argument("--stance", help="set risk stance: aggressive|normal|cautious|defensive|cash")
+    parser.add_argument("--decisiveness", type=float, help="how much your views override the model (0..1)")
+    parser.add_argument("--risk-appetite", type=float, dest="risk_appetite",
+                        help="your risk appetite 0..1 (scales position sizing, within safety caps)")
+    parser.add_argument("--view", action="append", metavar="SYM=VAL", help="set a per-asset view, e.g. NVDA=0.8 (repeatable)")
+    parser.add_argument("--block", action="append", metavar="SYM", help="never trade SYM (repeatable)")
+    parser.add_argument("--unblock", action="append", metavar="SYM", help="remove SYM from the blocklist (repeatable)")
+    parser.add_argument("--compare", action="store_true", help="show your portfolio vs the formula-only portfolio")
     args = parser.parse_args()
 
     if args.briefing:
@@ -139,6 +212,19 @@ def main() -> None:
 
     if args.breaker_status or args.breaker_reset:
         _breaker(reset=args.breaker_reset)
+        return
+
+    if (args.stance or args.decisiveness is not None or args.risk_appetite is not None
+            or args.view or args.block or args.unblock):
+        _edit_views(args)
+        return
+
+    if args.show_views:
+        _show_views()
+        return
+
+    if args.compare:
+        _compare()
         return
 
     if args.formula:
