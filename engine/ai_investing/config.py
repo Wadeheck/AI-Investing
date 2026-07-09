@@ -144,6 +144,13 @@ class SafetyConfig:
 
 
 @dataclass
+class ExecutionConfig:
+    order_type: str = field(default_factory=lambda: _get("EXECUTION_ORDER_TYPE", "limit"))  # limit | market
+    limit_band_bps: float = field(default_factory=lambda: _get_float("EXECUTION_LIMIT_BAND_BPS", 25.0))
+    stop_at_exchange: bool = field(default_factory=lambda: _get_bool("EXECUTION_STOP_AT_EXCHANGE", False))
+
+
+@dataclass
 class Settings:
     live: bool = field(default_factory=lambda: _get_bool("LIVE_TRADING", False))
     base_currency: str = field(default_factory=lambda: _get("BASE_CURRENCY", "USD"))
@@ -153,6 +160,7 @@ class Settings:
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))
     crypto_exchange: str = field(default_factory=lambda: _get("CRYPTO_EXCHANGE", "coinbase"))
     crypto_sandbox: bool = field(default_factory=lambda: _get_bool("CRYPTO_SANDBOX", False))
+    data_timeframe: str = field(default_factory=lambda: _get("DATA_TIMEFRAME", "1d"))  # 1d | 1h | 15m | 5m ...
     stock_broker: str = field(default_factory=lambda: _get("STOCK_BROKER", "paper"))
     poll_seconds: int = field(default_factory=lambda: _get_int("POLL_SECONDS", 300))
     anthropic_api_key: str = field(default_factory=lambda: _get("ANTHROPIC_API_KEY", ""))
@@ -171,6 +179,7 @@ class Settings:
     alerts: AlertConfig = field(default_factory=AlertConfig)
     altdata: AltDataConfig = field(default_factory=AltDataConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))
     heartbeat_path: str = field(default_factory=lambda: _get("HEARTBEAT_PATH", str(PROJECT_ROOT / "data" / "heartbeat.json")))
 

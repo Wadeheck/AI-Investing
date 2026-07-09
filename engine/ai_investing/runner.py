@@ -16,7 +16,7 @@ from ai_investing.data import get_provider
 from ai_investing.data import news as news_mod
 from ai_investing.execution.costs import CostModel
 from ai_investing.learning import OutcomeTracker, ParamStore, RLSLearner
-from ai_investing.models import Asset, AssetClass, Order, OrderStatus, Side
+from ai_investing.models import Asset, AssetClass, Order, OrderStatus, OrderType, Side
 from ai_investing.safety import CircuitBreaker, DataGuard, validate_settings, write_heartbeat
 from ai_investing.signals import default_signals
 from ai_investing.storage import Journal
@@ -254,6 +254,12 @@ class Runner:
                 order.status = OrderStatus.REJECTED
                 return order
 
+        # Limit-order price protection on opening trades (protective exits stay market).
+        if guard_slippage and mid > 0 and self.settings.execution.order_type == "limit":
+            band = self.settings.execution.limit_band_bps / 1e4
+            order.order_type = OrderType.LIMIT
+            order.limit_price = mid * (1 + band) if order.side is Side.BUY else mid * (1 - band)
+
         order.client_order_id = cid
         eff = self.costs.effective_price(order.side, mid, order.qty,
                                          ms.adv if ms else None, ms.vol if ms else None)
@@ -269,6 +275,8 @@ class Runner:
         if filled.status is OrderStatus.FILLED:
             notional = (filled.filled_qty or 0.0) * (filled.filled_price or 0.0)
             self.breaker.register_trade(notional)
+            if guard_slippage and self.settings.live and self.settings.execution.stop_at_exchange:
+                self._place_exchange_stop(order.asset, filled, ms)
             # Live: alert if the real fill deviated far from the mark we sized against.
             if (self.settings.live and mid
                     and abs((filled.filled_price or mid) / mid - 1) * 1e4 > 2 * self.settings.safety.max_slippage_bps):
@@ -281,6 +289,24 @@ class Runner:
                 self.notifier.send(f"{emoji} *{filled.side.value.upper()}* {filled.filled_qty:.4f} "
                                    f"{order.asset.symbol} @ ${eff:,.2f}  (_{order.reason}_)")
         return filled
+
+    def _place_exchange_stop(self, asset, filled, ms) -> None:
+        """Rest a protective stop AT THE VENUE after opening a long — survives a crash and
+        triggers on an intraday gap between cycles. Long-only case; experimental (untested
+        vs. funded accounts). Requires a broker that implements place_stop (ccxt today)."""
+        if filled.side is not Side.BUY or self.settings.risk.allow_short:
+            return
+        entry = filled.filled_price or 0.0
+        if entry <= 0:
+            return
+        stop_frac = self.settings.risk.per_trade_stop_loss
+        if self.settings.risk.use_atr_stops and ms and ms.atr > 0:
+            stop_frac = self.settings.risk.atr_stop_mult * (ms.atr / entry)
+        stop_price = entry * (1 - stop_frac)
+        if self.broker.place_stop(asset, Side.SELL, filled.filled_qty, stop_price):
+            print(f"  STOP-SET  {asset.symbol} @ ${stop_price:,.2f} (exchange)")
+        else:
+            self.journal.record_event("exchange_stop_unsupported", asset.symbol)
 
     def _flatten(self, prices: dict[str, float]) -> list[Order]:
         out: list[Order] = []

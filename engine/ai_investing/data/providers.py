@@ -91,6 +91,9 @@ class YFinanceDataProvider(DataProvider):
 
     name = "yfinance"
 
+    def __init__(self, timeframe: str = "1d"):
+        self.timeframe = timeframe
+
     def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
         if asset.asset_class is not AssetClass.STOCK:
             return []
@@ -98,7 +101,8 @@ class YFinanceDataProvider(DataProvider):
             import yfinance  # type: ignore
         except ImportError:
             return []
-        df = yfinance.Ticker(asset.symbol).history(period="1y", interval="1d")
+        period = "1y" if self.timeframe.endswith(("d", "wk", "mo")) else "60d"  # intraday needs a short window
+        df = yfinance.Ticker(asset.symbol).history(period=period, interval=self.timeframe)
         bars: list[Bar] = []
         for ts, row in df.iterrows():
             bars.append(Bar(ts.to_pydatetime(), float(row["Open"]), float(row["High"]),
@@ -111,8 +115,9 @@ class CcxtDataProvider(DataProvider):
 
     name = "ccxt"
 
-    def __init__(self, exchange: str = "coinbase"):
+    def __init__(self, exchange: str = "coinbase", timeframe: str = "1d"):
         self.exchange_id = exchange
+        self.timeframe = timeframe
         self._client = None
 
     def _client_or_none(self):
@@ -131,7 +136,7 @@ class CcxtDataProvider(DataProvider):
         if client is None:
             return []
         try:
-            ohlcv = client.fetch_ohlcv(asset.symbol, timeframe="1d", limit=limit)
+            ohlcv = client.fetch_ohlcv(asset.symbol, timeframe=self.timeframe, limit=limit)
         except Exception:
             return []
         bars: list[Bar] = []
@@ -157,15 +162,16 @@ class CompositeDataProvider(DataProvider):
 def get_provider(settings) -> DataProvider:
     """Build the provider stack from settings, with graceful fallbacks."""
     kind = (settings.data_provider or "synthetic").lower()
+    tf = getattr(settings, "data_timeframe", "1d")
     if kind == "synthetic":
-        synth = SyntheticDataProvider()
-        return synth
+        return SyntheticDataProvider()
     stock: DataProvider
     if kind == "stooq":
         stock = StooqDataProvider()
     elif kind == "yfinance":
-        stock = YFinanceDataProvider()
+        stock = YFinanceDataProvider(tf)
     else:
         stock = SyntheticDataProvider()
-    crypto: DataProvider = CcxtDataProvider(settings.crypto_exchange) if kind in ("ccxt", "yfinance", "stooq") else SyntheticDataProvider()
+    crypto: DataProvider = (CcxtDataProvider(settings.crypto_exchange, tf)
+                            if kind in ("ccxt", "yfinance", "stooq") else SyntheticDataProvider())
     return CompositeDataProvider(stock, crypto)

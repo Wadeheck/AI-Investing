@@ -207,6 +207,18 @@ capped and you get paged":
 > These bound losses; they don't create profit. Pair them with tiny capital,
 > trade-only API keys, and paper/sandbox proof first.
 
+## Execution price protection (M9)
+- **Limit orders by default** (`EXECUTION_ORDER_TYPE=limit`) — every opening trade is a
+  limit at `mid ± EXECUTION_LIMIT_BAND_BPS`, so you never fill worse than the band (a
+  too-tight band correctly rejects). Protective exits stay market so they always get you out.
+- **Intraday data** — set `DATA_TIMEFRAME=1h`/`15m`/`5m` (yfinance/ccxt) and lower
+  `POLL_SECONDS` so stops react intraday instead of once a day.
+- **Native exchange stops** (`EXECUTION_STOP_AT_EXCHANGE=true`; ccxt, long-only,
+  *experimental/untested*) — rest a stop at the venue after opening, so protection survives
+  a crash and triggers on an intraday gap between cycles.
+- **Operational security** — [`SECURITY.md`](SECURITY.md): trade-only keys, regulated
+  venues, host hardening, and an independent exchange-level backstop.
+
 ## Roadmap
 - [x] **M1 — Engine core** (data, signals, decision, risk, paper broker, journal, loop) ✅
 - [x] **M3 — Backtesting + adaptive learning engine** (walk-forward, ridge + online RLS,
@@ -217,6 +229,8 @@ capped and you get paged":
 - [x] **M6 — Telegram alerts** (startup / trades / kill-switch / reconcile / errors) ✅
 - [x] **M8 — Hard safety layer** (persistent circuit breaker, per-day caps, slippage +
       data guards, config preflight, dead-man's switch) ✅
+- [x] **M9 — Execution price protection** (limit orders, intraday timeframe, native
+      exchange stops) + SECURITY.md ✅
 - [~] **M5 — Alt-data live**: CoinGecko crypto-hype working; Polygon options (key) + Reddit
       social (best-effort) wired into hype/sentiment. Next: paid options/social + on-chain flows.
 

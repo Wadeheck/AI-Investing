@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai_investing.brokers.base import BrokerAdapter
-from ai_investing.models import Order, OrderStatus, Position, Side
+from ai_investing.models import Order, OrderStatus, OrderType, Position, Side
 
 
 class PaperBroker(BrokerAdapter):
@@ -26,6 +26,14 @@ class PaperBroker(BrokerAdapter):
             order.status = OrderStatus.REJECTED
             order.reason = (order.reason + " | invalid price/qty").strip(" |")
             return order
+
+        # Limit orders: don't fill worse than the limit price.
+        if order.order_type is OrderType.LIMIT and order.limit_price is not None:
+            if (order.side is Side.BUY and price > order.limit_price) or \
+               (order.side is Side.SELL and price < order.limit_price):
+                order.status = OrderStatus.REJECTED
+                order.reason = (order.reason + " | limit not reached").strip(" |")
+                return order
 
         key = order.asset.key
         pos = self._positions.get(key)

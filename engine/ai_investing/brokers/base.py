@@ -29,3 +29,8 @@ class BrokerAdapter(ABC):
 
     def portfolio(self) -> Portfolio:
         return Portfolio(self.get_cash(), self.get_positions())
+
+    def place_stop(self, asset, side, qty: float, stop_price: float):
+        """Place a resting protective stop AT THE VENUE, so it survives a crash/hang and
+        triggers on an intraday gap between cycles. Default: unsupported (returns None)."""
+        return None

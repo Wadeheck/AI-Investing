@@ -61,16 +61,33 @@ class CcxtBroker(BrokerAdapter):
 
     def submit(self, order: Order, price: float) -> Order:
         side = "buy" if order.side is Side.BUY else "sell"
+        is_limit = order.order_type is not None and order.order_type.value == "limit" and order.limit_price
         try:
-            res = self.client.create_order(order.asset.symbol, "market", side, order.qty)
+            if is_limit:
+                res = self.client.create_order(order.asset.symbol, "limit", side, order.qty, order.limit_price)
+            else:
+                res = self.client.create_order(order.asset.symbol, "market", side, order.qty)
             order.id = str(res.get("id"))
-            order.filled_qty = float(res.get("filled") or order.qty)
-            order.filled_price = float(res.get("average") or price)
-            order.status = OrderStatus.FILLED
+            order.filled_qty = float(res.get("filled") or (0.0 if is_limit else order.qty))
+            order.filled_price = float(res.get("average") or res.get("price") or price)
+            # a resting limit order may not be filled yet
+            order.status = OrderStatus.FILLED if (order.filled_qty or 0) > 0 else OrderStatus.PENDING
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"ccxt: {exc}"
         return order
+
+    def place_stop(self, asset, side, qty, stop_price):
+        s = "sell" if side is Side.SELL else "buy"
+        try:  # ccxt unified stop-loss (support varies by exchange)
+            res = self.client.create_order(asset.symbol, "market", s, qty, None,
+                                           {"stopLossPrice": stop_price, "reduceOnly": True})
+            o = Order(asset, side, qty, reason="exchange-stop")
+            o.id = str(res.get("id"))
+            o.status = OrderStatus.PENDING
+            return o
+        except Exception:  # pragma: no cover - network path
+            return None
 
     def validate(self) -> dict:
         return {"broker": f"ccxt:{self.settings.crypto_exchange}",
@@ -127,13 +144,19 @@ class LongbridgeBroker(BrokerAdapter):
             order.status = OrderStatus.REJECTED
             order.reason = "qty < 1 share"
             return order
+        is_limit = order.order_type is not None and order.order_type.value == "limit" and order.limit_price
         try:
-            resp = self.ctx.submit_order(
-                symbol=self._symbol(order.asset), order_type=OrderType.MO, side=side,
-                submitted_quantity=Decimal(str(qty)), time_in_force=TimeInForceType.Day)
+            kwargs = dict(symbol=self._symbol(order.asset), side=side,
+                          submitted_quantity=Decimal(str(qty)), time_in_force=TimeInForceType.Day)
+            if is_limit:
+                kwargs["order_type"] = OrderType.LO
+                kwargs["submitted_price"] = Decimal(str(round(order.limit_price, 3)))
+            else:
+                kwargs["order_type"] = OrderType.MO
+            resp = self.ctx.submit_order(**kwargs)
             order.id = str(getattr(resp, "order_id", ""))
             order.filled_qty = float(qty)
-            order.filled_price = price
+            order.filled_price = order.limit_price if is_limit else price
             order.status = OrderStatus.FILLED
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
@@ -202,16 +225,18 @@ class MoomooBroker(BrokerAdapter):
             order.status = OrderStatus.REJECTED
             order.reason = "qty < 1 share"
             return order
+        is_limit = order.order_type is not None and order.order_type.value == "limit" and order.limit_price
+        limit_px = order.limit_price if is_limit else price
         try:
             ret, data = self.ctx.place_order(
-                price=price, qty=qty, code=self._code(order.asset), trd_side=side,
-                order_type=OrderType.MARKET, trd_env=self.trd_env)
+                price=limit_px, qty=qty, code=self._code(order.asset), trd_side=side,
+                order_type=OrderType.NORMAL if is_limit else OrderType.MARKET, trd_env=self.trd_env)
             if ret != RET_OK:
                 order.status = OrderStatus.REJECTED
                 order.reason = f"moomoo: {data}"
             else:
                 order.filled_qty = float(qty)
-                order.filled_price = price
+                order.filled_price = limit_px
                 order.status = OrderStatus.FILLED
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
