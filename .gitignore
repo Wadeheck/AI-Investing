@@ -1,0 +1,31 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Secrets & data ---
+.env
+.env.local
+data/
+*.db
+*.sqlite
+*.log
+state.json
+
+# --- Node / Next.js (dashboard) ---
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

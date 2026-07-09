@@ -1,0 +1,175 @@
+# AI-Investing
+
+An autonomous, signal-driven trading engine for **stocks + crypto**. It ingests
+market data, news, and sentiment; scores each asset through a stack of signals
+(including a **political/pump hype detector** that *fades* manipulated spikes);
+sizes positions through a hard risk layer; and executes — fully automated — through
+paper or live brokers. It also produces a **global briefing** to keep you informed.
+
+> ⚠️ **Risk warning.** Autonomous trading can lose money quickly. Most retail algos
+> underperform a plain index fund. This software is provided as-is, is **not
+> financial advice**, and ships **paper-first** — it trades simulated money until you
+> explicitly set `LIVE_TRADING=true`. Prove your strategy on paper for weeks, then
+> risk only what you can afford to lose. In Singapore, prefer MAS-regulated venues
+> (see below).
+
+---
+
+## What it does
+
+```
+                 ┌─────────────┐   ┌──────────────┐   ┌───────────────┐
+  market data ─► │  SIGNALS    │   │  DECISION    │   │  RISK LAYER   │
+  news + LLM  ─► │ momentum    │─► │  blend into  │─► │ sizing, stops │─► broker ─► journal
+  sentiment   ─► │ mean-revert │   │  conviction  │   │ drawdown kill │     │        (SQLite)
+  hype flags  ─► │ sentiment   │   │  per asset   │   │ exposure caps │     ▼
+                 │ hype-fade   │   └──────────────┘   └───────────────┘  state.json ─► dashboard
+                 └─────────────┘
+```
+
+### The signals (`engine/ai_investing/signals/`)
+- **momentum** — fast vs slow SMA trend, tempered by RSI extremes.
+- **mean_reversion** — fades statistical extremes (z-score vs a volatility band).
+- **sentiment** — per-asset news sentiment scored by Claude.
+- **political_hype** — **the anti-manipulation edge.** Detects sharp price+volume
+  pumps, *especially* when they coincide with promotional or political news (a
+  president/official hyping an asset, meme-coin launches), and returns a **negative
+  (fade/avoid)** score because those spikes tend to revert.
+
+### The risk layer (`engine/ai_investing/strategy/risk.py`)
+Per-asset weight cap · gross-exposure cap · per-trade stop-loss & take-profit ·
+minimum-confidence filter · max open positions · **daily-drawdown kill switch** that
+flattens everything and halts for the day. Every order passes through it.
+
+---
+
+## Quickstart (paper mode, zero install)
+
+The core runs on the **Python standard library alone** — no `pip install` needed to
+start. Requires Python 3.11+.
+
+```bash
+cd engine
+python3 -m ai_investing.main --once --no-news   # one offline paper cycle
+python3 tests/test_smoke.py                      # sanity checks
+```
+
+Then add real data + a global briefing:
+
+```bash
+cp ../.env.example ../.env        # then edit ../.env
+pip install -r requirements.txt   # optional: real data / live brokers
+python3 -m ai_investing.main --briefing         # AI world briefing (needs ANTHROPIC_API_KEY)
+python3 -m ai_investing.main                     # autonomous loop (fully automated)
+```
+
+Artifacts land in `data/`: `journal.db` (auditable decisions/orders/equity) and
+`state.json` (latest snapshot for the dashboard).
+
+---
+
+## Configuration
+
+Everything is in `.env` (copy from `.env.example`). Key switches:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LIVE_TRADING` | `false` | **Keep false until proven.** `true` routes real orders. |
+| `DATA_PROVIDER` | `synthetic` | `synthetic` \| `stooq` \| `yfinance` \| `ccxt` |
+| `STOCK_BROKER` | `paper` | `paper` \| `longbridge` \| `moomoo` |
+| `CRYPTO_EXCHANGE` | `coinbase` | any ccxt id: `coinbase`/`gemini`/`binance`/`kraken` |
+| `ANTHROPIC_API_KEY` | – | enables news sentiment, hype detection, briefing |
+| `RISK_*` | see file | the guardrails (stops, drawdown kill switch, caps) |
+
+---
+
+## Singapore broker guide (researched July 2026)
+
+Every broker you use has an API. Recommended regulated starter pair: **Longbridge
+(stocks) + Coinbase (crypto)**.
+
+| Venue | Asset | API | MAS status |
+|---|---|---|---|
+| **Longbridge** | stocks (SG/HK/US/CN) | LongPort OpenAPI, `pip install longbridge` (cloud, key+secret) | ✅ regulated |
+| **moomoo** | stocks/options/futures | moomoo OpenAPI + local **OpenD** gateway, `moomoo-api` | ✅ regulated |
+| **Coinbase** | crypto | Advanced Trade API (via `ccxt`) | ✅ full MPI licence |
+| **Gemini** | crypto | REST + **sandbox** (via `ccxt`) | 🟡 MAS in-principle approval |
+| **Binance** | crypto | best API + testnet (via `ccxt`) | ⚠️ **not** licensed; on MAS alert list |
+
+Live adapters live in `engine/ai_investing/brokers/live.py` (ccxt is partly wired;
+Longbridge/moomoo are structured stubs with SDK sketches and a `NotImplementedError`
+guard until you finish + test them against a sandbox/paper endpoint).
+
+Docs: [moomoo](https://openapi.moomoo.com/moomoo-api-doc/en/) ·
+[LongPort](https://open.longbridge.com/) ·
+[Coinbase MPI](https://www.coinbase.com/blog/coinbase-obtains-major-payment-institution-licence-from-the-monetary) ·
+[ccxt](https://docs.ccxt.com/)
+
+---
+
+## Going live (the careful path)
+1. Run **paper mode for weeks**; review `journal.db` and equity curve.
+2. Wire ONE live adapter; test against its **sandbox / SIMULATE** endpoint.
+3. Fund a small amount. Set tight `RISK_*` limits. Set `LIVE_TRADING=true`.
+4. Watch it daily. The kill switch is your seatbelt, not your strategy.
+
+---
+
+## The adaptive formula (see `docs/FORMULA.md`)
+Decisions come from a learned formula `conviction = tanh(gain · θ·φ)` whose weights `θ`
+are **curated offline** (walk-forward ridge fit + champion/challenger) and **matured
+online** (regularized RLS from realized P&L). It targets long-run Sharpe, not last-trade
+reactions. Curate and inspect it:
+
+```bash
+cd engine
+python3 -m ai_investing.backtest.main --optimize --save   # walk-forward curate θ, persist winner
+python3 -m ai_investing.main --formula                     # show the current formula
+```
+
+## Dashboard (`dashboard/`)
+A Next.js control room: equity curve (live or backtest), stat tiles, the **evolving
+formula weights** (θ bars), the walk-forward comparison, open positions, the decisions
+feed, and the global briefing. Reads the engine's JSON (`state.json`, `history.json`,
+`backtest.json`) — no database driver needed. Polls every 5s.
+
+```bash
+cd dashboard
+npm install
+npm run dev          # http://localhost:4300  (reads ../data)
+```
+
+## Live trading (the careful path)
+Live adapters are implemented for **ccxt** (Coinbase/Gemini/Binance/Kraken), **Longbridge**,
+and **moomoo**, and route automatically (stocks → Longbridge/moomoo, crypto → ccxt). They
+are written to each SDK's API but **not yet tested against funded accounts** — validate first:
+
+```bash
+cd engine
+python3 -m ai_investing.main --check-broker   # read-only: checks credentials/connectivity
+```
+Then trade tiny against each venue's **sandbox / SIMULATE** endpoint before setting
+`LIVE_TRADING=true`. moomoo defaults to `SIMULATE`; set `MOOMOO_TRD_ENV=REAL` only when proven.
+
+## Roadmap
+- [x] **M1 — Engine core** (data, signals, decision, risk, paper broker, journal, loop) ✅
+- [x] **M3 — Backtesting + adaptive learning engine** (walk-forward, ridge + online RLS,
+      champion/challenger, versioned θ) ✅
+- [x] **M2 — Next.js dashboard** (equity, evolving θ, backtest, positions, decisions, briefing) ✅
+- [x] **M4 — Live adapters** implemented + routed + `--check-broker` (⚠️ need sandbox validation) ✅
+- [ ] **M5 — Richer signals**: options-flow, on-chain, social-velocity, cross-asset macro.
+- [ ] **M6 — Alerts** (Telegram/email) + scheduled briefings.
+
+## Layout
+```
+engine/ai_investing/
+  config.py  models.py  indicators.py  runner.py  main.py
+  signals/   momentum · mean_reversion · sentiment · political_hype
+  data/      providers (synthetic/stooq/yfinance/ccxt) · news (RSS + Claude)
+  brokers/   base · paper · live (ccxt/longbridge/moomoo)
+  strategy/  decision · risk
+  storage/   journal (SQLite)
+dashboard/   (Next.js — Milestone 2)
+```
+
+*Not financial advice. Trade at your own risk.*
