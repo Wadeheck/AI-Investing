@@ -110,27 +110,57 @@ political-hype dynamics aggressively -- the system uses these to FADE hype."""
     return _extract_json(_call_claude(prompt, settings, max_tokens=1800) or "")
 
 
-def build_market_context(settings, symbols: list[str]) -> dict:
-    """Compute the per-cycle shared context: sentiment scores, hype flags, briefing."""
+def build_market_context(settings, assets) -> dict:
+    """Compute the per-cycle shared context: sentiment scores, hype flags, briefing.
+    `assets` is a list of Asset (symbol + asset_class) so alt-data can route correctly."""
+    symbols = [a.symbol for a in assets]
     ctx: dict = {"sentiment_scores": {}, "hype_flags": {}, "briefing": "", "headlines": []}
     headlines = fetch_headlines(settings)
     ctx["headlines"] = headlines
+
     analysis = analyze_with_claude(headlines, symbols, settings)
-    if not analysis:
-        return ctx
-    ctx["briefing"] = analysis.get("briefing", "")
-    for sym, a in (analysis.get("assets") or {}).items():
-        ctx["sentiment_scores"][sym] = {
-            "score": a.get("score", 0.0),
-            "confidence": a.get("confidence", 0.0),
-            "summary": a.get("summary", ""),
-        }
-        ctx["hype_flags"][sym] = {
-            "promotional": bool(a.get("promotional")),
-            "political": bool(a.get("political")),
-            "intensity": a.get("intensity", 0.0),
-        }
+    if analysis:
+        ctx["briefing"] = analysis.get("briefing", "")
+        for sym, a in (analysis.get("assets") or {}).items():
+            ctx["sentiment_scores"][sym] = {
+                "score": a.get("score", 0.0),
+                "confidence": a.get("confidence", 0.0),
+                "summary": a.get("summary", ""),
+            }
+            ctx["hype_flags"][sym] = {
+                "promotional": bool(a.get("promotional")),
+                "political": bool(a.get("political")),
+                "intensity": a.get("intensity", 0.0),
+            }
+
+    if settings.altdata.enabled:
+        _merge_altdata(settings, assets, ctx)
     return ctx
+
+
+def _merge_altdata(settings, assets, ctx: dict) -> None:
+    """Fold live alt-data (options flow / crypto hype / social velocity) into the hype
+    flags and sentiment so the PoliticalHypeSignal reacts to real manipulation signals."""
+    from ai_investing.data import altdata
+    for a in assets:
+        try:
+            agg = altdata.aggregate(altdata.collect(settings, a.symbol, a.asset_class.value))
+        except Exception:
+            continue
+        if not agg["available"]:
+            continue
+        hf = ctx["hype_flags"].get(a.symbol, {"promotional": False, "political": False, "intensity": 0.0})
+        hf["intensity"] = max(float(hf.get("intensity", 0.0)), agg["intensity"])
+        if agg["intensity"] >= 0.5:
+            hf["promotional"] = True
+        hf["altdata"] = agg["detail"]
+        ctx["hype_flags"][a.symbol] = hf
+
+        ss = ctx["sentiment_scores"].get(a.symbol, {"score": 0.0, "confidence": 0.0, "summary": ""})
+        ss["score"] = max(-1.0, min(1.0, 0.6 * float(ss.get("score", 0.0)) + 0.4 * agg["bullish"]))
+        ss["confidence"] = max(float(ss.get("confidence", 0.0)), min(1.0, agg["intensity"]))
+        ss["summary"] = (ss.get("summary", "") + " | alt: " + agg["detail"])[:200]
+        ctx["sentiment_scores"][a.symbol] = ss
 
 
 def global_briefing(settings) -> str:

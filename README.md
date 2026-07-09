@@ -174,16 +174,51 @@ The things that stop a good-looking backtest from losing money live:
 - **Validate before you size** (`research/event_study.py`) — measure whether fading pumps
   actually pays *before* trusting the hype signal: `python3 -m ai_investing.research.event_study`.
 
+## Alerts & alt-data
+- **Telegram alerts** (`alerts/telegram.py`) — startup, every fill, kill-switch,
+  reconciliation drift, and errors, via the Bot API (stdlib, no SDK). Configure
+  `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; test with
+  `python3 -m ai_investing.main --test-alert`. No token → silently no-ops.
+- **Alt-data** (`data/altdata.py`) — the manipulation edge, folded into the hype/sentiment
+  signals when `ALTDATA_ENABLED=true`. Probe it: `python3 -m ai_investing.main --altdata`.
+  - `crypto_hype` (CoinGecko) — **live, keyless** (24h move, volume/mcap churn, vote skew).
+  - `options_flow` (Polygon) — call/put skew + volume-vs-OI; needs `POLYGON_API_KEY`.
+  - `social_velocity` (Reddit) — mention count + upvote ratio; public endpoint is often
+    rate-limited/blocked, so treat as best-effort until you add proper auth.
+
+## Hard safety layer (M8) — bounds the worst case
+`safety/` turns "a bug or a gap can quietly ruin you overnight" into "the damage is
+capped and you get paged":
+- **Persistent circuit breaker** (`safety/circuit_breaker.py`) — **daily** (auto-clears),
+  **trailing** (from peak, latched), and **inception** (from day one, latched) drawdown
+  halts. State is written to `data/breaker.json`, so **a restart can't reset your loss
+  limits** (the old kill switch's hole). Inspect/clear: `--breaker-status` / `--breaker-reset`.
+- **Per-day hard caps** — max trades/day and max traded-notional/day stop it opening more.
+- **Slippage guard** — refuses to *open* a position whose modeled cost exceeds
+  `SAFETY_MAX_SLIPPAGE_BPS` (illiquid/oversized); protective exits are never blocked.
+- **Data sanity guard** (`safety/data_guard.py`) — excludes symbols with non-positive,
+  stale, or absurdly-jumped prices so bad data can't trigger a trade.
+- **Config preflight** (`safety/preflight.py`) — validates `.env` on startup and
+  **refuses to run LIVE with config errors**.
+- **Dead-man's switch** — the loop writes a heartbeat; run `--watchdog` (e.g. via cron)
+  to alert and optionally flatten if the engine hangs/dies. `SAFETY_FLATTEN_ON_EXIT`
+  closes out on shutdown.
+
+> These bound losses; they don't create profit. Pair them with tiny capital,
+> trade-only API keys, and paper/sandbox proof first.
+
 ## Roadmap
 - [x] **M1 — Engine core** (data, signals, decision, risk, paper broker, journal, loop) ✅
 - [x] **M3 — Backtesting + adaptive learning engine** (walk-forward, ridge + online RLS,
       champion/challenger, versioned θ) ✅
 - [x] **M2 — Next.js dashboard** (equity, evolving θ, backtest, positions, decisions, briefing) ✅
-- [x] **M4 — Live adapters** implemented + routed + `--check-broker` (⚠️ need sandbox validation) ✅
+- [x] **M4 — Live adapters** routed + `--check-broker` + sandbox mode (⚠️ need sandbox validation) ✅
 - [x] **M7 — Execution realism, portfolio risk, statistical validation, ops safety** ✅
-- [~] **M5 — Richer signals** — event-study validation + alt-data interfaces scaffolded
-      (`data/altdata.py`: options-flow / on-chain / social — need provider keys).
-- [ ] **M6 — Alerts** (Telegram/email) + scheduled briefings.
+- [x] **M6 — Telegram alerts** (startup / trades / kill-switch / reconcile / errors) ✅
+- [x] **M8 — Hard safety layer** (persistent circuit breaker, per-day caps, slippage +
+      data guards, config preflight, dead-man's switch) ✅
+- [~] **M5 — Alt-data live**: CoinGecko crypto-hype working; Polygon options (key) + Reddit
+      social (best-effort) wired into hype/sentiment. Next: paid options/social + on-chain flows.
 
 ## Layout
 ```

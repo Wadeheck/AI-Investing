@@ -107,6 +107,43 @@ class LearningConfig:
 
 
 @dataclass
+class AlertConfig:
+    telegram_bot_token: str = field(default_factory=lambda: _get("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(default_factory=lambda: _get("TELEGRAM_CHAT_ID", ""))
+    on_trade: bool = field(default_factory=lambda: _get_bool("ALERT_ON_TRADE", True))
+    on_error: bool = field(default_factory=lambda: _get_bool("ALERT_ON_ERROR", True))
+    on_kill: bool = field(default_factory=lambda: _get_bool("ALERT_ON_KILL", True))
+    min_notional: float = field(default_factory=lambda: _get_float("ALERT_MIN_NOTIONAL", 0.0))
+
+
+@dataclass
+class AltDataConfig:
+    enabled: bool = field(default_factory=lambda: _get_bool("ALTDATA_ENABLED", False))
+    polygon_api_key: str = field(default_factory=lambda: _get("POLYGON_API_KEY", ""))
+    coingecko_api_key: str = field(default_factory=lambda: _get("COINGECKO_API_KEY", ""))
+    reddit_user_agent: str = field(default_factory=lambda: _get("REDDIT_USER_AGENT", "ai-investing/0.1 (research)"))
+
+
+@dataclass
+class SafetyConfig:
+    # circuit breakers (drawdown halts)
+    max_trailing_drawdown: float = field(default_factory=lambda: _get_float("SAFETY_MAX_TRAILING_DD", 0.15))
+    max_inception_drawdown: float = field(default_factory=lambda: _get_float("SAFETY_MAX_INCEPTION_DD", 0.25))
+    # per-day hard caps
+    max_trades_per_day: int = field(default_factory=lambda: _get_int("SAFETY_MAX_TRADES_PER_DAY", 50))
+    max_notional_per_day: float = field(default_factory=lambda: _get_float("SAFETY_MAX_NOTIONAL_PER_DAY", 0.0))  # 0 = off
+    # execution / data guards
+    max_slippage_bps: float = field(default_factory=lambda: _get_float("SAFETY_MAX_SLIPPAGE_BPS", 50.0))
+    max_price_jump: float = field(default_factory=lambda: _get_float("SAFETY_MAX_PRICE_JUMP", 0.5))
+    max_bar_staleness_days: float = field(default_factory=lambda: _get_float("SAFETY_MAX_BAR_STALENESS_DAYS", 5.0))
+    halt_on_data_anomaly: bool = field(default_factory=lambda: _get_bool("SAFETY_HALT_ON_DATA_ANOMALY", True))
+    # dead-man's switch
+    flatten_on_exit: bool = field(default_factory=lambda: _get_bool("SAFETY_FLATTEN_ON_EXIT", False))
+    flatten_on_stall: bool = field(default_factory=lambda: _get_bool("SAFETY_FLATTEN_ON_STALL", False))
+    heartbeat_stale_seconds: int = field(default_factory=lambda: _get_int("SAFETY_HEARTBEAT_STALE_SECONDS", 1800))
+
+
+@dataclass
 class Settings:
     live: bool = field(default_factory=lambda: _get_bool("LIVE_TRADING", False))
     base_currency: str = field(default_factory=lambda: _get("BASE_CURRENCY", "USD"))
@@ -115,6 +152,7 @@ class Settings:
     crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))
     crypto_exchange: str = field(default_factory=lambda: _get("CRYPTO_EXCHANGE", "coinbase"))
+    crypto_sandbox: bool = field(default_factory=lambda: _get_bool("CRYPTO_SANDBOX", False))
     stock_broker: str = field(default_factory=lambda: _get("STOCK_BROKER", "paper"))
     poll_seconds: int = field(default_factory=lambda: _get_int("POLL_SECONDS", 300))
     anthropic_api_key: str = field(default_factory=lambda: _get("ANTHROPIC_API_KEY", ""))
@@ -130,6 +168,11 @@ class Settings:
     learning: LearningConfig = field(default_factory=LearningConfig)
     cost: CostConfig = field(default_factory=CostConfig)
     regime: RegimeConfig = field(default_factory=RegimeConfig)
+    alerts: AlertConfig = field(default_factory=AlertConfig)
+    altdata: AltDataConfig = field(default_factory=AltDataConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
+    breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))
+    heartbeat_path: str = field(default_factory=lambda: _get("HEARTBEAT_PATH", str(PROJECT_ROOT / "data" / "heartbeat.json")))
 
 
 settings = Settings()

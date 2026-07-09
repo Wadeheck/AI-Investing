@@ -33,6 +33,11 @@ class CcxtBroker(BrokerAdapter):
             "password": os.environ.get("CRYPTO_API_PASSWORD", ""),
             "enableRateLimit": True,
         })
+        if getattr(settings, "crypto_sandbox", False):
+            try:
+                self.client.set_sandbox_mode(True)   # exchange testnet/sandbox (test first!)
+            except Exception:
+                pass
 
     def get_cash(self) -> float:
         free = (self.client.fetch_balance().get("free") or {})
