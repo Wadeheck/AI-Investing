@@ -54,7 +54,8 @@ export function Controls({ symbols }: { symbols: string[] }) {
 
   return (
     <div className="card">
-      <h2>Your input — the decisive factor</h2>
+      <h2>Steer it — your input decides</h2>
+      <div className="subtitle">Your calls override the formula. Safety limits (loss caps) always apply. Changes apply next cycle.</div>
 
       <div className="ctrl-row">
         <span className="muted" style={{ width: 96 }}>Risk stance</span>
@@ -66,6 +67,7 @@ export function Controls({ symbols }: { symbols: string[] }) {
           ))}
         </div>
       </div>
+      <div className="help">Overall risk-on ↔ risk-off. “cash” tells it to hold nothing.</div>
 
       <div className="ctrl-row">
         <span className="muted" style={{ width: 96 }}>Decisiveness</span>
@@ -76,6 +78,7 @@ export function Controls({ symbols }: { symbols: string[] }) {
         />
         <span className="wval">{Math.round(v.decisiveness * 100)}%</span>
       </div>
+      <div className="help">How much your views win. 0% = follow the model · 100% = follow only you.</div>
 
       <div className="ctrl-row">
         <span className="muted" style={{ width: 96 }}>Risk appetite</span>
@@ -86,9 +89,11 @@ export function Controls({ symbols }: { symbols: string[] }) {
         />
         <span className="wval">{Math.round((v.risk_appetite ?? 0.5) * 100)}%</span>
       </div>
+      <div className="help">Position size. Lower = smaller trades (always within the safety limits).</div>
 
-      <div className="muted" style={{ fontSize: 12, margin: "10px 0 6px" }}>
-        Your view per asset — bearish ← → bullish (0 = let the model decide)
+      <div className="muted" style={{ fontSize: 12, margin: "14px 0 6px" }}>
+        <b style={{ color: "var(--ink-2)" }}>Your view per asset.</b> Slide toward bullish or bearish where you have an
+        opinion; leave at 0 to let the model decide. “block” = never trade it.
       </div>
       <div className="views-list">
         {symbols.length === 0 && <div className="empty">Run the engine to populate the watchlist.</div>}
@@ -103,7 +108,7 @@ export function Controls({ symbols }: { symbols: string[] }) {
                 onChange={(e) => setView(sym, Number(e.target.value) / 100)} style={{ flex: 1 }}
               />
               <span className={`wval ${val > 0 ? "pos" : val < 0 ? "neg" : "muted"}`}>
-                {val > 0 ? "bull" : val < 0 ? "bear" : "—"} {val ? Math.round(Math.abs(val) * 100) : ""}
+                {val > 0 ? "bullish" : val < 0 ? "bearish" : "—"} {val ? Math.round(Math.abs(val) * 100) : ""}
               </span>
               <button className={`chip ${blocked ? "on-block" : ""}`} onClick={() => toggleBlock(sym)}>
                 {blocked ? "blocked" : "block"}
@@ -113,7 +118,7 @@ export function Controls({ symbols }: { symbols: string[] }) {
         })}
       </div>
 
-      {saved && <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>saved {saved} — applies next cycle</div>}
+      {saved && <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>saved {saved} ✓</div>}
     </div>
   );
 }

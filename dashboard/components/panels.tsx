@@ -1,8 +1,12 @@
+import type { ReactNode } from "react";
 import { WeightBars } from "@/components/charts";
-import type { BacktestData, HistoryData, StateData } from "@/lib/types";
+import type { BacktestData, DecisionRow, HistoryData, StateData } from "@/lib/types";
 
 function money(v: number): string {
-  return `$${Math.round(v).toLocaleString()}`;
+  return `${v < 0 ? "-" : ""}$${Math.round(Math.abs(v)).toLocaleString()}`;
+}
+function usd(v: number): string {
+  return `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(2)}`;
 }
 function pct(v: number): string {
   return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
@@ -11,35 +15,57 @@ function cls(v: number): string {
   return v >= 0 ? "pos" : "neg";
 }
 
+function Info({ text }: { text: string }) {
+  return <span className="info" title={text}>i</span>;
+}
+function Hint({ text, children }: { text: string; children: ReactNode }) {
+  return <span className="hint" title={text}>{children}</span>;
+}
+
+// Plain-language names for the formula's features.
+const FEATURE_LABELS: Record<string, string> = {
+  bias: "Baseline",
+  momentum: "Momentum",
+  mean_reversion: "Mean-revert",
+  sentiment: "News sentiment",
+  political_hype: "Hype-fade",
+  consensus: "Signal agreement",
+  mom_lowvol: "Trend · calm",
+};
+
+function Tile({ label, value, valueCls, sub, subCls, hint }: {
+  label: string; value: string; valueCls?: string; sub: string; subCls?: string; hint?: string;
+}) {
+  return (
+    <div className="card kpi">
+      <div className="label">{label}{hint && <Info text={hint} />}</div>
+      <div className={`value ${valueCls ?? ""}`}>{value}</div>
+      <div className={`delta ${subCls ?? "muted"}`}>{sub}</div>
+    </div>
+  );
+}
+
 export function StatTiles({ state, history }: { state: StateData | null; history: HistoryData | null }) {
   const pts = history?.points ?? [];
-  const sessionChange = pts.length >= 2 && pts[0].equity ? pts[pts.length - 1].equity / pts[0].equity - 1 : 0;
   const equity = state?.equity ?? (pts.length ? pts[pts.length - 1].equity : 0);
-  const cash = state?.cash ?? (pts.length ? pts[pts.length - 1].cash : 0);
-  const trades = state?.formula?.trades_learned ?? (pts.length ? pts[pts.length - 1].trades_learned : 0);
+  const first = pts.length ? pts[0].equity : equity;
+  const sessionChange = first ? equity / first - 1 : 0;
+  const sessionPnl = equity - first;
+  const edge = state?.comparison?.input_value ?? 0;
+  const positions = state?.positions?.length ?? 0;
+  const live = state?.mode === "live";
 
   return (
     <div className="grid cols-4">
-      <div className="card kpi">
-        <div className="label">Equity</div>
-        <div className="value">{money(equity)}</div>
-        <div className={`delta ${cls(sessionChange)}`}>{pct(sessionChange)} session</div>
-      </div>
-      <div className="card kpi">
-        <div className="label">Cash</div>
-        <div className="value">{money(cash)}</div>
-        <div className="delta muted">{equity ? ((cash / equity) * 100).toFixed(0) : 0}% of equity</div>
-      </div>
-      <div className="card kpi">
-        <div className="label">Formula version</div>
-        <div className="value">v{state?.formula?.version ?? 0}</div>
-        <div className="delta muted">{state?.formula?.fitted ? "curated + live" : "default"}</div>
-      </div>
-      <div className="card kpi">
-        <div className="label">Trades learned</div>
-        <div className="value">{trades ?? 0}</div>
-        <div className="delta muted">online RLS updates</div>
-      </div>
+      <Tile label="Portfolio value" value={money(equity)}
+            sub={`${pct(sessionChange)} this session`} subCls={cls(sessionChange)} />
+      <Tile label="Session P&L" value={`${sessionPnl >= 0 ? "+" : ""}${money(sessionPnl)}`}
+            valueCls={cls(sessionPnl)} sub="since the loop started" />
+      <Tile label="Your edge vs formula" value={`${edge >= 0 ? "+" : ""}${usd(edge)}`}
+            valueCls={cls(edge)} sub={edge >= 0 ? "your input is helping" : "your input is hurting"}
+            hint="Your portfolio minus a 'formula-only' portfolio that ignores your input." />
+      <Tile label="Open positions" value={String(positions)}
+            sub={live ? "LIVE — real money" : "paper (simulated)"} />
     </div>
   );
 }
@@ -48,13 +74,13 @@ export function PositionsTable({ state }: { state: StateData | null }) {
   const positions = state?.positions ?? [];
   return (
     <div className="card">
-      <h2>Open positions</h2>
+      <h2>Holdings</h2>
       {positions.length === 0 ? (
-        <div className="empty">Flat — no open positions.</div>
+        <div className="empty">Not holding anything right now.</div>
       ) : (
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>
+            <tr><th>Symbol</th><th>Shares</th><th>Bought at</th><th>Now</th><th>Value</th><th>Profit</th></tr>
           </thead>
           <tbody>
             {positions.map((p) => (
@@ -74,26 +100,44 @@ export function PositionsTable({ state }: { state: StateData | null }) {
   );
 }
 
+function action(d: DecisionRow): { label: string; cls: string } {
+  // ~0.35 mirrors the engine's default min-confidence to trade; weaker = just a lean.
+  const strong = Math.abs(d.score) >= 0.35;
+  if (d.direction === "long") return strong ? { label: "Buy / long", cls: "buy" } : { label: "Lean bullish", cls: "hold" };
+  if (d.direction === "short") return strong ? { label: "Sell / short", cls: "sell" } : { label: "Lean bearish", cls: "hold" };
+  return { label: "Stay out", cls: "hold" };
+}
+
 export function DecisionsFeed({ state }: { state: StateData | null }) {
   const decisions = state?.decisions ?? [];
   return (
     <div className="card">
-      <h2>Latest decisions</h2>
+      <h2>What it wants to do now</h2>
+      <div className="subtitle">The engine&apos;s current call per asset. Hover a row for the full reasoning.</div>
       {decisions.length === 0 ? (
-        <div className="empty">No decisions yet.</div>
+        <div className="empty">No decisions yet — run a cycle.</div>
       ) : (
         <div className="feed">
-          {decisions.map((d) => (
-            <div className="row" key={d.symbol}>
-              <span className="sym">{d.symbol}</span>
-              <span className={`dir ${d.direction}`}>{d.direction}</span>
-              <span className="why">
-                {typeof d.expected_return === "number" ? `E[r] ${pct(d.expected_return)} · ` : ""}
-                conv {d.score >= 0 ? "+" : ""}{d.score.toFixed(2)}
-                {d.user_view ? ` · you ${d.user_view > 0 ? "+" : ""}${d.user_view.toFixed(2)}` : ""}
-              </span>
-            </div>
-          ))}
+          {decisions.map((d) => {
+            const a = action(d);
+            return (
+              <div className="drow" key={d.symbol} title={d.rationale}>
+                <div className="dtop">
+                  <span className="sym">{d.symbol}</span>
+                  <span className={`act ${a.cls}`}>{a.label}</span>
+                  {typeof d.expected_return === "number" && (
+                    <span className="muted" style={{ fontSize: 12 }}>expected {pct(d.expected_return)}</span>
+                  )}
+                </div>
+                <div className="dsub">
+                  conviction {d.score >= 0 ? "+" : ""}{d.score.toFixed(2)}
+                  {d.user_view
+                    ? ` · your view: ${d.user_view > 0 ? "bullish" : "bearish"} ${Math.round(Math.abs(d.user_view) * 100)}%`
+                    : ""}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -102,17 +146,21 @@ export function DecisionsFeed({ state }: { state: StateData | null }) {
 
 export function FormulaPanel({ state, backtest }: { state: StateData | null; backtest: BacktestData | null }) {
   const f = state?.formula ?? backtest?.formula;
-  if (!f) return <div className="card"><h2>Decision formula</h2><div className="empty">No formula yet.</div></div>;
+  if (!f) return <div className="card"><h2>What the engine weighs</h2><div className="empty">No formula yet.</div></div>;
+  const labeled = Object.fromEntries(Object.entries(f.weights).map(([k, v]) => [FEATURE_LABELS[k] ?? k, v]));
   return (
     <div className="card">
-      <h2>Decision formula θ · φ &nbsp;(v{f.version}{f.fitted ? " · fitted" : ""})</h2>
-      <WeightBars weights={f.weights} />
+      <h2>What the engine weighs
+        <Info text="The formula scores each asset as a weighted blend of signals + news + sentiment. These weights are learned from past profit &amp; loss." />
+      </h2>
+      <div className="subtitle">
+        Longer bar = trusted more right now. {f.fitted ? "Curated + learning from results." : "Starting defaults."} (v{f.version})
+      </div>
+      <WeightBars weights={labeled} />
       <div className="legend" style={{ marginTop: 12 }}>
-        <span className="muted">gain {f.gain}</span>
-        <span className="muted">entry τ {f.entry_threshold}</span>
-        {typeof f.size_scale === "number" && <span className="muted">scale {f.size_scale}</span>}
-        {typeof f.stop_loss === "number" && <span className="muted">stop {(f.stop_loss * 100).toFixed(0)}%</span>}
-        {typeof f.take_profit === "number" && <span className="muted">take {(f.take_profit * 100).toFixed(0)}%</span>}
+        <span className="muted"><Hint text="Minimum conviction before it will trade">min conviction {f.entry_threshold}</Hint></span>
+        {typeof f.stop_loss === "number" && <span className="muted"><Hint text="Auto-sell if a position falls this much">stop {(f.stop_loss * 100).toFixed(0)}%</Hint></span>}
+        {typeof f.take_profit === "number" && <span className="muted"><Hint text="Auto-sell to lock in this much gain">take {(f.take_profit * 100).toFixed(0)}%</Hint></span>}
       </div>
     </div>
   );
@@ -122,8 +170,9 @@ export function Briefing({ state }: { state: StateData | null }) {
   const text = state?.briefing?.trim();
   return (
     <div className="card">
-      <h2>Global briefing</h2>
-      {text ? <div className="briefing">{text}</div> : <div className="empty">Set ANTHROPIC_API_KEY and run with news enabled for the AI briefing.</div>}
+      <h2>What&apos;s happening in the world</h2>
+      {text ? <div className="briefing">{text}</div>
+        : <div className="empty">Add an Anthropic API key and enable news for an AI market briefing.</div>}
     </div>
   );
 }
@@ -146,51 +195,43 @@ export function BacktestPanel({ backtest }: { backtest: BacktestData | null }) {
   if (!backtest) {
     return (
       <div className="card">
-        <h2>Backtest &amp; walk-forward</h2>
+        <h2>Backtest — is the formula any good?</h2>
         <div className="empty">Run <code className="inline">python3 -m ai_investing.backtest.main --optimize --save</code>.</div>
       </div>
     );
   }
   return (
     <div className="card">
-      <h2>
-        Backtest &amp; walk-forward{" "}
-        {backtest.adopted ? <span className="badge ok"><span className="dot" />ADOPTED</span> : <span className="badge">kept incumbent</span>}
+      <h2>Backtest — is the formula any good?{" "}
+        {backtest.adopted
+          ? <span className="badge ok"><span className="dot" />adopted</span>
+          : <span className="badge">kept the old one</span>}
       </h2>
+      <div className="subtitle">Tested on history the model never trained on.</div>
       <table>
         <thead>
-          <tr><th>Formula</th><th>Sharpe</th><th>Return</th><th>MaxDD</th><th>Trades</th><th>Final</th></tr>
+          <tr>
+            <th>Formula</th>
+            <th><Hint text="Return per unit of risk. Higher is better; above 1 is decent.">Sharpe</Hint></th>
+            <th>Return</th>
+            <th><Hint text="Worst peak-to-trough drop.">Max drop</Hint></th>
+            <th>Trades</th><th>Final</th>
+          </tr>
         </thead>
         <tbody>
           {metricRow("default", backtest.metrics_default)}
           {metricRow("chosen", backtest.metrics_chosen)}
         </tbody>
       </table>
-      {backtest.windows?.length > 0 && (
-        <table style={{ marginTop: 14 }}>
-          <thead>
-            <tr><th>Window (OOS)</th><th>default Sharpe</th><th>challenger Sharpe</th></tr>
-          </thead>
-          <tbody>
-            {backtest.windows.map((w) => (
-              <tr key={w.window}>
-                <td>bars {w.train_end}–{w.val_end}</td>
-                <td>{w.default_sharpe}</td>
-                <td className={cls(w.challenger_sharpe - w.default_sharpe)}>{w.challenger_sharpe}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
       <div className="legend" style={{ marginTop: 10 }}>
         {typeof backtest.dsr === "number" && (
           <span className="muted">
-            deflated Sharpe {backtest.dsr}
-            {typeof backtest.n_trials === "number" ? ` / ${backtest.n_trials} trials` : ""}
+            <Hint text="Confidence the edge is real after accounting for how many variants were tried. Only adopts if ≥ 0.60 — this is why it often keeps the old formula.">
+              confidence {backtest.dsr}{typeof backtest.n_trials === "number" ? ` (of ${backtest.n_trials} tried)` : ""}
+            </Hint>
           </span>
         )}
-        <span className="muted">provider: {backtest.provider}</span>
-        <span className="muted">assets: {backtest.assets?.join(", ")}</span>
+        <span className="muted">data: {backtest.provider}</span>
       </div>
     </div>
   );
@@ -202,30 +243,29 @@ export function ComparisonPanel({ state }: { state: StateData | null }) {
     return (
       <div className="card">
         <h2>You vs the formula</h2>
-        <div className="empty">Run a cycle — this compares your decisions with the formula-only portfolio.</div>
+        <div className="empty">Run a cycle — this compares your decisions with a formula-only portfolio.</div>
       </div>
     );
   }
-  const usd = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(2)}`;
   const overrides = c.assets.filter((a) => Math.abs(a.your_qty - a.formula_qty) > 1e-6);
   const ahead = c.input_value >= 0;
   return (
     <div className="card">
-      <h2>
-        You vs the formula{" "}
+      <h2>You vs the formula{" "}
         {overrides.length > 0 && <span className="badge">{overrides.length} override{overrides.length > 1 ? "s" : ""}</span>}
       </h2>
+      <div className="subtitle">Same engine, minus your input — so you can see if your calls help or hurt.</div>
       <div className="grid cols-2" style={{ gap: 12 }}>
         <div className="kpi"><div className="label">You (with your input)</div><div className="value">{money(c.your_equity)}</div></div>
-        <div className="kpi"><div className="label">Formula-only</div><div className="value">{money(c.formula_equity)}</div></div>
+        <div className="kpi"><div className="label">Formula only</div><div className="value">{money(c.formula_equity)}</div></div>
       </div>
       <div className={`delta ${ahead ? "pos" : "neg"}`} style={{ marginTop: 10, fontSize: 15, fontWeight: 600 }}>
-        Your input: {ahead ? "+" : ""}{usd(c.input_value)} — {ahead ? "ahead of" : "behind"} the formula
+        Your input is {ahead ? "+" : ""}{usd(c.input_value)} {ahead ? "ahead of" : "behind"} the formula
       </div>
       {overrides.length > 0 && (
         <table style={{ marginTop: 12 }}>
           <thead>
-            <tr><th>Symbol</th><th>Your qty</th><th>Your P&amp;L</th><th>Formula qty</th><th>Formula P&amp;L</th></tr>
+            <tr><th>Symbol</th><th>Your shares</th><th>Your P&amp;L</th><th>Formula shares</th><th>Formula P&amp;L</th></tr>
           </thead>
           <tbody>
             {overrides.map((a) => (
