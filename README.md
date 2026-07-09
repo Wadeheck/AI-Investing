@@ -43,10 +43,19 @@ flattens everything and halts for the day. Every order passes through it.
 
 ---
 
-## Quickstart (paper mode, zero install)
+## Quick start
 
-The core runs on the **Python standard library alone** — no `pip install` needed to
-start. Requires Python 3.11+.
+Two commands (needs Python 3.11+ and Node 18+):
+
+```bash
+make setup     # one-time: creates .env, seeds data, installs the dashboard
+make run       # engine loop + dashboard together  →  http://localhost:4300
+```
+
+Open the dashboard, set your views, and watch it trade paper money. Run `make` on its own
+to list every command (`once`, `backtest`, `compare`, `views`, `test`, `clean`, …).
+
+Prefer the engine alone? Its core is **Python-stdlib-only** — no `pip install` to start:
 
 ```bash
 cd engine
