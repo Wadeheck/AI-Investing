@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ai_investing.learning.features import FEATURE_NAMES
 
@@ -39,6 +40,8 @@ class FormulaModel:
     take_profit: float = 0.25
     version: int = 0
     fitted: bool = False
+    feature_mean: Optional[list[float]] = None   # training-set feature stats, for OOD gating
+    feature_std: Optional[list[float]] = None
 
     # -- the formula --------------------------------------------------------
     def raw(self, feats: dict[str, float]) -> float:
@@ -73,6 +76,8 @@ class FormulaModel:
             "take_profit": self.take_profit,
             "version": self.version,
             "fitted": self.fitted,
+            "feature_mean": self.feature_mean,
+            "feature_std": self.feature_std,
         }
 
     @classmethod
@@ -88,6 +93,8 @@ class FormulaModel:
             take_profit=d.get("take_profit", 0.25),
             version=d.get("version", 0),
             fitted=d.get("fitted", False),
+            feature_mean=d.get("feature_mean"),
+            feature_std=d.get("feature_std"),
         )
 
     def describe(self) -> str:

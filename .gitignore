@@ -10,13 +10,15 @@ env/
 .ruff_cache/
 
 # --- Secrets & data ---
+# NOTE: /data/ is anchored to the repo root so it only ignores the engine's OUTPUT
+# directory, NOT the engine/ai_investing/data/ source package.
 .env
 .env.local
-data/
+/data/
 *.db
 *.sqlite
 *.log
-state.json
+/data/state.json
 
 # --- Node / Next.js (dashboard) ---
 node_modules/

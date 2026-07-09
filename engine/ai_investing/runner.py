@@ -1,5 +1,6 @@
-"""The autonomous loop: data -> signals -> formula -> risk -> execute -> journal,
-plus the online learning step that matures θ from realized P&L each cycle.
+"""The autonomous loop: data -> signals -> formula -> risk -> execute -> journal, with
+online learning, cost-adjusted fills, a regime gate, broker reconciliation, and
+idempotent orders.
 """
 from __future__ import annotations
 
@@ -12,11 +13,12 @@ from ai_investing.brokers import get_broker
 from ai_investing.config import Settings
 from ai_investing.data import get_provider
 from ai_investing.data import news as news_mod
+from ai_investing.execution.costs import CostModel
 from ai_investing.learning import OutcomeTracker, ParamStore, RLSLearner
 from ai_investing.models import Asset, AssetClass, Order, Side
 from ai_investing.signals import default_signals
 from ai_investing.storage import Journal
-from ai_investing.strategy import DecisionEngine, RiskManager
+from ai_investing.strategy import DecisionEngine, RegimeGate, RiskManager, build_market_stats
 
 
 class Runner:
@@ -24,12 +26,15 @@ class Runner:
         self.settings = settings
         self.use_news = use_news
         self.provider = get_provider(settings)
-        self.risk = RiskManager(settings.risk)
         self.broker = get_broker(settings)
         self.journal = Journal(settings.db_path)
         self.assets = self._build_watchlist()
         self._first_cycle = True
         self._cycles = 0
+        self._run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self._submitted: set[str] = set()      # idempotency: client order IDs sent this run
+        self._last_positions: dict[str, float] | None = None
+        self._stats: dict = {}
 
         # --- learning engine ---
         self.store = ParamStore(settings.params_path)
@@ -42,6 +47,16 @@ class Runner:
         self.tracker = OutcomeTracker()
         self.samples_seen = self.rls.updates
 
+        # --- execution realism + safety ---
+        c = settings.cost
+        self.costs = CostModel(enabled=c.enabled, commission_bps=c.commission_bps,
+                               spread_bps=c.spread_bps, slippage_coef=c.slippage_coef)
+        rg = settings.regime
+        self.regime = RegimeGate(high_vol=rg.high_vol, ood_z=rg.ood_z, min_mult=rg.min_mult,
+                                 feature_mean=self.model.feature_mean,
+                                 feature_std=self.model.feature_std) if rg.enabled else None
+        self.risk = RiskManager(settings.risk, regime_gate=self.regime)
+
     def _build_watchlist(self) -> list[Asset]:
         stocks = [Asset(s, AssetClass.STOCK) for s in self.settings.stock_watchlist]
         crypto = [Asset(s, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
@@ -53,6 +68,23 @@ class Runner:
         self._cycles += 1
         bars_by_key = {a.key: self.provider.get_bars(a, limit=250) for a in self.assets}
         prices = {k: (b[-1].close if b else 0.0) for k, b in bars_by_key.items()}
+        self._stats = build_market_stats(bars_by_key, lookback=20)
+
+        portfolio = self.broker.portfolio()
+        equity = portfolio.equity(prices)
+        mode = "LIVE" if self.settings.live else "PAPER"
+        print(f"\n=== cycle {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z  [{mode}]  "
+              f"equity ${equity:,.0f}  cash ${portfolio.cash:,.0f}  "
+              f"θv{self.model.version} (learned from {self.samples_seen} trades) ===")
+
+        # 0) Reconcile the engine's world with the broker's before doing anything.
+        if not self._reconcile(portfolio):
+            self._snapshot(prices, [], {}, halted=True)
+            return {"halted": True, "reason": "reconcile_drift", "equity": equity}
+
+        if self._first_cycle:
+            self.risk.mark_day_start(equity)
+            self._first_cycle = False
 
         context: dict = {}
         if self.use_news:
@@ -60,17 +92,6 @@ class Runner:
                 context = news_mod.build_market_context(self.settings, [a.symbol for a in self.assets])
             except Exception as exc:
                 self.journal.record_event("news_error", str(exc))
-
-        portfolio = self.broker.portfolio()
-        equity = portfolio.equity(prices)
-        if self._first_cycle:
-            self.risk.mark_day_start(equity)
-            self._first_cycle = False
-
-        mode = "LIVE" if self.settings.live else "PAPER"
-        print(f"\n=== cycle {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z  [{mode}]  "
-              f"equity ${equity:,.0f}  cash ${portfolio.cash:,.0f}  "
-              f"θv{self.model.version} (learned from {self.samples_seen} trades) ===")
         if context.get("briefing"):
             print(f"[briefing] {context['briefing']}")
 
@@ -81,11 +102,11 @@ class Runner:
             print("!! KILL SWITCH: daily drawdown limit hit — flattening and halting.")
             self.journal.record_event("kill_switch", f"equity={equity:.2f}")
             executed += self._flatten(prices)
-            self._snapshot(prices, [], context, halted=True)
+            self._finish(prices, [], context, halted=True)
             return {"halted": True, "equity": equity}
 
-        # 2) Protective exits.
-        for o in self.risk.stop_orders(portfolio, prices):
+        # 2) Protective exits (ATR/vol-aware).
+        for o in self.risk.stop_orders(portfolio, prices, market=self._stats):
             executed.append(self._execute(o, prices))
 
         # 3) Decisions via the formula.
@@ -96,20 +117,18 @@ class Runner:
         for d in decisions:
             self.journal.record_decision(d)
 
-        # 4) Size and execute.
-        for o in self.risk.size_orders(decisions, portfolio, prices, equity):
+        # 4) Size (vol-target, correlation, portfolio-vol, regime) and execute.
+        for o in self.risk.size_orders(decisions, portfolio, prices, equity,
+                                       market=self._stats, model=self.model):
             executed.append(self._execute(o, prices))
 
-        # 5) Learn from any trades that just closed.
+        # 5) Learn from trades that just closed.
         self._learn(prices, features_by_key)
 
         # 6) Record + report.
-        portfolio = self.broker.portfolio()
-        equity = portfolio.equity(prices)
-        self.journal.record_equity(equity, portfolio.cash, len(portfolio.positions))
-        self._snapshot(prices, decisions, context, halted=False)
-        self._print_positions(portfolio, prices)
-        return {"halted": False, "equity": equity, "orders": len(executed)}
+        self._finish(prices, decisions, context, halted=False)
+        self._print_positions(self.broker.portfolio(), prices)
+        return {"halted": False, "equity": self.broker.portfolio().equity(prices), "orders": len(executed)}
 
     def run_forever(self) -> None:
         print(f"Autonomous loop started (every {self.settings.poll_seconds}s). Ctrl-C to stop.")
@@ -117,13 +136,37 @@ class Runner:
         try:
             while True:
                 if self.run_cycle().get("halted"):
-                    print("Halted for the day. Sleeping until next session.")
+                    print("Halted. Sleeping until next session / manual check.")
                 time.sleep(self.settings.poll_seconds)
         except KeyboardInterrupt:
             print("\nStopped by user.")
         finally:
             self.store.save(self.model, self.rls, journal=self.journal)
             self.journal.close()
+
+    # -- safety: reconciliation ---------------------------------------------
+    def _reconcile(self, portfolio) -> bool:
+        """Compare current broker positions with what we left last cycle. Any drift
+        (external trade, async/partial fill, rejected order we assumed filled) means our
+        world model is wrong — halt in live mode rather than trade on bad state."""
+        current = {k: p.qty for k, p in portfolio.positions.items()}
+        if self._last_positions is None:
+            self._last_positions = current
+            return True
+        drift = []
+        for key in set(current) | set(self._last_positions):
+            a, b = current.get(key, 0.0), self._last_positions.get(key, 0.0)
+            if abs(a - b) > max(1e-6, 1e-3 * abs(b)):
+                drift.append(f"{key}: expected {b:.4f} got {a:.4f}")
+        if drift:
+            detail = "; ".join(drift)
+            self.journal.record_event("reconcile_drift", detail)
+            print(f"!! RECONCILE DRIFT: {detail}")
+            if self.settings.live:
+                print("   Live mode — halting for manual review.")
+                return False
+        self._last_positions = current
+        return True
 
     # -- learning -----------------------------------------------------------
     def _learn(self, prices: dict[str, float], features_by_key: dict[str, dict]) -> None:
@@ -138,7 +181,6 @@ class Runner:
             self.journal.record_outcome(s.symbol, s.realized_return, s.features, err)
             print(f"  LEARN   {s.symbol:<10} realized {s.realized_return * 100:+.2f}%  "
                   f"pred_err {err * 100:+.2f}%  (sample #{self.samples_seen})")
-        # Apply matured weights once we have enough evidence.
         if self.samples_seen >= lc.min_samples and samples:
             self.model.weights = list(self.rls.theta)
         if samples and self._cycles % lc.save_every == 0:
@@ -146,11 +188,25 @@ class Runner:
 
     # -- execution helpers --------------------------------------------------
     def _execute(self, order: Order, prices: dict[str, float]) -> Order:
-        px = prices.get(order.asset.key, 0.0)
-        filled = self.broker.submit(order, px)
+        cid = f"{self._run_id}-{self._cycles}-{order.asset.key}-{order.side.value}"
+        if cid in self._submitted:
+            print(f"  SKIP     duplicate order {cid}")
+            order.reason = "duplicate (idempotency)"
+            return order
+        order.client_order_id = cid
+
+        key = order.asset.key
+        mid = prices.get(key, 0.0)
+        ms = self._stats.get(key)
+        eff = self.costs.effective_price(order.side, mid, order.qty,
+                                         ms.adv if ms else None, ms.vol if ms else None)
+        filled = self.broker.submit(order, eff)
+        self._submitted.add(cid)
         self.journal.record_order(filled, self.settings.live)
+        slip = (eff / mid - 1) * 100 if mid else 0.0
         print(f"  {filled.status.value.upper():8} {filled.side.value:4} "
-              f"{filled.filled_qty or filled.qty:>10.4f} {order.asset.symbol:<10} @ ${px:,.2f}  ({order.reason})")
+              f"{filled.filled_qty or filled.qty:>10.4f} {order.asset.symbol:<10} "
+              f"@ ${eff:,.2f} ({slip:+.2f}% cost)  ({order.reason})")
         return filled
 
     def _flatten(self, prices: dict[str, float]) -> list[Order]:
@@ -159,6 +215,12 @@ class Runner:
             side = Side.SELL if pos.qty > 0 else Side.BUY
             out.append(self._execute(Order(pos.asset, side, abs(pos.qty), reason="flatten"), prices))
         return out
+
+    def _finish(self, prices, decisions, context, halted: bool) -> None:
+        portfolio = self.broker.portfolio()
+        self.journal.record_equity(portfolio.equity(prices), portfolio.cash, len(portfolio.positions))
+        self._last_positions = {k: p.qty for k, p in portfolio.positions.items()}
+        self._snapshot(prices, decisions, context, halted)
 
     def _print_positions(self, portfolio, prices) -> None:
         if not portfolio.positions:
@@ -181,6 +243,7 @@ class Runner:
             "formula": {
                 "version": self.model.version,
                 "trades_learned": self.samples_seen,
+                "fitted": self.model.fitted,
                 "weights": dict(zip(self.model.feature_names, self.model.weights)),
                 "gain": self.model.gain,
                 "entry_threshold": self.model.entry_threshold,
@@ -199,7 +262,6 @@ class Runner:
                 for d in decisions
             ],
         }
-        import os
         data_dir = os.path.dirname(os.path.abspath(self.settings.state_path))
         try:
             os.makedirs(data_dir, exist_ok=True)
@@ -210,7 +272,6 @@ class Runner:
             pass
 
     def _append_history(self, data_dir: str, state: dict) -> None:
-        """Append this cycle's equity/θ point to history.json (capped) for the chart."""
         path = os.path.join(data_dir, "history.json")
         points = []
         if os.path.exists(path):
@@ -220,11 +281,8 @@ class Runner:
             except (OSError, json.JSONDecodeError):
                 points = []
         points.append({
-            "ts": state["ts"],
-            "equity": round(state["equity"], 2),
-            "cash": round(state["cash"], 2),
-            "version": self.model.version,
-            "trades_learned": self.samples_seen,
+            "ts": state["ts"], "equity": round(state["equity"], 2), "cash": round(state["cash"], 2),
+            "version": self.model.version, "trades_learned": self.samples_seen,
         })
         with open(path, "w") as fh:
             json.dump({"updated": state["ts"], "points": points[-500:]}, fh)

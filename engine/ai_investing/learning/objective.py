@@ -78,3 +78,79 @@ def objective_score(returns: list[float], turnover: float, theta: list[float],
     """J(θ) = Sharpe − λ_turn · turnover − λ_reg · ‖θ − θ_prior‖²."""
     reg = sum((a - b) ** 2 for a, b in zip(theta, theta_prior))
     return sharpe(returns) - lambda_turnover * turnover - lambda_reg * reg
+
+
+# --- statistical significance (Bailey & López de Prado) --------------------
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def _norm_ppf(p: float) -> float:
+    """Inverse standard-normal CDF (Acklam's approximation)."""
+    if p <= 0:
+        return -float("inf")
+    if p >= 1:
+        return float("inf")
+    a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
+         1.383577518672690e2, -3.066479806614716e1, 2.506628277459239e0]
+    b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
+         6.680131188771972e1, -1.328068155288572e1]
+    c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e0,
+         -2.549732539343734e0, 4.374664141464968e0, 2.938163982698783e0]
+    d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e0, 3.754408661907416e0]
+    plow, phigh = 0.02425, 1 - 0.02425
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    if p <= phigh:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / \
+               (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+    q = math.sqrt(-2 * math.log(1 - p))
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+
+
+def _moment(returns: list[float], k: int) -> float:
+    n = len(returns)
+    if n < 2:
+        return 0.0
+    m = mean(returns)
+    sd = std(returns)
+    if sd == 0:
+        return 0.0
+    return sum(((r - m) / sd) ** k for r in returns) / n
+
+
+def probabilistic_sharpe_ratio(returns: list[float], sr_benchmark: float = 0.0) -> float:
+    """Prob. that the true (per-observation) Sharpe exceeds sr_benchmark, given skew/kurtosis."""
+    n = len(returns)
+    if n < 3:
+        return 0.0
+    sd = std(returns)
+    if sd == 0:
+        return 0.0
+    sr = mean(returns) / sd            # per-observation Sharpe
+    skew, kurt = _moment(returns, 3), _moment(returns, 4)
+    denom = math.sqrt(max(1e-12, 1 - skew * sr + ((kurt - 1) / 4) * sr * sr))
+    return _norm_cdf((sr - sr_benchmark) * math.sqrt(n - 1) / denom)
+
+
+def deflated_sharpe_ratio(returns: list[float], n_trials: int,
+                          sr_trials_std: float | None = None) -> float:
+    """PSR against the Sharpe you'd expect from the BEST of `n_trials` random strategies —
+    i.e. how much of the result survives the multiple-testing (selection) bias."""
+    n = len(returns)
+    if n < 3:
+        return 0.0
+    if n_trials <= 1:
+        return probabilistic_sharpe_ratio(returns, 0.0)
+    if not sr_trials_std or sr_trials_std <= 0:
+        sr_trials_std = 1.0 / math.sqrt(n - 1)   # SR sampling std under the null
+    gamma = 0.5772156649015329
+    z1 = _norm_ppf(1 - 1.0 / n_trials)
+    z2 = _norm_ppf(1 - 1.0 / (n_trials * math.e))
+    sr_star = sr_trials_std * ((1 - gamma) * z1 + gamma * z2)
+    return probabilistic_sharpe_ratio(returns, sr_star)

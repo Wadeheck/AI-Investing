@@ -66,6 +66,8 @@ export interface BacktestData {
   provider: string;
   assets: string[];
   adopted: boolean | null;
+  dsr?: number | null;
+  n_trials?: number | null;
   windows: BacktestWindow[];
   metrics_default: Record<string, number>;
   metrics_chosen: Record<string, number>;

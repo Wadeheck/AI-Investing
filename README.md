@@ -151,13 +151,38 @@ python3 -m ai_investing.main --check-broker   # read-only: checks credentials/co
 Then trade tiny against each venue's **sandbox / SIMULATE** endpoint before setting
 `LIVE_TRADING=true`. moomoo defaults to `SIMULATE`; set `MOOMOO_TRD_ENV=REAL` only when proven.
 
+## Realism, risk & statistical honesty (M7)
+The things that stop a good-looking backtest from losing money live:
+
+- **Transaction costs** (`execution/costs.py`) — commission + half-spread + square-root
+  market impact (`~coef·vol·√(Q/ADV)`) penalize every fill, in backtest and paper. The
+  optimizer can no longer select fantasy high-churn strategies.
+- **Purged/embargoed walk-forward + Deflated Sharpe** (`learning/objective.py`) — an
+  embargo gap stops label leakage, and the winner's Sharpe is deflated by the number of
+  trials searched. It **only adopts if the Deflated Sharpe clears a threshold** — i.e.
+  the edge survives the multiple-testing bias, not just the max of noise.
+- **Volatility-targeted sizing + ATR stops** — equal-risk position sizing (∝ 1/vol) and
+  stops that scale with each asset's true range, not a flat %.
+- **Portfolio risk** (`strategy/risk.py`) — correlation penalty (correlated longs ≠
+  independent bets), a portfolio-vol target, and gross exposure that shrinks as drawdown
+  from the peak grows.
+- **Regime / out-of-distribution gate** (`strategy/regime.py`) — cut size in high-vol
+  regimes or when today's features are far from the data θ was fit on.
+- **Broker reconciliation + idempotent orders** (`runner.py`) — every cycle checks the
+  engine's position model against the broker and halts on drift; client order IDs stop a
+  crash-restart from double-firing.
+- **Validate before you size** (`research/event_study.py`) — measure whether fading pumps
+  actually pays *before* trusting the hype signal: `python3 -m ai_investing.research.event_study`.
+
 ## Roadmap
 - [x] **M1 — Engine core** (data, signals, decision, risk, paper broker, journal, loop) ✅
 - [x] **M3 — Backtesting + adaptive learning engine** (walk-forward, ridge + online RLS,
       champion/challenger, versioned θ) ✅
 - [x] **M2 — Next.js dashboard** (equity, evolving θ, backtest, positions, decisions, briefing) ✅
 - [x] **M4 — Live adapters** implemented + routed + `--check-broker` (⚠️ need sandbox validation) ✅
-- [ ] **M5 — Richer signals**: options-flow, on-chain, social-velocity, cross-asset macro.
+- [x] **M7 — Execution realism, portfolio risk, statistical validation, ops safety** ✅
+- [~] **M5 — Richer signals** — event-study validation + alt-data interfaces scaffolded
+      (`data/altdata.py`: options-flow / on-chain / social — need provider keys).
 - [ ] **M6 — Alerts** (Telegram/email) + scheduled briefings.
 
 ## Layout

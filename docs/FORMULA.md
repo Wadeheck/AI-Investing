@@ -50,9 +50,16 @@ last-trade P&L.
 For each expanding window:
 1. Fit `θ` by **ridge regression** on `(φ_t, forward_return_t)` from the *training*
    slice: `θ = argmin ‖Xθ − y‖² + reg‖θ‖²`.
-2. **Search** hyperparameters for the best Sharpe on the *next, unseen* slice.
-3. **Champion/challenger:** adopt the new formula only if it beats the incumbent
-   averaged across windows. This is the anti-overfitting gate.
+2. **Search** hyperparameters for the best Sharpe on the *next, unseen* slice, after an
+   **embargo gap** (= label horizon) so the h-day forward-return label can't leak across
+   the train/validation boundary.
+3. **Champion/challenger + Deflated Sharpe:** the winner is the best of many trials, so
+   its Sharpe is biased upward. Deflate it by the trial count (Bailey & López de Prado)
+   and adopt **only if** it beats the incumbent *and* the Deflated Sharpe clears a
+   threshold — i.e. the probability the true Sharpe is positive survives the
+   multiple-testing bias. This is the real anti-overfitting gate. The backtest that scores
+   each candidate also charges **transaction costs** (`execution/costs.py`), so the search
+   can't win by churning.
 
 ### (b) Online maturation — Recursive Least Squares (`learning/online.py`)
 Each closed trade yields a sample `(φ, y)` with `y` = realized signed return. RLS

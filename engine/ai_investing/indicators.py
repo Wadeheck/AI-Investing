@@ -58,3 +58,30 @@ def zscore(value: float, window: Sequence[float]) -> float:
     if sd == 0:
         return 0.0
     return (value - sum(window) / len(window)) / sd
+
+
+def atr(bars, period: int = 14) -> Optional[float]:
+    """Average True Range over OHLC bars (duck-typed: needs .high/.low/.close)."""
+    if len(bars) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(bars)):
+        h, low, prev_close = bars[i].high, bars[i].low, bars[i - 1].close
+        trs.append(max(h - low, abs(h - prev_close), abs(low - prev_close)))
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+
+def correlation(a: Sequence[float], b: Sequence[float]) -> float:
+    n = min(len(a), len(b))
+    if n < 3:
+        return 0.0
+    a, b = a[-n:], b[-n:]
+    ma, mb = sum(a) / n, sum(b) / n
+    cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    va = sum((x - ma) ** 2 for x in a)
+    vb = sum((y - mb) ** 2 for y in b)
+    if va <= 0 or vb <= 0:
+        return 0.0
+    return cov / (va ** 0.5 * vb ** 0.5)

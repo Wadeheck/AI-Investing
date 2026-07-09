@@ -16,6 +16,7 @@ from ai_investing.backtest.engine import Backtester
 from ai_investing.backtest.walkforward import WalkForwardOptimizer
 from ai_investing.config import settings
 from ai_investing.data import get_provider
+from ai_investing.execution.costs import CostModel
 from ai_investing.learning.formula import FormulaModel
 from ai_investing.learning.store import ParamStore
 from ai_investing.models import Asset, AssetClass
@@ -46,6 +47,8 @@ def _dump(assets, chosen, default_res, chosen_res, result=None) -> None:
         "provider": settings.data_provider,
         "assets": [a.symbol for a in assets],
         "adopted": (result or {}).get("adopted"),
+        "dsr": (result or {}).get("dsr"),
+        "n_trials": (result or {}).get("n_trials"),
         "windows": (result or {}).get("windows", []),
         "metrics_default": default_res.metrics,
         "metrics_chosen": chosen_res.metrics,
@@ -79,7 +82,11 @@ def main() -> None:
     print(f"Data: {settings.data_provider} | assets: {', '.join(a.symbol for a in assets)} "
           f"| bars: {min(len(v) for v in bars_by_key.values())}")
 
-    bt = Backtester(starting_cash=settings.starting_cash, horizon=settings.learning.horizon)
+    costs = CostModel(enabled=settings.cost.enabled, commission_bps=settings.cost.commission_bps,
+                      spread_bps=settings.cost.spread_bps, slippage_coef=settings.cost.slippage_coef)
+    bt = Backtester(starting_cash=settings.starting_cash, horizon=settings.learning.horizon, cost_model=costs)
+    print(f"costs: {'ON' if costs.enabled else 'OFF'} "
+          f"(commission {costs.commission_bps}bps + spread {costs.spread_bps}bps + sqrt-impact)")
 
     if args.run:
         model = ParamStore(settings.params_path).load_model()
@@ -92,14 +99,16 @@ def main() -> None:
 
     print("\nWalk-forward optimization (train -> validate out-of-sample -> champion/challenger)")
     opt = WalkForwardOptimizer(bt, n_windows=settings.learning.walkforward_windows,
-                               search=settings.learning.walkforward_search)
-    result = opt.optimize(assets, bars_by_key, prior_model=FormulaModel())
+                               search=settings.learning.walkforward_search, embargo=settings.learning.embargo)
+    result = opt.optimize(assets, bars_by_key, prior_model=FormulaModel(), min_dsr=settings.learning.min_dsr)
 
     for w in result["windows"]:
         print(f"  window {w['window']}: default Sharpe {w['default_sharpe']:>6}  "
               f"challenger {w['challenger_sharpe']:>6}  (val bars {w['train_end']}..{w['val_end']})")
-    print(f"\n  challenger avg Sharpe {result['challenger_avg']}  vs default {result['default_avg']}  "
-          f"-> {'ADOPT new formula' if result['adopted'] else 'KEEP incumbent'}")
+    print(f"\n  challenger avg Sharpe {result['challenger_avg']}  vs default {result['default_avg']}")
+    print(f"  Deflated Sharpe {result['dsr']} over {result['n_trials']} trials "
+          f"(need >= {result.get('min_dsr', 0.6)}) "
+          f"-> {'ADOPT new formula' if result['adopted'] else 'KEEP incumbent (not significant)'}")
 
     chosen = result["model"]
     print("\nChosen formula:")

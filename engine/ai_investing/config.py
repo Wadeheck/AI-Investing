@@ -59,6 +59,33 @@ class RiskConfig:
     min_confidence: float = field(default_factory=lambda: _get_float("RISK_MIN_CONFIDENCE", 0.35))
     max_open_positions: int = field(default_factory=lambda: _get_int("RISK_MAX_OPEN_POSITIONS", 12))
     allow_short: bool = field(default_factory=lambda: _get_bool("RISK_ALLOW_SHORT", False))
+    # volatility targeting & ATR-based stops
+    use_vol_target: bool = field(default_factory=lambda: _get_bool("RISK_USE_VOL_TARGET", True))
+    target_position_vol: float = field(default_factory=lambda: _get_float("RISK_TARGET_POSITION_VOL", 0.02))
+    use_atr_stops: bool = field(default_factory=lambda: _get_bool("RISK_USE_ATR_STOPS", True))
+    atr_stop_mult: float = field(default_factory=lambda: _get_float("RISK_ATR_STOP_MULT", 3.0))
+    atr_take_mult: float = field(default_factory=lambda: _get_float("RISK_ATR_TAKE_MULT", 6.0))
+    # portfolio-level risk
+    corr_penalty: float = field(default_factory=lambda: _get_float("RISK_CORR_PENALTY", 0.5))
+    portfolio_vol_target: float = field(default_factory=lambda: _get_float("RISK_PORTFOLIO_VOL_TARGET", 0.02))
+    dd_derisk_scale: float = field(default_factory=lambda: _get_float("RISK_DD_DERISK_SCALE", 2.0))
+    dd_derisk_floor: float = field(default_factory=lambda: _get_float("RISK_DD_DERISK_FLOOR", 0.3))
+
+
+@dataclass
+class CostConfig:
+    enabled: bool = field(default_factory=lambda: _get_bool("COST_ENABLED", True))
+    commission_bps: float = field(default_factory=lambda: _get_float("COST_COMMISSION_BPS", 1.0))
+    spread_bps: float = field(default_factory=lambda: _get_float("COST_SPREAD_BPS", 2.0))
+    slippage_coef: float = field(default_factory=lambda: _get_float("COST_SLIPPAGE_COEF", 0.1))
+
+
+@dataclass
+class RegimeConfig:
+    enabled: bool = field(default_factory=lambda: _get_bool("REGIME_ENABLED", True))
+    high_vol: float = field(default_factory=lambda: _get_float("REGIME_HIGH_VOL", 0.04))
+    ood_z: float = field(default_factory=lambda: _get_float("REGIME_OOD_Z", 4.0))
+    min_mult: float = field(default_factory=lambda: _get_float("REGIME_MIN_MULT", 0.4))
 
 
 @dataclass
@@ -75,6 +102,8 @@ class LearningConfig:
     walkforward_search: int = field(default_factory=lambda: _get_int("LEARN_WF_SEARCH", 16))
     lambda_turnover: float = field(default_factory=lambda: _get_float("LEARN_LAMBDA_TURNOVER", 0.05))
     lambda_reg: float = field(default_factory=lambda: _get_float("LEARN_LAMBDA_REG", 0.10))
+    embargo: int = field(default_factory=lambda: _get_int("LEARN_EMBARGO", 5))
+    min_dsr: float = field(default_factory=lambda: _get_float("LEARN_MIN_DSR", 0.60))
 
 
 @dataclass
@@ -99,6 +128,8 @@ class Settings:
     params_path: str = field(default_factory=lambda: _get("PARAMS_PATH", str(PROJECT_ROOT / "data" / "formula.json")))
     risk: RiskConfig = field(default_factory=RiskConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    cost: CostConfig = field(default_factory=CostConfig)
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
 
 
 settings = Settings()

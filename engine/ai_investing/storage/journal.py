@@ -33,7 +33,7 @@ class Journal:
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT, symbol TEXT, side TEXT, qty REAL, price REAL,
-                status TEXT, reason TEXT, live INTEGER
+                status TEXT, reason TEXT, live INTEGER, client_order_id TEXT
             );
             CREATE TABLE IF NOT EXISTS equity (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +54,12 @@ class Journal:
             """
         )
         self.conn.commit()
+        # Backfill column on pre-existing databases.
+        try:
+            self.conn.execute("ALTER TABLE orders ADD COLUMN client_order_id TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def record_decision(self, d: Decision) -> None:
         self.conn.execute(
@@ -67,9 +73,10 @@ class Journal:
 
     def record_order(self, o: Order, live: bool) -> None:
         self.conn.execute(
-            "INSERT INTO orders (ts,symbol,side,qty,price,status,reason,live) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO orders (ts,symbol,side,qty,price,status,reason,live,client_order_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (_now(), o.asset.symbol, o.side.value, o.filled_qty or o.qty,
-             o.filled_price or 0.0, o.status.value, o.reason, int(live)),
+             o.filled_price or 0.0, o.status.value, o.reason, int(live), o.client_order_id),
         )
         self.conn.commit()
 

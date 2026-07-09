@@ -182,6 +182,12 @@ export function BacktestPanel({ backtest }: { backtest: BacktestData | null }) {
         </table>
       )}
       <div className="legend" style={{ marginTop: 10 }}>
+        {typeof backtest.dsr === "number" && (
+          <span className="muted">
+            deflated Sharpe {backtest.dsr}
+            {typeof backtest.n_trials === "number" ? ` / ${backtest.n_trials} trials` : ""}
+          </span>
+        )}
         <span className="muted">provider: {backtest.provider}</span>
         <span className="muted">assets: {backtest.assets?.join(", ")}</span>
       </div>

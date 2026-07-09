@@ -98,6 +98,7 @@ class Order:
     filled_price: Optional[float] = None
     filled_qty: float = 0.0
     id: Optional[str] = None
+    client_order_id: Optional[str] = None   # idempotency key: dedupes double-submits
     ts: Optional[datetime] = None
     reason: str = ""
 
