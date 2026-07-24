@@ -1,8 +1,12 @@
-"""News ingestion + Claude-powered sentiment, hype detection, and global briefing.
+"""News ingestion + LLM-powered sentiment, hype detection, and global briefing.
 
 Everything here is best-effort and degrades gracefully: no network or no API key
 just yields an empty/neutral context, and the engine keeps running on price signals.
-The Anthropic API is called directly over urllib so no SDK install is required.
+Provider priority: Anthropic Claude (if ANTHROPIC_API_KEY set) > BytePlus ModelArk
+(if BYTEPLUS_API_KEY set) > DeepSeek (if DEEPSEEK_API_KEY set) > none. BytePlus
+uses its FAST model for high-volume per-cycle sentiment scoring and its SMART
+model for the on-demand global briefing. All APIs are called directly over
+urllib so no SDK install is required.
 """
 from __future__ import annotations
 
@@ -12,11 +16,11 @@ from typing import Optional
 from xml.etree import ElementTree
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+BYTEPLUS_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions"
 
 
 def _call_claude(prompt: str, settings, max_tokens: int = 1500) -> Optional[str]:
-    if not settings.anthropic_api_key:
-        return None
     body = json.dumps({
         "model": settings.anthropic_model,
         "max_tokens": max_tokens,
@@ -27,13 +31,57 @@ def _call_claude(prompt: str, settings, max_tokens: int = 1500) -> Optional[str]
         "x-api-key": settings.anthropic_api_key,
         "anthropic-version": "2023-06-01",
     })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode())
+    parts = [b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text"]
+    return "".join(parts).strip()
+
+
+def _call_deepseek(prompt: str, settings, max_tokens: int = 1500) -> Optional[str]:
+    body = json.dumps({
+        "model": settings.deepseek_model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
+    req = urllib.request.Request(DEEPSEEK_URL, data=body, method="POST", headers={
+        "content-type": "application/json",
+        "authorization": f"Bearer {settings.deepseek_api_key}",
+    })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode())
+    choices = payload.get("choices") or [{}]
+    return (choices[0].get("message") or {}).get("content", "").strip()
+
+
+def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500) -> Optional[str]:
+    body = json.dumps({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
+    req = urllib.request.Request(BYTEPLUS_URL, data=body, method="POST", headers={
+        "content-type": "application/json",
+        "authorization": f"Bearer {settings.byteplus_api_key}",
+    })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode())
+    choices = payload.get("choices") or [{}]
+    return (choices[0].get("message") or {}).get("content", "").strip()
+
+
+def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast") -> Optional[str]:
+    """Anthropic > BytePlus > DeepSeek. `tier` ('fast'|'smart') picks the BytePlus model."""
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode())
-        parts = [b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text"]
-        return "".join(parts).strip()
+        if settings.anthropic_api_key:
+            return _call_claude(prompt, settings, max_tokens)
+        if settings.byteplus_api_key:
+            model = settings.byteplus_model_smart if tier == "smart" else settings.byteplus_model_fast
+            return _call_byteplus(prompt, settings, model, max_tokens)
+        if settings.deepseek_api_key:
+            return _call_deepseek(prompt, settings, max_tokens)
     except Exception:
         return None
+    return None
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -81,7 +129,7 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
 
 
 def analyze_with_claude(headlines: list[dict], symbols: list[str], settings) -> Optional[dict]:
-    if not headlines or not settings.anthropic_api_key:
+    if not headlines or not settings.llm_available:
         return None
     lines = "\n".join(f"- {h['title']}" for h in headlines[:60])
     prompt = f"""You are a markets analyst screening news for an automated trading system.
@@ -107,7 +155,7 @@ Return ONLY a JSON object, no prose, with this exact shape:
 }}
 Only include tickers that actually appear in the news. Flag pump-and-dump / meme /
 political-hype dynamics aggressively -- the system uses these to FADE hype."""
-    return _extract_json(_call_claude(prompt, settings, max_tokens=1800) or "")
+    return _extract_json(_call_llm(prompt, settings, max_tokens=1800, tier="fast") or "")
 
 
 def build_market_context(settings, assets) -> dict:
@@ -168,11 +216,11 @@ def global_briefing(settings) -> str:
     headlines = fetch_headlines(settings)
     if not headlines:
         return "No headlines fetched (check NEWS_RSS / connectivity)."
-    if not settings.anthropic_api_key:
-        return "Set ANTHROPIC_API_KEY for an AI briefing. Latest headlines:\n" + \
+    if not settings.llm_available:
+        return "Set DEEPSEEK_API_KEY, BYTEPLUS_API_KEY, or ANTHROPIC_API_KEY for an AI briefing. Latest headlines:\n" + \
             "\n".join(f"  • {h['title']}" for h in headlines[:15])
     lines = "\n".join(f"- {h['title']}" for h in headlines[:60])
     prompt = ("Give me a concise, decision-useful global briefing (<=250 words) for an "
               "investor covering stocks and crypto. Group into: Macro/Rates, Geopolitics, "
               "Crypto, and Risks/Manipulation to watch. Headlines:\n" + lines)
-    return _call_claude(prompt, settings, max_tokens=1200) or "Briefing unavailable."
+    return _call_llm(prompt, settings, max_tokens=1200, tier="smart") or "Briefing unavailable."

@@ -1,0 +1,21 @@
+services:
+  engine:
+    build: ./engine
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "4300:4300"
+    volumes:
+      - ./data:/app/data:ro
+    env_file: ./.env   # picks up DASHBOARD_USER/DASHBOARD_PASSWORD if set
+    environment:
+      - DATA_DIR=/app/data
+      - VIEWS_PATH=/app/data/views.json
+    restart: unless-stopped
+    depends_on:
+      - engine

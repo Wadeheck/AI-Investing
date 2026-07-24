@@ -1,0 +1,18 @@
+[Unit]
+Description=AI-Investing dashboard (production)
+After=network-online.target ai-investing-engine.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@REPO@@/dashboard
+# `npm run build` must have been run at least once (deploy/install.sh does this).
+Environment=DASHBOARD_USER=@@DASHBOARD_USER@@
+Environment=DASHBOARD_PASSWORD=@@DASHBOARD_PASSWORD@@
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

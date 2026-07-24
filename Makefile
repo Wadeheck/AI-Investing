@@ -13,6 +13,9 @@ setup:  ## One-time: create .env, seed data, install dashboard deps
 run:  ## Start the engine loop + dashboard together (http://localhost:4300)
 > @bash scripts/run.sh
 
+run-prod:  ## Like `run`, but builds + serves the dashboard in production mode
+> @bash scripts/run-prod.sh
+
 dashboard:  ## Start only the dashboard
 > @cd dashboard && npm run dev
 

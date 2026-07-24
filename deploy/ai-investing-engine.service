@@ -1,0 +1,16 @@
+[Unit]
+Description=AI-Investing autonomous engine loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@REPO@@/engine
+ExecStart=/usr/bin/python3 -m ai_investing.main
+Restart=on-failure
+RestartSec=10
+# Config comes from @@REPO@@/.env (loaded by the engine itself) — nothing to set here.
+
+[Install]
+WantedBy=multi-user.target

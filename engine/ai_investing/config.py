@@ -165,6 +165,11 @@ class Settings:
     poll_seconds: int = field(default_factory=lambda: _get_int("POLL_SECONDS", 300))
     anthropic_api_key: str = field(default_factory=lambda: _get("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(default_factory=lambda: _get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))
+    deepseek_api_key: str = field(default_factory=lambda: _get("DEEPSEEK_API_KEY", ""))
+    deepseek_model: str = field(default_factory=lambda: _get("DEEPSEEK_MODEL", "deepseek-chat"))
+    byteplus_api_key: str = field(default_factory=lambda: _get("BYTEPLUS_API_KEY", ""))
+    byteplus_model_smart: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_SMART", "seed-2-0-pro-260328"))
+    byteplus_model_fast: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_FAST", "seed-2-0-mini-260428"))
     news_rss: list[str] = field(default_factory=lambda: _get_list("NEWS_RSS", [
         "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
         "http://feeds.bbci.co.uk/news/business/rss.xml",
@@ -183,6 +188,11 @@ class Settings:
     breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))
     heartbeat_path: str = field(default_factory=lambda: _get("HEARTBEAT_PATH", str(PROJECT_ROOT / "data" / "heartbeat.json")))
     user_views_path: str = field(default_factory=lambda: _get("USER_VIEWS_PATH", str(PROJECT_ROOT / "data" / "views.json")))
+
+    @property
+    def llm_available(self) -> bool:
+        """True if any LLM provider is configured (news sentiment/briefing feature)."""
+        return bool(self.anthropic_api_key or self.byteplus_api_key or self.deepseek_api_key)
 
 
 settings = Settings()

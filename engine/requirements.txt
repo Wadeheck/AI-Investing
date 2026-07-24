@@ -2,15 +2,19 @@
 # with synthetic data and even Claude-powered sentiment (called over urllib)
 # need NO third-party packages. Install these to unlock live data & brokers:
 
+# Pinned to exact versions for reproducible installs. To upgrade a package,
+# bump it here deliberately and re-run `pip freeze` into requirements.lock.txt
+# (see that file for the full resolved transitive tree).
+
 # --- Market data ---
-yfinance>=0.2.40        # free stock/ETF historical data
-ccxt>=4.3.0             # unified crypto data + trading (coinbase, gemini, binance, kraken...)
+yfinance==1.5.1         # free stock/ETF historical data
+ccxt==4.5.66            # unified crypto data + trading (coinbase, gemini, binance, kraken...)
 
 # --- Stock brokers (Singapore) ---
-longbridge>=3.0.0       # Longbridge / LongPort OpenAPI (SG/HK/US/CN) — cloud API
-moomoo-api>=10.0        # moomoo OpenAPI — needs the moomoo OpenD gateway running locally
+longbridge==4.3.3       # Longbridge / LongPort OpenAPI (SG/HK/US/CN) — cloud API
+moomoo-api==10.9.6908   # moomoo OpenAPI — needs the moomoo OpenD gateway running locally
 
 # --- Optional niceties (engine has stdlib fallbacks for all of these) ---
-anthropic>=0.40.0       # nicer Claude client (engine also works via raw urllib)
-feedparser>=6.0         # robust RSS parsing (falls back to stdlib xml)
-rich>=13.0              # prettier console output
+anthropic==0.117.0      # nicer Claude client (engine also works via raw urllib)
+feedparser==6.0.12      # robust RSS parsing (falls back to stdlib xml)
+rich==15.0.0            # prettier console output

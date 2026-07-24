@@ -30,7 +30,7 @@ paper or live brokers. It also produces a **global briefing** to keep you inform
 ### The signals (`engine/ai_investing/signals/`)
 - **momentum** — fast vs slow SMA trend, tempered by RSI extremes.
 - **mean_reversion** — fades statistical extremes (z-score vs a volatility band).
-- **sentiment** — per-asset news sentiment scored by Claude.
+- **sentiment** — per-asset news sentiment scored by an LLM (priority: Claude > BytePlus > DeepSeek, based on which API key is set).
 - **political_hype** — **the anti-manipulation edge.** Detects sharp price+volume
   pumps, *especially* when they coincide with promotional or political news (a
   president/official hyping an asset, meme-coin launches), and returns a **negative
@@ -68,7 +68,7 @@ Then add real data + a global briefing:
 ```bash
 cp ../.env.example ../.env        # then edit ../.env
 pip install -r requirements.txt   # optional: real data / live brokers
-python3 -m ai_investing.main --briefing         # AI world briefing (needs ANTHROPIC_API_KEY)
+python3 -m ai_investing.main --briefing         # AI world briefing (needs DEEPSEEK_API_KEY, BYTEPLUS_API_KEY, or ANTHROPIC_API_KEY)
 python3 -m ai_investing.main                     # autonomous loop (fully automated)
 ```
 
@@ -87,7 +87,9 @@ Everything is in `.env` (copy from `.env.example`). Key switches:
 | `DATA_PROVIDER` | `synthetic` | `synthetic` \| `stooq` \| `yfinance` \| `ccxt` |
 | `STOCK_BROKER` | `paper` | `paper` \| `longbridge` \| `moomoo` |
 | `CRYPTO_EXCHANGE` | `coinbase` | any ccxt id: `coinbase`/`gemini`/`binance`/`kraken` |
-| `ANTHROPIC_API_KEY` | – | enables news sentiment, hype detection, briefing |
+| `DEEPSEEK_API_KEY` | – | enables news sentiment, hype detection, briefing (lowest-priority provider) |
+| `BYTEPLUS_API_KEY` | – | same, via BytePlus ModelArk (FAST model for scoring, SMART model for briefing); takes priority over DeepSeek |
+| `ANTHROPIC_API_KEY` | – | upgrades sentiment/briefing to Claude when set (takes priority over BytePlus and DeepSeek) |
 | `RISK_*` | see file | the guardrails (stops, drawdown kill switch, caps) |
 
 ---
@@ -268,6 +270,36 @@ capped and you get paged":
 - **Operational security** — [`SECURITY.md`](SECURITY.md): trade-only keys, regulated
   venues, host hardening, and an independent exchange-level backstop.
 
+## Deployment
+Four ways to run this, from quickest to most production-grade:
+
+1. **Local dev** — `make run` (engine + dashboard dev server together). Fastest
+   iteration loop; not meant to be exposed beyond `localhost`.
+2. **Local, production dashboard build** — `make run-prod` builds the dashboard
+   (`next build && next start`) instead of running its dev server. Still one
+   foreground process you keep open.
+3. **systemd (always-on, single host)** — `deploy/install.sh` installs three
+   units: `ai-investing-engine.service` (the loop), `ai-investing-dashboard.service`
+   (production dashboard), and `ai-investing-watchdog.timer` (runs `--watchdog`
+   every 5 min — the dead-man's switch described above). Requires `sudo`; review
+   the unit files in `deploy/` first. Survives reboots and crashes.
+4. **Docker** — `docker compose up -d --build` builds and runs the engine and
+   dashboard as containers (`engine/Dockerfile`, `dashboard/Dockerfile`,
+   `docker-compose.yml`). `data/` and `.env` are bind-mounted from the repo so
+   state persists across container rebuilds.
+
+CI (`.github/workflows/test.yml`) runs the engine test suite and a dashboard
+production build on every push/PR to `main`.
+
+**Dashboard auth** — the dashboard has built-in HTTP Basic Auth
+(`dashboard/middleware.ts`), off by default. Set `DASHBOARD_USER` and
+`DASHBOARD_PASSWORD` in `.env` before running this anywhere reachable off
+`localhost`; it protects both the page and the API routes, and works
+identically across all four modes above (local scripts, systemd, and Docker
+all pass those two vars through). Still pair it with TLS (a reverse proxy or
+VPN/SSH tunnel) if this ever leaves your LAN — Basic Auth alone sends
+credentials in a form that's only safe over an encrypted connection.
+
 ## Roadmap
 - [x] **M1 — Engine core** (data, signals, decision, risk, paper broker, journal, loop) ✅
 - [x] **M3 — Backtesting + adaptive learning engine** (walk-forward, ridge + online RLS,
@@ -292,7 +324,7 @@ capped and you get paged":
 engine/ai_investing/
   config.py  models.py  indicators.py  runner.py  main.py
   signals/   momentum · mean_reversion · sentiment · political_hype
-  data/      providers (synthetic/stooq/yfinance/ccxt) · news (RSS + Claude)
+  data/      providers (synthetic/stooq/yfinance/ccxt) · news (RSS + DeepSeek/BytePlus/Claude)
   brokers/   base · paper · live (ccxt/longbridge/moomoo)
   strategy/  decision · risk
   storage/   journal (SQLite)
