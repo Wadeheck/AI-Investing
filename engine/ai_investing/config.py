@@ -15,7 +15,16 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, val = line.partition("=")
-        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+        val = val.strip()
+        if val and val[0] in "\"'":
+            quote = val[0]
+            end = val.find(quote, 1)
+            val = val[1:end] if end != -1 else val[1:]
+        else:
+            hash_idx = val.find(" #")
+            if hash_idx != -1:
+                val = val[:hash_idx].strip()
+        os.environ.setdefault(key.strip(), val)
 
 
 def _get(name: str, default: str = "") -> str:

@@ -107,9 +107,9 @@ class LongbridgeBroker(BrokerAdapter):
     def __init__(self, settings):
         from longport.openapi import Config, TradeContext  # type: ignore
         self.settings = settings
-        cfg = Config(app_key=os.environ["LONGPORT_APP_KEY"],
-                     app_secret=os.environ["LONGPORT_APP_SECRET"],
-                     access_token=os.environ["LONGPORT_ACCESS_TOKEN"])
+        cfg = Config.from_apikey(app_key=os.environ["LONGPORT_APP_KEY"],
+                                  app_secret=os.environ["LONGPORT_APP_SECRET"],
+                                  access_token=os.environ["LONGPORT_ACCESS_TOKEN"])
         self.ctx = TradeContext(cfg)
 
     def _symbol(self, asset: Asset) -> str:
