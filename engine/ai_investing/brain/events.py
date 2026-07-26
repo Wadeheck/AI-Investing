@@ -32,9 +32,16 @@ EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency"
 
 # Default per-source trust. Keyed by substring of the feed/source host or name.
 SOURCE_TRUST = {
+    # official / central banks: primary sources, near-total trust
+    "federalreserve": 0.95, "boj.or.jp": 0.95, "ecb.europa.eu": 0.95,
     "reuters": 0.95, "wsj": 0.9, "dowjones": 0.9, "dj.com": 0.9, "bloomberg": 0.9,
     "ft.com": 0.9, "bbc": 0.85, "cnbc": 0.75, "nikkei": 0.85, "scmp": 0.75,
-    "caixin": 0.8, "straitstimes": 0.8, "businesstimes": 0.8, "coindesk": 0.6,
+    "caixin": 0.8, "straitstimes": 0.8, "businesstimes": 0.8,
+    "japantimes": 0.8, "koreaherald": 0.75, "channelnewsasia": 0.8,
+    "economictimes": 0.65, "mining.com": 0.6,
+    # state media: useful policy signal, but reads like advocacy
+    "globaltimes": 0.45,
+    "coindesk": 0.6,
     "cointelegraph": 0.45, "reddit": 0.25, "twitter": 0.25, "x.com": 0.25,
     "substack": 0.35, "seekingalpha": 0.45, "zerohedge": 0.3, "benzinga": 0.45,
 }
@@ -92,7 +99,7 @@ def credibility(event: dict, all_headlines: list[dict]) -> float:
 
 
 def _prompt(headlines: list[dict], node_ids: list[str]) -> str:
-    lines = "\n".join(f"- [{h.get('source', '?')}] {h['title']}" for h in headlines[:60])
+    lines = "\n".join(f"- [{h.get('source', '?')}] {h['title']}" for h in headlines[:100])
     return f"""You are the macro brain of an automated trading system. Extract structured
 EVENTS from these headlines. Markets are full of engineered noise — planted stories,
 pumps, hype. Judge each event skeptically.

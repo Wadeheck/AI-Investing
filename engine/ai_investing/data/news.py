@@ -19,6 +19,7 @@ import re as _re
 import time
 import urllib.error
 import urllib.request
+from itertools import zip_longest
 from typing import Optional
 from xml.etree import ElementTree
 
@@ -221,7 +222,7 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     nothing; their last parsed items are replayed from the disk cache (the brain's
     article store dedupes them anyway, so nothing is re-digested)."""
     cache = _load_feed_cache(settings)
-    headlines: list[dict] = []
+    per_feed: list[list[dict]] = []
     dirty = False
     for feed in settings.news_rss:
         source = feed.split("//")[-1].split("/")[0].replace("www.", "")
@@ -250,9 +251,14 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
             items = entry.get("items") or []    # network blip — stale beats nothing
             if not items:
                 continue
-        headlines.extend(items)
+        per_feed.append(items)
     if dirty:
         _save_feed_cache(settings, cache)
+    # round-robin across feeds (each feed is newest-first) so downstream
+    # "top N" caps sample every source instead of whichever feed came first
+    headlines: list[dict] = []
+    for tier in zip_longest(*per_feed):
+        headlines.extend(h for h in tier if h)
     return headlines
 
 

@@ -213,12 +213,21 @@ class Settings:
         "https://feeds.marketwatch.com/marketwatch/topstories/",
         "https://www.theguardian.com/uk/business/rss",
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
-        # Asia: China / HK / Japan / SG
+        # Asia: China / HK / Japan / Korea / SG / India
         "https://www.scmp.com/rss/91/feed",
         "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6936",
-        # crypto + energy
+        "https://www.japantimes.co.jp/feed/",
+        "https://www.koreaherald.com/rss/newsAll",
+        "https://www.globaltimes.cn/rss/outbrain.xml",
+        "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+        # official / central banks
+        "https://www.federalreserve.gov/feeds/press_all.xml",
+        "https://www.boj.or.jp/en/rss/whatsnew.xml",
+        "https://www.ecb.europa.eu/rss/press.html",
+        # crypto + energy + commodities
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://oilprice.com/rss/main",
+        "https://www.mining.com/feed/",
     ]))
     db_path: str = field(default_factory=lambda: _get("DB_PATH", str(PROJECT_ROOT / "data" / "journal.db")))
     state_path: str = field(default_factory=lambda: _get("STATE_PATH", str(PROJECT_ROOT / "data" / "state.json")))
