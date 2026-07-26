@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 8
+SEED_VERSION = 9
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -156,6 +156,13 @@ SEED_NODES = [
     {"id": "crypto_regulation", "type": "factor", "label": "Crypto regulation (up = tightening)",
      "aliases": ["crypto crackdown", "stablecoin law", "etf approval", "sec crypto"],
      "equilibrium": "approvals (node DOWN) unlock flows; crackdowns choke liquidity"},
+    {"id": "crypto_adoption", "type": "factor", "label": "Crypto institutional adoption",
+     "aliases": ["corporate treasury bitcoin", "institutional crypto", "tokenization",
+                 "crypto etf inflows", "sovereign bitcoin reserve"],
+     "equilibrium": "one-way ratchet so far: each adoption wave (ETFs, treasuries, states) resets the floor"},
+    {"id": "btc_halving", "type": "factor", "label": "BTC halving / supply cycle",
+     "aliases": ["halving", "bitcoin supply", "miner capitulation"],
+     "equilibrium": "4-year supply schedule; the cycle narrative moves flows even when fundamentals don't"},
     {"id": "oil_supply", "type": "factor", "label": "Oil supply (up = more barrels)",
      "aliases": ["production increase", "shale output", "spare capacity", "oil glut"],
      "equilibrium": "OPEC discipline vs shale; gluts cap prices, outages spike them"},
@@ -293,6 +300,9 @@ SEED_NODES = [
     {"id": "arm", "type": "asset", "label": "Arm Holdings", "symbol": "ARM", "market": "US"},
     {"id": "berkshire", "type": "asset", "label": "Berkshire Hathaway", "symbol": "BRK-B",
      "market": "US", "aliases": ["warren buffett", "berkshire"]},
+    {"id": "coin", "type": "asset", "label": "Coinbase", "symbol": "COIN", "market": "US"},
+    {"id": "mstr", "type": "asset", "label": "Strategy (MicroStrategy)", "symbol": "MSTR",
+     "market": "US", "aliases": ["microstrategy", "saylor"]},
     # ---- hardware / supply-chain nodes ----
     {"id": "tsmc", "type": "asset", "label": "TSMC", "symbol": "TSM", "market": "US",
      "aliases": ["taiwan semiconductor", "2330.TW"]},
@@ -536,6 +546,31 @@ SEED_EDGES = [
      "note": "higher SG rates -> NIM tailwind"},
     {"src": "mas_policy", "dst": "sg_reits", "type": "influences", "sign": -1, "weight": 0.6},
     {"src": "crypto_liquidity", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.8},
+    # ---- how the world reaches crypto (seed v9) ----
+    {"src": "us_10y_yield", "dst": "crypto_liquidity", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "real yields are the opportunity cost of a zero-yield asset"},
+    {"src": "yen_carry", "dst": "crypto_liquidity", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "carry unwinds hit the most liquid 24/7 risk asset FIRST"},
+    {"src": "crypto_adoption", "dst": "crypto_liquidity", "type": "influences", "sign": 1, "weight": 0.6},
+    {"src": "crypto_adoption", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.4},
+    {"src": "crypto_regulation", "dst": "crypto_adoption", "type": "influences", "sign": -1, "weight": 0.5,
+     "note": "approvals (regulation node DOWN) unlock the institutional wave"},
+    {"src": "sanctions", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
+     "note": "capital flight / sanctions-evasion demand — crypto's gold-like bid"},
+    {"src": "us_inflation", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
+     "note": "debasement narrative recruits marginal buyers (weak but real)"},
+    {"src": "btc_halving", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.3,
+     "delay_days": 60, "note": "supply squeeze transmits slowly, narrative faster"},
+    {"src": "power_demand", "dst": "btc_halving", "type": "influences", "sign": -1, "weight": 0.2,
+     "note": "power costs squeeze miners post-halving (capitulation risk)"},
+    {"src": "crypto_liquidity", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.7,
+     "note": "exchange revenue IS volume x volatility"},
+    {"src": "crypto_regulation", "dst": "coin", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "the regulated on-ramp carries the direct policy risk"},
+    {"src": "mstr", "dst": "btc", "type": "owns", "weight": 0.9,
+     "note": "treasury is ~all BTC — trades as leveraged bitcoin"},
+    {"src": "coin", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "the equity beta to the asset class"},
     # ---- membership (asset -> theme; shocks flow theme -> members) ----
     {"src": "aapl", "dst": "us_megacap_tech", "type": "member_of", "weight": 0.8},
     {"src": "msft", "dst": "us_megacap_tech", "type": "member_of", "weight": 0.8},

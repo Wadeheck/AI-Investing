@@ -167,8 +167,9 @@ def test_centrality_ranks_systemic_nodes():
     g = KnowledgeGraph.seeded()
     c = g.centrality()
     assert max(c.values()) == 1.0
-    # macro hubs must outrank a leaf asset
-    assert c["us_inflation"] > c["cict"] and c["risk_appetite"] > c["moutai"]
+    # hubs (macro factors, supply-chain centers) must clearly outrank leaf assets
+    assert c["us_inflation"] > c["nongfu"] and c["nvda"] > c["nongfu"]
+    assert c["tsmc"] > c["cict"]
 
 
 def test_fragility_feeds_caution():
@@ -321,6 +322,29 @@ def test_raw_materials_and_gov_influence():
     i5, _, _ = g.propagate({"gold_price": 0.5})
     a5 = g.asset_impacts(i5)
     assert a5.get("GDX", {}).get("impact", 0) > a5.get("GLD", {}).get("impact", 0) * 0.4
+
+
+def test_crypto_wiring():
+    g = KnowledgeGraph.seeded()
+    # Fed easing reaches BTC through liquidity/risk channels (multi-hop, sign-correct)
+    i, _, _ = g.propagate({"fed_rate": -0.5}, max_hops=4)
+    assert g.asset_impacts(i).get("BTC/USD", {}).get("impact", 0) > 0
+    # BOJ tightening (carry unwind) hits crypto
+    i2, _, _ = g.propagate({"yen_carry": 0.5})
+    assert g.asset_impacts(i2).get("BTC/USD", {}).get("impact", 0) < 0
+    # regulation tightening chokes both the coins and the on-ramp equity
+    i3, _, _ = g.propagate({"crypto_regulation": 0.6})
+    a3 = g.asset_impacts(i3)
+    assert a3.get("BTC/USD", {}).get("impact", 0) < 0
+    assert a3.get("COIN", {}).get("impact", 0) < 0
+    # MSTR is leveraged bitcoin: a BTC move must drag it via the owns edge
+    i4, _, _ = g.propagate({"btc": -0.5})
+    assert g.asset_impacts(i4).get("MSTR", {}).get("impact", 0) < 0
+    # sanctions give crypto a small POSITIVE bid (capital flight) even as
+    # equities suffer via tension — distinctive-sign check
+    i5, _, _ = g.propagate({"sanctions": 0.6}, max_hops=4)
+    a5 = g.asset_impacts(i5)
+    assert a5.get("TSM", {}).get("impact", 0) < 0
 
 
 def test_chatbot_commands_offline():
