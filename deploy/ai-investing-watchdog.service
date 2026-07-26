@@ -5,4 +5,4 @@ Description=AI-Investing watchdog (dead-man's switch: alerts/flattens on a stale
 Type=oneshot
 User=@@USER@@
 WorkingDirectory=@@REPO@@/engine
-ExecStart=/usr/bin/python3 -m ai_investing.main --watchdog
+ExecStart=@@PYTHON@@ -m ai_investing.main --watchdog

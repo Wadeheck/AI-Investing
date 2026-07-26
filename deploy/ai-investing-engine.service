@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=@@USER@@
 WorkingDirectory=@@REPO@@/engine
-ExecStart=/usr/bin/python3 -m ai_investing.main
+ExecStart=@@PYTHON@@ -m ai_investing.main
 Restart=on-failure
 RestartSec=10
 # Config comes from @@REPO@@/.env (loaded by the engine itself) — nothing to set here.

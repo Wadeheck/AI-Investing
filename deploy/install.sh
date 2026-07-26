@@ -13,6 +13,13 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+if [ ! -x "$REPO/.venv/bin/python" ]; then
+  echo "No .venv found — run 'make setup' first (it creates the venv and installs" >&2
+  echo "engine/requirements.txt so live market data actually works under systemd)." >&2
+  exit 1
+fi
+PYTHON="$REPO/.venv/bin/python"
+
 # .env isn't valid shell (some values have unescaped spaces/parens), so pull
 # out just the two dashboard-auth vars by pattern instead of sourcing it.
 DASHBOARD_USER="$(sed -nE 's/^DASHBOARD_USER=(.*)$/\1/p' .env | tail -1)"
@@ -26,6 +33,7 @@ say "Installing systemd units for user '$RUN_AS', repo at $REPO"
 for unit in ai-investing-engine.service ai-investing-dashboard.service \
             ai-investing-watchdog.service ai-investing-watchdog.timer; do
   sed -e "s|@@REPO@@|$REPO|g" -e "s|@@USER@@|$RUN_AS|g" \
+      -e "s|@@PYTHON@@|$PYTHON|g" \
       -e "s|@@DASHBOARD_USER@@|$DASHBOARD_USER|g" \
       -e "s|@@DASHBOARD_PASSWORD@@|$DASHBOARD_PASSWORD|g" \
     "deploy/$unit" | sudo tee "/etc/systemd/system/$unit" >/dev/null
