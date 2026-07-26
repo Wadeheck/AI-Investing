@@ -152,7 +152,26 @@ Return ONLY JSON:
   ]}}"""
 
 
-def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
+def _web_support(settings) -> dict[str, float]:
+    """The web's current lean per symbol: propagated field impact + the node's
+    own activation (which now carries valuation anchors and price pulses)."""
+    try:
+        from ai_investing.brain import Brain
+        b = Brain(settings)
+        impacts = b.graph.asset_impacts(b.field.activations)
+        out: dict[str, float] = {}
+        for nid, n in b.graph.nodes.items():
+            sym = getattr(n, "symbol", None)
+            if sym:
+                out[sym] = round(impacts.get(sym, {}).get("impact", 0.0)
+                                 + b.field.activations.get(nid, 0.0), 3)
+        return out
+    except Exception:
+        return {}
+
+
+def challenge_strategy(settings, strat: dict, evidence: dict, llm=None,
+                       web: dict[str, float] | None = None) -> dict:
     """One daily challenge round. Stability is enforced HERE, not by the model."""
     today = _today_sgt()
     prev_theses = {t["id"]: t for t in strat.get("theses", [])}
@@ -188,6 +207,7 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
         return strat
 
     theses, changes = [], []
+    veto_notes: list[str] = []
     seen: set[str] = set()
     for p in proposed[: MAX_THESES + 2]:
         pid = str(p.get("id", ""))[:40] or f"t{len(theses)}"
@@ -210,6 +230,20 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
                  "assumptions": str(p.get("assumptions", ""))[:300],
                  "symbols": [s for s in (p.get("symbols") or []) if s in valid][:3],
                  "born": prev_theses.get(pid, {}).get("born", today)}
+            # THE WEB IS THE SOURCE OF TRUTH: a new/revised thesis may only
+            # name symbols the web doesn't currently lean AGAINST. Kept theses
+            # are not re-vetoed daily (that would let ripples whipsaw the
+            # strategy); their tension surfaces via the map-check instead.
+            if t["stance"] in ("long", "short") and t["symbols"]:
+                if web is None:
+                    web = _web_support(settings)
+                want = 1 if t["stance"] == "long" else -1
+                kept_syms = [s for s in t["symbols"]
+                             if web.get(s, 0.0) * want >= -0.08]
+                for s in set(t["symbols"]) - set(kept_syms):
+                    veto_notes.append(f"web vetoed {s} for '{t['title']}' "
+                                      f"(web leans {web.get(s, 0.0):+.2f} against)")
+                t["symbols"] = kept_syms
             if pid in prev_theses:
                 changes.append({"date": today, "id": pid, "kind": "revised",
                                 "reason": str(p.get("reason", ""))[:200]})
@@ -234,6 +268,8 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
     strat["challenge_note"] = (
         "; ".join(f"{c['kind']} '{c['id']}': {c['reason'] or 'no reason given'}" for c in changes)
         if changes else f"all {len(theses)} theses challenged and held")
+    if veto_notes:
+        strat["challenge_note"] += " · " + "; ".join(veto_notes[:4])
     if not strat.get("created"):
         strat["created"] = today
     return strat

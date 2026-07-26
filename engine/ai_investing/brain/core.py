@@ -37,7 +37,8 @@ class Brain:
         self.last_new_headlines: list[dict] = []   # set by think(); consumed by news.py
 
     # -- the per-cycle pass ---------------------------------------------------
-    def think(self, headlines: list[dict], macro: Optional[dict] = None) -> dict:
+    def think(self, headlines: list[dict], macro: Optional[dict] = None,
+              price_moves: Optional[dict] = None) -> dict:
         cfg = self.settings.brain
         now = datetime.now(timezone.utc)
 
@@ -59,10 +60,23 @@ class Brain:
             for node in ev.get("nodes", []):
                 impulses[node] = max(impulses.get(node, 0.0), ev["impulse"], key=abs)
 
+        # price action IS world state: once a day the market's own moves shock
+        # their asset nodes and ripple through the web like any other event —
+        # a supplier crashing perturbs its customers' nodes, not just its own.
+        for sym, ret in (price_moves or {}).items():
+            if abs(ret) < 0.01:
+                continue
+            node = self.graph.node_for_symbol(sym)
+            if node is None:
+                continue
+            pulse = max(-0.4, min(0.4, 3.0 * ret))
+            impulses[node.id] = max(impulses.get(node.id, 0.0), pulse, key=abs)
+
         # τ pipeline: yesterday's delayed effects that are due today re-enter as
         # impulses on their destination nodes and propagate onward from there.
         node_types = {nid: n.type for nid, n in self.graph.nodes.items()}
-        self.field.decay(now, node_types, anchors=self._anchors(macro))
+        self.field.decay(now, node_types,
+                         anchors={**self._anchors(macro), **self._valuation_anchors()})
         for node, contrib in self.field.mature_pending(now).items():
             impulses[node] = max(impulses.get(node, 0.0), contrib, key=abs)
 
@@ -188,6 +202,34 @@ class Brain:
         put("ecb_policy", m.get("eu_cpi_yoy"), 2.0, 2.5)         # hot HICP = hawkish ECB
         put("china_consumer", m.get("cn_cpi_yoy"), 1.5, 2.5)     # deflation = weak demand
         put("yen_carry", m.get("jp_cpi_yoy"), 2.0, 2.5)          # hot JP CPI = BOJ normalizes
+        return a
+
+    def _valuation_anchors(self) -> dict[str, float]:
+        """Fundamentals as resting levels for ASSET nodes — valuation lives IN
+        the web, not beside it. A stretched multiple is a standing downward
+        pull on that node (a bubble node 'wants' to fall); cheap-and-healthy
+        rests positive; heavy debt or negative margins drag. News and ripples
+        move the node around this resting level, exactly like macro anchors."""
+        data_dir = os.path.dirname(os.path.abspath(self.settings.state_path))
+        try:
+            with open(os.path.join(data_dir, "fundamentals.json")) as fh:
+                fund = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        from ai_investing.brain.bubble import _valuation_stretch
+        a: dict[str, float] = {}
+        for sym, f in fund.items():
+            node = self.graph.node_for_symbol(sym)
+            if node is None:
+                continue
+            v = -0.35 * _valuation_stretch(f)
+            pe, margin, de = f.get("trailingPE"), f.get("profitMargins"), f.get("debtToEquity")
+            if pe and 0 < pe < 12 and (margin or 0) > 0.05:
+                v += 0.2                       # cheap and actually profitable
+            if (de and de > 250) or (margin is not None and margin < 0):
+                v -= 0.15                      # balance-sheet / profitability stress
+            if abs(v) >= 0.05:
+                a[node.id] = round(max(-0.4, min(0.4, v)), 4)
         return a
 
     def _performance(self) -> dict:

@@ -63,6 +63,26 @@ class Scorecard:
             [(d, s, p) for s, p in prices_by_symbol.items() if p > 0])
         self.conn.commit()
 
+    def day_moves(self, prices_by_symbol: dict[str, float]) -> dict[str, float]:
+        """1-day % moves vs the last stored snapshot — the daily price pulse fed
+        into the web. Empty once today's snapshot exists (one pulse per day)."""
+        row = self.conn.execute("SELECT MAX(date) FROM price_history").fetchone()
+        last = row[0] if row else None
+        if not last or last >= _today_sgt():
+            return {}
+        out: dict[str, float] = {}
+        for sym, px in prices_by_symbol.items():
+            if px <= 0:
+                continue
+            prev = self.conn.execute(
+                "SELECT price FROM price_history WHERE symbol=? AND date=?",
+                (sym, last)).fetchone()
+            if prev and prev[0] > 0:
+                r = px / prev[0] - 1.0
+                if abs(r) >= 0.01:
+                    out[sym] = round(r, 4)
+        return out
+
     def _price_near(self, symbol: str, date: str, latest: bool = False) -> float | None:
         q = ("SELECT price FROM price_history WHERE symbol=? ORDER BY date DESC LIMIT 1"
              if latest else

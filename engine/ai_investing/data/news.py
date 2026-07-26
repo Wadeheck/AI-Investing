@@ -318,7 +318,7 @@ def _save_sentiment_cache(settings, cache: dict) -> None:
         pass
 
 
-def build_market_context(settings, assets) -> dict:
+def build_market_context(settings, assets, price_moves: Optional[dict] = None) -> dict:
     """Compute the per-cycle shared context: sentiment scores, hype flags, briefing.
 
     Cost design: the brain runs FIRST and dedupes headlines against brain.db, so
@@ -335,7 +335,8 @@ def build_market_context(settings, assets) -> dict:
             from ai_investing.brain import Brain
             from ai_investing.data import macro as macro_mod
             brain = Brain(settings)
-            ctx["brain"] = brain.think(headlines, macro=macro_mod.get_snapshot(settings))
+            ctx["brain"] = brain.think(headlines, macro=macro_mod.get_snapshot(settings),
+                                       price_moves=price_moves)
         except Exception as exc:   # the brain is additive; never take the engine down
             print(f"  [brain] skipped this cycle: {type(exc).__name__}: {exc}")
             brain = None

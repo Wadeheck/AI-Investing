@@ -140,8 +140,20 @@ class Runner:
 
         context: dict = {}
         if self.use_news:
+            # yesterday->today price moves pulse the web once a day (assets are
+            # nodes too: the market's own action is part of the world model)
+            price_moves: dict = {}
             try:
-                context = news_mod.build_market_context(self.settings, self.assets)
+                from ai_investing.brain.scorecard import Scorecard
+                _sc = Scorecard(self.settings)
+                price_moves = _sc.day_moves({a.symbol: prices.get(a.key, 0.0)
+                                             for a in self.assets})
+                _sc.close()
+            except Exception:
+                pass
+            try:
+                context = news_mod.build_market_context(self.settings, self.assets,
+                                                        price_moves)
             except Exception as exc:
                 self.journal.record_event("news_error", str(exc))
                 if self.settings.alerts.on_error:

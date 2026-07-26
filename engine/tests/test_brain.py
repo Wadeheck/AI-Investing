@@ -569,6 +569,57 @@ def test_bubble_indicator_flags_froth():
     assert "Bubble watch" in line and "AI/datacenter" in line
 
 
+def test_web_is_source_of_truth():
+    """Valuations anchor asset nodes, price moves pulse the web, and the
+    strategist cannot pick symbols the web leans against."""
+    import json
+    from ai_investing.brain import Brain
+    d = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(d, "state.json")
+    s = Settings()
+    # 1) a 150x-PE name gets a standing DOWNWARD resting level in the web
+    with open(os.path.join(d, "fundamentals.json"), "w") as fh:
+        json.dump({"NVDA": {"trailingPE": 150, "ts": 1},
+                   "KO": {"trailingPE": 10, "profitMargins": 0.22, "ts": 1}}, fh)
+    b = Brain(s)
+    anchors = b._valuation_anchors()
+    nvda_id = b.graph.node_for_symbol("NVDA").id
+    ko_id = b.graph.node_for_symbol("KO").id
+    assert anchors[nvda_id] < -0.1          # stretched -> wants to fall
+    assert anchors[ko_id] > 0.1             # cheap+profitable -> rests positive
+    # 2) a daily price crash pulses the asset node and ripples outward
+    out = b.think([], macro=None, price_moves={"NVDA": -0.08})
+    assert out["impulses"].get(nvda_id, 0) < -0.2
+    assert any(t["from"] == nvda_id for t in out.get("trace", []))   # it propagated
+    # 3) strategist: the web vetoes a long on a symbol the web leans against
+    from ai_investing.brain import strategist
+    draft = {"theses": [{"id": "x", "title": "X", "stance": "long", "verdict": "new",
+                         "thesis": "t", "assumptions": "a",
+                         "symbols": ["NVDA", "KO"]}]}
+    strat = strategist.load_strategy(s)
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: json.dumps(draft),
+                                          web={"NVDA": -0.5, "KO": 0.3})
+    assert strat["theses"][0]["symbols"] == ["KO"]
+    assert "web vetoed NVDA" in strat["challenge_note"]
+
+
+def test_day_moves_pulse_once_per_day():
+    from datetime import datetime, timedelta, timezone
+    d = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(d, "state.json")
+    from ai_investing.brain.scorecard import Scorecard
+    s = Settings()
+    sc = Scorecard(s)
+    yesterday = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=1)).date().isoformat()
+    sc.conn.execute("INSERT INTO price_history VALUES(?,?,?)", (yesterday, "NVDA", 100.0))
+    sc.conn.commit()
+    moves = sc.day_moves({"NVDA": 93.0, "KO": 50.0})
+    assert moves == {"NVDA": -0.07}          # KO has no prior snapshot -> no pulse
+    sc.snapshot_prices({"NVDA": 93.0})
+    assert sc.day_moves({"NVDA": 80.0}) == {}   # already pulsed today
+    sc.close()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):
