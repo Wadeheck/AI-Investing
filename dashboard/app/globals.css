@@ -165,7 +165,7 @@ input[type="range"] { accent-color: var(--series-1); width: 100%; }
 /* ---------- Brain page ---------- */
 .navlink { color: var(--series-1); text-decoration: none; font-size: 13px; }
 .navlink:hover { text-decoration: underline; }
-.brain-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; margin-bottom: 16px; }
+.brain-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; margin-bottom: 16px; align-items: start; }
 @media (max-width: 980px) { .brain-grid { grid-template-columns: 1fr; } }
 .rail { display: flex; flex-direction: column; gap: 16px; }
 .rail .card h3, .card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
@@ -212,9 +212,10 @@ input[type="range"] { accent-color: var(--series-1); width: 100%; }
 @media (max-width: 980px) { .wrap-wide .brain-grid { grid-template-columns: 1fr; } }
 
 /* ---------- interactive graph field ---------- */
-.card-field { padding: 10px; }
+.card-field { padding: 10px; display: flex; flex-direction: column; position: sticky; top: 12px; }
 .gf-wrap {
   position: relative;
+  flex: 1 1 auto;
   height: min(84vh, 1040px);
   min-height: 420px;
   border-radius: 10px;
