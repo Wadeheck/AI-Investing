@@ -459,6 +459,51 @@ def test_chatbot_commands_offline():
     assert ("what moved today?", "mostly the PBOC cut") in bot2.history
 
 
+def test_strategist_stability_contract():
+    import json
+    os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
+    from ai_investing.brain import strategist
+    s = Settings()
+    # bootstrap: model drafts the initial strategy
+    draft = {"market_outlook": "choppy but up",
+             "theses": [{"id": "ai-capex", "title": "AI buildout", "stance": "long",
+                         "verdict": "new", "thesis": "Data centers keep growing.",
+                         "assumptions": "This assumes capex holds."},
+                        {"id": "cn-banks", "title": "China banks", "stance": "short",
+                         "verdict": "new", "thesis": "Rate cuts squeeze margins.",
+                         "assumptions": "This assumes easing continues."}]}
+    strat = strategist.load_strategy(s)
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: json.dumps(draft))
+    assert len(strat["theses"]) == 2 and strat["revisions"] == []   # bootstrap ≠ changes
+    # day 2: model says "kept" but tries to reword — the old wording must survive
+    reworded = {"market_outlook": "same",
+                "theses": [{"id": "ai-capex", "verdict": "kept",
+                            "thesis": "REWORDED SNEAKILY", "title": "x"},
+                           {"id": "cn-banks", "verdict": "kept",
+                            "thesis": "ALSO REWORDED", "title": "y"}]}
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: json.dumps(reworded))
+    assert strat["theses"][0]["thesis"] == "Data centers keep growing."
+    assert strat["days_unchanged"] == 1 and strat["challenge_note"].startswith("all 2")
+    # day 3: a real revision is recorded with its reason
+    revised = {"theses": [{"id": "ai-capex", "verdict": "revised", "title": "AI buildout",
+                           "stance": "long", "thesis": "Capex slowing; trim exposure.",
+                           "assumptions": "This assumes slower orders.",
+                           "reason": "hyperscaler capex guidance cut 20%"},
+                          {"id": "cn-banks", "verdict": "kept"}]}
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: json.dumps(revised))
+    assert strat["theses"][0]["thesis"] == "Capex slowing; trim exposure."
+    assert strat["days_unchanged"] == 0
+    assert strat["revisions"][-1]["kind"] == "revised" and "capex" in strat["revisions"][-1]["reason"]
+    # model unreachable: strategy stands untouched
+    before = json.dumps(strat["theses"])
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: None)
+    assert json.dumps(strat["theses"]) == before and "stands" in strat["challenge_note"]
+    # a silently-omitted thesis is kept, never silently dropped
+    omitting = {"theses": [{"id": "ai-capex", "verdict": "kept"}]}
+    strat = strategist.challenge_strategy(s, strat, {}, llm=lambda p: json.dumps(omitting))
+    assert {t["id"] for t in strat["theses"]} == {"ai-capex", "cn-banks"}
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):

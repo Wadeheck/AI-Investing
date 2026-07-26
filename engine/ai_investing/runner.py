@@ -149,6 +149,16 @@ class Runner:
         if context.get("briefing"):
             print(f"[briefing] {context['briefing']}")
 
+        # Once a day (SGT): plain-language overview — strongest ripples, the
+        # standing 6-month strategy (challenged, not rewritten), then the ideas.
+        if context.get("brain"):
+            try:
+                from ai_investing.brain.strategist import maybe_daily_overview
+                maybe_daily_overview(self.settings, context["brain"],
+                                     context.get("briefing", ""), self.notifier)
+            except Exception as exc:
+                print(f"  [strategist] skipped: {type(exc).__name__}: {exc}")
+
         # Shadow "formula-only" portfolio — what the model would do ignoring your input.
         self._run_shadow(prices, context, bars_by_key, bad_data)
 
