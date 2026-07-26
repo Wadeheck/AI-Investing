@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 4
+SEED_VERSION = 5
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -195,7 +195,9 @@ SEED_NODES = [
     {"id": "healthcare", "type": "theme", "label": "Healthcare / pharma",
      "aliases": ["pharma", "drugmakers", "medical", "drug pricing"]},
     {"id": "food_beverage", "type": "theme", "label": "Food & beverage",
-     "aliases": ["packaged food", "beverages", "soft drinks", "restaurants"]},
+     "aliases": ["packaged food", "beverages", "soft drinks", "restaurants", "fast food"]},
+    {"id": "china_fnb", "type": "theme", "label": "China F&B / new consumer",
+     "aliases": ["bubble tea", "milk tea", "china restaurants", "china ipo", "new tea drinks"]},
     {"id": "us_financials", "type": "theme", "label": "US banks/financials",
      "aliases": ["us banks", "wall street banks", "regional banks"]},
     {"id": "defense_industry", "type": "theme", "label": "Defense industry",
@@ -238,6 +240,16 @@ SEED_NODES = [
      "aliases": ["coke", "coca cola"]},
     {"id": "nongfu", "type": "asset", "label": "Nongfu Spring", "symbol": "9633.HK", "market": "HK",
      "aliases": ["nongfu spring"]},
+    {"id": "mcd", "type": "asset", "label": "McDonald's", "symbol": "MCD", "market": "US",
+     "aliases": ["mcdonalds", "mcdonald's"]},
+    {"id": "sbux", "type": "asset", "label": "Starbucks", "symbol": "SBUX", "market": "US"},
+    {"id": "yumchina", "type": "asset", "label": "Yum China (KFC/Pizza Hut)", "symbol": "9987.HK",
+     "market": "HK", "aliases": ["yum china", "kfc china"]},
+    {"id": "mixue", "type": "asset", "label": "Mixue (bubble tea)", "symbol": "2097.HK",
+     "market": "HK", "aliases": ["mixue bingcheng"]},
+    {"id": "haidilao", "type": "asset", "label": "Haidilao hotpot", "symbol": "6862.HK", "market": "HK"},
+    {"id": "popmart", "type": "asset", "label": "Pop Mart", "symbol": "9992.HK", "market": "HK",
+     "aliases": ["pop mart", "labubu"]},
     # ------------- assets: HK / China -------------
     {"id": "tencent", "type": "asset", "label": "Tencent", "symbol": "0700.HK", "market": "HK",
      "aliases": ["700.HK", "wechat"]},
@@ -502,6 +514,19 @@ SEED_EDGES = [
     {"src": "jnj", "dst": "healthcare", "type": "member_of", "weight": 0.9},
     {"src": "ko", "dst": "food_beverage", "type": "member_of", "weight": 0.9},
     {"src": "nongfu", "dst": "food_beverage", "type": "member_of", "weight": 0.9},
+    {"src": "mcd", "dst": "food_beverage", "type": "member_of", "weight": 0.9},
+    {"src": "sbux", "dst": "food_beverage", "type": "member_of", "weight": 0.8},
+    {"src": "china_consumer", "dst": "china_fnb", "type": "influences", "sign": 1, "weight": 0.7,
+     "note": "mass-market spending is the whole story for tea/hotpot/toys"},
+    {"src": "yumchina", "dst": "china_fnb", "type": "member_of", "weight": 0.9},
+    {"src": "mixue", "dst": "china_fnb", "type": "member_of", "weight": 0.9},
+    {"src": "haidilao", "dst": "china_fnb", "type": "member_of", "weight": 0.9},
+    {"src": "popmart", "dst": "china_fnb", "type": "member_of", "weight": 0.8},
+    {"src": "nongfu", "dst": "china_fnb", "type": "member_of", "weight": 0.6},
+    {"src": "sbux", "dst": "china_fnb", "type": "member_of", "weight": 0.3,
+     "note": "meaningful China store base"},
+    {"src": "agri_food", "dst": "china_fnb", "type": "influences", "sign": -1, "weight": 0.3,
+     "note": "food input costs squeeze restaurant margins"},
     {"src": "xlf", "dst": "us_financials", "type": "member_of", "weight": 0.9},
     {"src": "ita", "dst": "defense_industry", "type": "member_of", "weight": 0.9},
     {"src": "tlt", "dst": "us_10y_yield", "type": "correlates_with", "sign": -1, "weight": 0.9,

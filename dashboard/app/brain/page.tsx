@@ -90,7 +90,7 @@ function useForceLayout(graph: Graph | null, w: number, h: number) {
           let dx = a.x - b.x, dy = a.y - b.y;
           let d2 = dx * dx + dy * dy;
           if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-          const f = 1800 / d2;
+          const f = 7000 / d2;
           const d = Math.sqrt(d2);
           a.vx += (dx / d) * f; a.vy += (dy / d) * f;
           b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
@@ -101,7 +101,7 @@ function useForceLayout(graph: Graph | null, w: number, h: number) {
         const a = cur[e.src], b = cur[e.dst];
         const dx = b.x - a.x, dy = b.y - a.y;
         const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const f = 0.008 * (d - 95) * (e.weight ?? 0.5);
+        const f = 0.008 * (d - 170) * (e.weight ?? 0.5);
         a.vx += (dx / d) * f * d * 0.02; a.vy += (dy / d) * f * d * 0.02;
         b.vx -= (dx / d) * f * d * 0.02; b.vy -= (dy / d) * f * d * 0.02;
       }
@@ -110,8 +110,8 @@ function useForceLayout(graph: Graph | null, w: number, h: number) {
         const q = cur[k];
         q.vx += (w / 2 - q.x) * 0.004; q.vy += (h / 2 - q.y) * 0.004;
         q.vx *= 0.82; q.vy *= 0.82;
-        q.x = Math.max(18, Math.min(w - 18, q.x + q.vx));
-        q.y = Math.max(14, Math.min(h - 14, q.y + q.vy));
+        q.x = Math.max(40, Math.min(w - 40, q.x + q.vx));
+        q.y = Math.max(30, Math.min(h - 30, q.y + q.vy));
       }
       tick++;
       setPos({ ...cur });
@@ -155,9 +155,38 @@ export default function BrainPage() {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [visibleHop, setVisibleHop] = useState(99);
+  // zoom & pan: k = scale, (tx, ty) = translation in view units
+  const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const W = 860, H = 620;
+  const W = 1700, H = 1050;
   const pos = useForceLayout(graph, W, H);
+
+  const onWheel = (e: React.WheelEvent) => {
+    const factor = Math.exp(-e.deltaY * 0.0012);
+    setView((v) => {
+      const k = Math.min(5, Math.max(0.5, v.k * factor));
+      if (!svgRef.current) return { ...v, k };
+      // zoom toward the cursor
+      const rect = svgRef.current.getBoundingClientRect();
+      const mx = ((e.clientX - rect.left) / rect.width) * W;
+      const my = ((e.clientY - rect.top) / rect.height) * H;
+      const wx = (mx - v.tx) / v.k, wy = (my - v.ty) / v.k;
+      return { k, tx: mx - wx * k, ty: my - wy * k };
+    });
+  };
+  const onMouseDown = (e: React.MouseEvent) => {
+    dragRef.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    const d = dragRef.current;
+    if (!d || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const sx = W / rect.width, sy = H / rect.height;
+    setView((v) => ({ ...v, tx: d.tx + (e.clientX - d.x) * sx, ty: d.ty + (e.clientY - d.y) * sy }));
+  };
+  const endDrag = () => { dragRef.current = null; };
 
   const load = useCallback(async () => {
     try {
@@ -240,7 +269,7 @@ export default function BrainPage() {
     : [];
 
   return (
-    <div className="wrap">
+    <div className="wrap wrap-wide">
       <header className="top">
         <h1>The Brain</h1>
         <span className="sub">macro field · relationships · signal vs noise · emotions</span>
@@ -270,7 +299,18 @@ export default function BrainPage() {
       <div className="brain-grid">
         {/* ---------- the field ---------- */}
         <div className="card">
-          <svg viewBox={`0 0 ${W} ${H}`} className="field">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${W} ${H}`}
+            className="field"
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={endDrag}
+            onMouseLeave={endDrag}
+            style={{ cursor: dragRef.current ? "grabbing" : "grab" }}
+          >
+            <g transform={`translate(${view.tx},${view.ty}) scale(${view.k})`}>
             {graph?.edges.map((e, i) => {
               const a = pos[e.src], b = pos[e.dst];
               if (!a || !b) return null;
@@ -310,19 +350,27 @@ export default function BrainPage() {
                     strokeWidth={selected === n.id ? 2.5 : mag > 0.02 ? 2 : 1}
                     opacity={0.92}
                   />
-                  <text x={p.x} y={p.y - baseR - 4} textAnchor="middle" className="nlabel">
-                    {n.label}{mag > 0.02 ? ` ${imp > 0 ? "+" : ""}${imp.toFixed(2)}` : ""}
-                  </text>
+                  {(n.type !== "asset" || mag > 0.02 || selected === n.id || view.k > 1.6) && (
+                    <text x={p.x} y={p.y - baseR - 5} textAnchor="middle" className="nlabel">
+                      {n.label}{mag > 0.02 ? ` ${imp > 0 ? "+" : ""}${imp.toFixed(2)}` : ""}
+                    </text>
+                  )}
                 </g>
               );
             })}
+            </g>
           </svg>
           <div className="legend">
             {Object.entries(TYPE_COLOR).filter(([t]) => t !== "sector").map(([t, c]) => (
               <span key={t}><i style={{ background: c }} />{t}</span>
             ))}
             <span><i className="dash" />LLM-proposed edge</span>
-            <span className="sub">click a node for its wiring &amp; stable point</span>
+            <span className="sub">scroll to zoom · drag to pan · click a node for its wiring &amp; stable point</span>
+            {view.k !== 1 && (
+              <button className="resetview" onClick={() => setView({ k: 1, tx: 0, ty: 0 })}>
+                reset view
+              </button>
+            )}
           </div>
           {selNode && (
             <div className="nodecard">
