@@ -67,8 +67,9 @@ class ProposalBook:
         return None
 
     def propose(self, symbol: str, side: str, qty: float, price: float,
-                reason: str = "") -> dict:
-        """File a pending proposal (idempotent per symbol+side while fresh)."""
+                reason: str = "", extra: dict | None = None) -> dict:
+        """File a pending proposal (idempotent per symbol+side while fresh).
+        `extra` carries the plain-language explanation shown to the human."""
         existing = self.get(symbol, side)
         if existing:
             return existing
@@ -76,7 +77,7 @@ class ProposalBook:
         p = {"id": self._pid(symbol, side, ts), "symbol": symbol, "side": side,
              "qty": round(qty, 6), "price": round(price, 4), "reason": reason[:300],
              "ts": ts, "expires": (_now() + timedelta(hours=self.ttl_hours)).isoformat(),
-             "status": "pending"}
+             "status": "pending", **(extra or {})}
         proposals = self._load()
         proposals.append(p)
         self._save(proposals)

@@ -336,19 +336,35 @@ class Runner:
             elif p:                            # pending or rejected: wait, don't nag
                 continue
             else:
-                asked.append(book.propose(sym, o.side.value, o.qty,
-                                          prices.get(o.asset.key, 0.0), o.reason))
+                price = prices.get(o.asset.key, 0.0)
+                # ATR-scaled stop/take, same math the risk layer will apply
+                ms = (self._stats or {}).get(o.asset.key)
+                stop_pct, take_pct = self.settings.risk.per_trade_stop_loss, self.settings.risk.take_profit
+                if self.settings.risk.use_atr_stops and ms is not None and ms.atr > 0 and price > 0:
+                    stop_pct = self.settings.risk.atr_stop_mult * ms.atr / price
+                    take_pct = self.settings.risk.atr_take_mult * ms.atr / price
+                from ai_investing.execution.explain import explain_entry
+                equity = self.broker.portfolio().equity(prices)
+                extra = explain_entry(self.settings, sym, o.side.value, o.qty, price,
+                                      o.reason, equity, stop_pct, take_pct)
+                asked.append(book.propose(sym, o.side.value, o.qty, price, o.reason, extra))
         if asked:
-            lines = ["🕹 *Approval needed* — I want to open these (paper), you decide:"]
+            lines = ["🕹 *Approval needed* — with pretend money, and only if you agree:"]
             buttons = []
             for p in asked:
-                lines.append(f"• *{p['side'].upper()} {p['symbol']}* ~{p['qty']:g} @ ${p['price']:,.2f}\n"
-                             f"   _{p['reason'] or 'formula conviction'}_")
-                buttons.append([(f"✅ {p['side']} {p['symbol']}", f"ap:{p['id']}"),
-                                (f"❌ skip", f"rj:{p['id']}"),
-                                (f"🚫 never", f"b:{p['symbol']}")])
-            lines.append(f"_No answer = expires in {self.settings.approval_ttl_hours:g}h. "
-                         "Exits and safety never wait for approval._")
+                verb = "Buy" if p["side"] == "buy" else "Bet against"
+                lines.append(
+                    f"\n*{verb} {p.get('label', p['symbol'])}* ({p['symbol']}"
+                    f"{', ' + p['market'] if p.get('market') else ''}) — "
+                    f"about *${p.get('notional', 0):,.0f}* ({p.get('pct', 0):.1%} of the pot)\n"
+                    f"💡 *Why:* {p.get('why', p['reason'])}\n"
+                    f"🤔 *This assumes:* {p.get('assumptions', 'the current picture holds')}\n"
+                    f"🗺 *The plan:* {p.get('plan', 'hold while the reasons hold; automatic safety stop')}")
+                buttons.append([(f"✅ yes, {verb.lower()} {p['symbol']}", f"ap:{p['id']}"),
+                                ("❌ skip", f"rj:{p['id']}"),
+                                ("🚫 never", f"b:{p['symbol']}")])
+            lines.append(f"\n_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
+                         "Selling to protect you never waits for approval._")
             sent = self.notifier.send("\n".join(lines), buttons)
             if not sent:
                 print("  !! TRADE_APPROVAL is on but Telegram is not configured — "

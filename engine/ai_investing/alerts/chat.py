@@ -215,12 +215,17 @@ class ChatBot:
         pend = self._book().pending()
         if not pend:
             return "Nothing waiting on you — no pending entry proposals.", self.MENU
-        lines = ["⏳ *Waiting for your call:*"]
+        lines = ["⏳ *Waiting for your call* (pretend money):"]
         buttons = []
         for p in pend:
-            lines.append(f"• *{p['side'].upper()} {p['symbol']}* ~{p['qty']:g} @ ${p['price']:,.2f}\n"
-                         f"   _{p['reason'] or 'formula conviction'}_ · expires {p['expires'][:16]}Z")
-            buttons.append([(f"✅ {p['side']} {p['symbol']}", f"ap:{p['id']}"),
+            verb = "Buy" if p["side"] == "buy" else "Bet against"
+            lines.append(
+                f"\n*{verb} {p.get('label', p['symbol'])}* ({p['symbol']}) — "
+                f"about ${p.get('notional', abs(p['qty']) * p['price']):,.0f}\n"
+                f"💡 {p.get('why', p['reason'] or 'engine conviction')}\n"
+                f"🗺 {p.get('plan', 'hold while the reasons hold; automatic safety stop')}\n"
+                f"_expires {p['expires'][:16]}Z_")
+            buttons.append([(f"✅ yes, {verb.lower()} {p['symbol']}", f"ap:{p['id']}"),
                             ("❌ skip", f"rj:{p['id']}")])
         return "\n".join(lines), buttons
 
