@@ -28,17 +28,26 @@ if [ ! -f data/state.json ]; then
   ( cd engine && "$PY" -m ai_investing.main --once --no-news >/dev/null 2>&1 ) || true
 fi
 
-say "Starting engine loop + dashboard  —  Ctrl-C stops both"
+say "Starting engine loop + dashboard  —  Ctrl-C stops everything"
 ( cd engine && exec "$PY" -m ai_investing.main ) &
 ENGINE=$!
 ( cd dashboard && exec npm run dev ) &
 DASH=$!
+
+# Telegram chat bot (answers your taps/questions) — only if the bot is configured.
+CHAT=""
+if grep -qE '^TELEGRAM_BOT_TOKEN=.+' .env 2>/dev/null && grep -qE '^TELEGRAM_CHAT_ID=.+' .env 2>/dev/null; then
+  say "Starting Telegram chat bot (approve/skip buttons + questions)"
+  ( cd engine && exec "$PY" -m ai_investing.main --chat ) &
+  CHAT=$!
+fi
 
 cleanup() {
   echo
   say "Stopping…"
   kill -INT "$ENGINE" 2>/dev/null || true
   kill "$DASH" 2>/dev/null || true
+  [ -n "$CHAT" ] && kill "$CHAT" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
 
