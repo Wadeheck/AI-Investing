@@ -80,6 +80,56 @@ def test_proposal_book_lifecycle():
     assert expired.get("AAPL", "buy") is None
 
 
+def test_investor_book_lifecycle():
+    import json, os, tempfile
+    tmp = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
+    os.environ["PROPOSALS_PATH"] = os.path.join(tmp, "proposals.json")
+    from ai_investing.config import Settings
+    from ai_investing.execution.approvals import ProposalBook
+    from ai_investing.strategy.investor import Investor
+    s = Settings()
+
+    sent = []
+    class N:
+        enabled = True
+        def send(self, text, buttons=None):
+            sent.append((text, buttons)); return True
+
+    strat = {"theses": [
+        {"id": "ai", "title": "AI buildout", "stance": "long", "symbols": ["NVDA"],
+         "thesis": "Data centers grow.", "assumptions": "This assumes capex holds."},
+        {"id": "ev-bubble", "title": "EV overvalued", "stance": "short", "symbols": ["TSLA"],
+         "thesis": "Priced for perfection.", "assumptions": "This assumes growth slows."}]}
+    prices = {"NVDA": 100.0, "TSLA": 200.0}
+
+    inv = Investor(s)
+    inv.daily_manage(prices, strat, N())
+    # one proposal message per stock, nothing executed yet
+    assert len(sent) == 2 and all("approval needed" in t for t, _ in sent)
+    assert not inv.broker.get_positions()
+
+    # user approves both; next day they execute (long NVDA, short TSLA)
+    book = ProposalBook(s.proposals_path, 48)
+    for p in book.pending():
+        book.decide(p["id"], True)
+    inv._state["last_managed"] = ""
+    inv.daily_manage(prices, strat, N())
+    pos = {p.asset.symbol: p.qty for p in inv.broker.get_positions().values()}
+    assert pos["NVDA"] > 0 and pos["TSLA"] < 0
+
+    # thesis dropped -> automatic exit with a report; stop trips too
+    inv2 = Investor(s)                       # reload from disk
+    inv2._state["last_managed"] = ""
+    sent.clear()
+    inv2.daily_manage({"NVDA": 60.0, "TSLA": 200.0},   # NVDA -40% = stop; TSLA thesis gone
+                      {"theses": [strat["theses"][0]]}, N())
+    syms = {p.asset.symbol for p in inv2.broker.get_positions().values() if abs(p.qty) > 1e-9}
+    assert "TSLA" not in syms                # thesis died -> closed
+    assert "NVDA" not in syms                # wide stop -> closed
+    assert any("closed" in t for t, _ in sent)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

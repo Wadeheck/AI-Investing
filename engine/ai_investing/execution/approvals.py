@@ -59,18 +59,20 @@ class ProposalBook:
     def prune(self) -> None:
         self._save([p for p in self._load() if self._fresh(p)])
 
-    def get(self, symbol: str, side: str) -> dict | None:
-        """Latest unexpired proposal for this symbol+side, if any."""
+    def get(self, symbol: str, side: str, horizon: str = "short") -> dict | None:
+        """Latest unexpired proposal for this symbol+side in one book
+        ('short' = trading book, 'long' = investing book)."""
         for p in reversed(self._load()):
-            if p["symbol"] == symbol and p["side"] == side and self._fresh(p):
+            if (p["symbol"] == symbol and p["side"] == side
+                    and p.get("horizon", "short") == horizon and self._fresh(p)):
                 return p
         return None
 
     def propose(self, symbol: str, side: str, qty: float, price: float,
                 reason: str = "", extra: dict | None = None) -> dict:
-        """File a pending proposal (idempotent per symbol+side while fresh).
+        """File a pending proposal (idempotent per symbol+side+book while fresh).
         `extra` carries the plain-language explanation shown to the human."""
-        existing = self.get(symbol, side)
+        existing = self.get(symbol, side, (extra or {}).get("horizon", "short"))
         if existing:
             return existing
         ts = _now().isoformat()

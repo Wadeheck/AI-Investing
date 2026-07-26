@@ -219,8 +219,9 @@ class ChatBot:
         buttons = []
         for p in pend:
             verb = "Buy" if p["side"] == "buy" else "Bet against"
+            tag = "🏛 investing" if p.get("horizon") == "long" else "⚡ trading"
             lines.append(
-                f"\n*{verb} {p.get('label', p['symbol'])}* ({p['symbol']}) — "
+                f"\n{tag} · *{verb} {p.get('label', p['symbol'])}* ({p['symbol']}) — "
                 f"about ${p.get('notional', abs(p['qty']) * p['price']):,.0f}\n"
                 f"💡 {p.get('why', p['reason'] or 'engine conviction')}\n"
                 f"🗺 {p.get('plan', 'hold while the reasons hold; automatic safety stop')}\n"
@@ -269,8 +270,8 @@ class ChatBot:
     def _fmt_portfolio(self) -> str:
         s = self._read("state.json")
         comp = s.get("comparison") or {}
-        lines = [f"💼 equity *${s.get('equity', 0):,.0f}*  cash ${s.get('cash', 0):,.0f}  "
-                 f"({s.get('mode', '?')} mode)"]
+        lines = [f"⚡ *Trading book* — equity *${s.get('equity', 0):,.0f}*  "
+                 f"cash ${s.get('cash', 0):,.0f}  ({s.get('mode', '?')} mode)"]
         for p in s.get("positions", [])[:15]:
             lines.append(f"  {p['symbol']}: {p['qty']:+.4f} @ ${p['avg_price']:,.2f} "
                          f"→ pnl ${p['pnl']:,.0f}")
@@ -278,6 +279,14 @@ class ChatBot:
             lines.append("  (no open positions)")
         if comp:
             lines.append(f"you vs formula-only: ${comp.get('input_value', 0):+,.0f}")
+        inv = self._read("invest_state.json").get("broker") or {}
+        if inv:
+            lines.append(f"\n🏛 *Investing book* — cash ${inv.get('cash', 0):,.0f}")
+            for p in inv.get("positions", [])[:15]:
+                direction = "long" if p["qty"] > 0 else "short"
+                lines.append(f"  {p['symbol']}: {direction} {abs(p['qty']):.4f} @ ${p['avg_price']:,.2f}")
+            if not inv.get("positions"):
+                lines.append("  (no positions yet — theses awaiting your approval)")
         return "\n".join(lines)
 
     def _fmt_news(self) -> str:

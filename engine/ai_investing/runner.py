@@ -158,6 +158,16 @@ class Runner:
                                      context.get("briefing", ""), self.notifier)
             except Exception as exc:
                 print(f"  [strategist] skipped: {type(exc).__name__}: {exc}")
+            # the 🏛 investing book: express the 6-month theses (daily, gated inside)
+            try:
+                from ai_investing.brain.strategist import load_strategy, _labels
+                from ai_investing.strategy.investor import Investor
+                px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+                Investor(self.settings).daily_manage(
+                    px_by_sym, load_strategy(self.settings), self.notifier,
+                    _labels(self.settings))
+            except Exception as exc:
+                print(f"  [investor] skipped: {type(exc).__name__}: {exc}")
 
         # Shadow "formula-only" portfolio — what the model would do ignoring your input.
         self._run_shadow(prices, context, bars_by_key, bad_data)
@@ -357,25 +367,26 @@ class Runner:
                 equity = self.broker.portfolio().equity(prices)
                 extra = explain_entry(self.settings, sym, o.side.value, o.qty, price,
                                       o.reason, equity, stop_pct, take_pct)
+                extra["horizon"] = "short"
                 asked.append(book.propose(sym, o.side.value, o.qty, price, o.reason, extra))
         if asked:
-            lines = ["🕹 *Approval needed* — with pretend money, and only if you agree:"]
-            buttons = []
-            for p in asked:
+            sent = True
+            for p in asked:      # one message per stock — easy to answer one by one
                 verb = "Buy" if p["side"] == "buy" else "Bet against"
-                lines.append(
-                    f"\n*{verb} {p.get('label', p['symbol'])}* ({p['symbol']}"
+                text = (
+                    f"⚡ *Trading book — approval needed* (pretend money)\n\n"
+                    f"*{verb}: {p.get('label', p['symbol'])}* ({p['symbol']}"
                     f"{', ' + p['market'] if p.get('market') else ''}) — "
-                    f"about *${p.get('notional', 0):,.0f}* ({p.get('pct', 0):.1%} of the pot)\n"
+                    f"about *${p.get('notional', 0):,.0f}* ({p.get('pct', 0):.1%} of the trading pot)\n"
                     f"💡 *Why:* {p.get('why', p['reason'])}\n"
                     f"🤔 *This assumes:* {p.get('assumptions', 'the current picture holds')}\n"
-                    f"🗺 *The plan:* {p.get('plan', 'hold while the reasons hold; automatic safety stop')}")
-                buttons.append([(f"✅ yes, {verb.lower()} {p['symbol']}", f"ap:{p['id']}"),
-                                ("❌ skip", f"rj:{p['id']}"),
-                                ("🚫 never", f"b:{p['symbol']}")])
-            lines.append(f"\n_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
-                         "Selling to protect you never waits for approval._")
-            sent = self.notifier.send("\n".join(lines), buttons)
+                    f"🗺 *The plan:* {p.get('plan', 'hold while the reasons hold; automatic safety stop')}\n"
+                    f"_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
+                    f"Selling to protect you never waits for approval._")
+                buttons = [[(f"✅ yes, {verb.lower()} {p['symbol']}", f"ap:{p['id']}"),
+                            ("❌ skip", f"rj:{p['id']}"),
+                            ("🚫 never", f"b:{p['symbol']}")]]
+                sent = self.notifier.send(text, buttons) and sent
             if not sent:
                 print("  !! TRADE_APPROVAL is on but Telegram is not configured — "
                       f"{len(asked)} entries will wait unheard (set the bot up or unset TRADE_APPROVAL)")

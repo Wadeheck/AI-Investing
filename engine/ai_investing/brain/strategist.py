@@ -130,6 +130,9 @@ STANDING STRATEGY (age: {age} days, unchanged for {streak} days):
 TODAY'S EVIDENCE:
 {evidence}
 
+TRADABLE SYMBOLS (pick thesis symbols ONLY from these):
+{universe}
+
 Return ONLY JSON:
 {{"market_outlook": "2-3 plain sentences on the next 6 months",
   "theses": [
@@ -139,7 +142,8 @@ Return ONLY JSON:
       "verdict": "kept|revised|new|dropped",
       "reason": "required unless kept: the FUNDAMENTAL evidence forcing the change",
       "thesis": "2-3 sentences: the idea and what grounds it",
-      "assumptions": "1-2 sentences starting 'This assumes'"}}
+      "assumptions": "1-2 sentences starting 'This assumes'",
+      "symbols": ["1-3 tickers that best express this thesis"]}}
   ]}}"""
 
 
@@ -158,11 +162,15 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
                 return None
             return _call_llm(prompt, settings, max_tokens=1800, tier="smart", json_mode=True)
 
-    prev_view = [{k: t.get(k) for k in ("id", "title", "stance", "thesis", "assumptions")}
+    prev_view = [{k: t.get(k) for k in ("id", "title", "stance", "thesis", "assumptions", "symbols")}
                  for t in strat.get("theses", [])] or "none yet — draft the initial strategy"
+    labels = _labels(settings)
+    universe = ", ".join(f"{s} ({labels.get(s, s)})"
+                         for s in settings.stock_watchlist + settings.crypto_watchlist)
     out = llm(_PROMPT.format(max_theses=MAX_THESES, age=age, streak=streak,
                              prev=json.dumps(prev_view, indent=1),
-                             evidence=json.dumps(evidence, indent=1)))
+                             evidence=json.dumps(evidence, indent=1),
+                             universe=universe))
     if not out:
         strat["challenge_note"] = "challenge skipped — model unreachable; strategy stands"
         return strat
@@ -190,10 +198,12 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None) -> dict:
             # KEPT: previous wording survives verbatim — no silent rewrites
             t = dict(prev_theses[pid])
         else:
+            valid = set(settings.stock_watchlist) | set(settings.crypto_watchlist)
             t = {"id": pid, "title": str(p.get("title", pid))[:80],
                  "stance": p.get("stance", "long"),
                  "thesis": str(p.get("thesis", ""))[:500],
                  "assumptions": str(p.get("assumptions", ""))[:300],
+                 "symbols": [s for s in (p.get("symbols") or []) if s in valid][:3],
                  "born": prev_theses.get(pid, {}).get("born", today)}
             if pid in prev_theses:
                 changes.append({"date": today, "id": pid, "kind": "revised",
@@ -246,7 +256,8 @@ def compose_overview(strat: dict, evidence: dict, briefing: str) -> str:
     if strat.get("market_outlook"):
         lines.append(f"_{strat['market_outlook']}_")
     for i, t in enumerate(strat.get("theses", []), 1):
-        lines.append(f"\n*{i}. {_STANCE.get(t.get('stance'), t.get('stance'))} — {t.get('title')}*\n"
+        syms = f" [{', '.join(t['symbols'])}]" if t.get("symbols") else ""
+        lines.append(f"\n*{i}. {_STANCE.get(t.get('stance'), t.get('stance'))} — {t.get('title')}*{syms}\n"
                      f"{t.get('thesis')}\n"
                      f"🤔 {t.get('assumptions')}")
     lines.append(f"\n⚖️ *Today's challenge:* {strat.get('challenge_note', '')}")
