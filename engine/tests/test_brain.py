@@ -252,6 +252,29 @@ def test_ownership_follows_the_money():
     assert "temasek" in i4 and "TEMASEK" not in g.asset_impacts(i4)
 
 
+def test_supply_chains_move_the_cluster():
+    g = KnowledgeGraph.seeded()
+    # An Nvidia demand shock must ripple UP its supply chain (both-ways flow)
+    i, _, _ = g.propagate({"nvda": -0.5})
+    a = g.asset_impacts(i)
+    for sym in ("TSM", "000660.KS", "MU"):
+        assert a.get(sym, {}).get("impact", 0) < 0, f"{sym} should feel an NVDA shock"
+    # A TSMC disruption must hit its customers
+    i2, _, _ = g.propagate({"tsmc": -0.5})
+    a2 = g.asset_impacts(i2)
+    assert a2.get("NVDA", {}).get("impact", 0) < 0 and a2.get("AAPL", {}).get("impact", 0) < 0
+    # Taiwan tension discounts TSMC/Foxconn; cyber names BENEFIT from tension
+    i3, _, _ = g.propagate({"geopolitical_tension": 0.6})
+    a3 = g.asset_impacts(i3)
+    assert a3.get("TSM", {}).get("impact", 0) < 0
+    assert a3.get("CRWD", {}).get("impact", 0) > 0
+    # Lithium price up: miner Ganfeng gains while battery/EV side suffers
+    i4, _, _ = g.propagate({"lithium_price": 0.6})
+    a4 = g.asset_impacts(i4)
+    assert a4.get("1772.HK", {}).get("impact", 0) > 0
+    assert a4.get("300750.SZ", {}).get("impact", 0) < 0
+
+
 def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
