@@ -24,6 +24,7 @@ _DEFAULT_WEIGHTS = {
     "mean_reversion": 0.015,
     "sentiment": 0.020,
     "political_hype": 0.030,
+    "macro_linkage": 0.015,
     "consensus": 0.010,
     "mom_lowvol": 0.008,
 }

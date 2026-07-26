@@ -112,6 +112,8 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
                 root = ElementTree.fromstring(resp.read())
         except Exception:
             continue
+        # feed host is the source tag the brain's credibility scorer keys off
+        source = feed.split("//")[-1].split("/")[0]
         taken = 0
         for item in root.iter("item"):
             title = (item.findtext("title") or "").strip()
@@ -121,6 +123,7 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
                 "title": title,
                 "summary": (item.findtext("description") or "").strip()[:300],
                 "published": (item.findtext("pubDate") or "").strip(),
+                "source": source,
             })
             taken += 1
             if taken >= limit_per_feed:
@@ -183,6 +186,14 @@ def build_market_context(settings, assets) -> dict:
 
     if settings.altdata.enabled:
         _merge_altdata(settings, assets, ctx)
+
+    if settings.brain.enabled:
+        try:
+            from ai_investing.brain import Brain
+            from ai_investing.data import macro as macro_mod
+            ctx["brain"] = Brain(settings).think(headlines, macro=macro_mod.get_snapshot(settings))
+        except Exception as exc:   # the brain is additive; never take the engine down
+            print(f"  [brain] skipped this cycle: {type(exc).__name__}: {exc}")
     return ctx
 
 

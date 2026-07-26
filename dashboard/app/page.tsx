@@ -76,6 +76,7 @@ export default function Page() {
     <div className="wrap">
       <header className="top">
         <h1>AI-Investing</h1>
+        <a href="/brain" className="navlink">🧠 the brain</a>
         <span className="spacer" />
         {state && (
           <span className={`badge ${mode === "live" ? "live" : "paper"}`}>

@@ -15,11 +15,13 @@ FEATURE_NAMES = [
     "mean_reversion",  # mean-reversion score × confidence
     "sentiment",       # news sentiment score × confidence
     "political_hype",  # hype-fade score × confidence (negative on detected pumps)
-    "consensus",       # mean of the four directional signal features
+    "macro_linkage",   # brain: graph-propagated macro impact × confidence
+    "consensus",       # mean of the directional signal features
     "mom_lowvol",      # momentum × low-volatility regime (interaction term)
 ]
 
-_SIGNAL_FEATURES = ["momentum", "mean_reversion", "sentiment", "political_hype"]
+_SIGNAL_FEATURES = ["momentum", "mean_reversion", "sentiment", "political_hype",
+                    "macro_linkage"]
 
 
 class FeatureExtractor:

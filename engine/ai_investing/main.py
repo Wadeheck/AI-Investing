@@ -166,6 +166,60 @@ def _compare() -> None:
                   f"{a['formula_qty']:>12.4f} {a['formula_pnl']:>12.2f}")
 
 
+def _brain_status() -> None:
+    from ai_investing.brain import Brain
+    b = Brain(settings)
+    r = b.regime.to_dict()
+    print(f"Brain — {len(b.graph.nodes)} nodes, {len(b.graph.edges)} edges "
+          f"({sum(1 for e in b.graph.edges if e.provenance == 'llm')} LLM-proposed)")
+    labels = r.get("labels", {})
+    print(f"  regime:  risk {labels.get('risk_appetite')}  rates {labels.get('rate_trajectory')}  "
+          f"USD {labels.get('dollar_trend')}  inflation {labels.get('inflation_trend')}  "
+          f"china {labels.get('china_stance')}")
+    print(f"  tension: {r['geopolitical_tension']:.2f}   stability: {r['stability']:.2f}")
+    print(f"  crowd:   {r['emotion_label']} (fear {r['fear']:.2f} / greed {r['greed']:.2f})")
+    print(f"  mood:    {r['mood_label']} (confidence {r['mood_confidence']:.2f}, "
+          f"caution {r['mood_caution']:.2f}) -> conviction x{b.regime.conviction_multiplier()}")
+    print(f"  book:    fragility {r['fragility']:.2f} (exposure x concentration)")
+    if b.field.pending:
+        print(f"  τ-queue: {len(b.field.pending)} delayed effect(s) in the pipe:")
+        for p in b.field.pending[:5]:
+            print(f"           {p['via']} -> {p['node']} {p['contribution']:+.2f} due {p['due'][:10]}")
+    import json as _json
+    try:
+        with open(settings.brain.state_path) as fh:
+            st = _json.load(fh)
+        print(f"  last think: {st.get('ts', '?')} — {st.get('signal_events', 0)} signal / "
+              f"{st.get('noise_events', 0)} noise events")
+        top = list(st.get("impacts", {}).items())[:8]
+        if top:
+            print("  top impacts: " + "  ".join(f"{k} {v:+.2f}" for k, v in top))
+        for sc in st.get("scenarios_fired", []):
+            print(f"  FIRED: {sc['id']} — {sc['implication']}")
+    except (OSError, _json.JSONDecodeError):
+        print("  (no brain.json yet — run a cycle)")
+
+
+def _brain_simulate(headline: str) -> None:
+    """Prints PURE JSON — the dashboard's simulate endpoint parses this stdout."""
+    import json as _json
+    from ai_investing.brain import Brain
+    print(_json.dumps(Brain(settings).simulate(headline)))
+
+
+def _brain_nodes() -> None:
+    from ai_investing.brain import Brain
+    b = Brain(settings)
+    by_type: dict[str, list] = {}
+    for n in b.graph.nodes.values():
+        by_type.setdefault(n.type, []).append(n)
+    for t in ("factor", "commodity", "actor", "theme", "sector", "asset"):
+        for n in sorted(by_type.get(t, []), key=lambda x: x.id):
+            extra = f"  [{n.market}] {n.symbol}" if n.symbol else ""
+            eq = f"  — stable: {n.equilibrium}" if n.equilibrium else ""
+            print(f"  {t:<10} {n.id:<24} {n.label}{extra}{eq}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Autonomous AI investing engine (paper-first).")
     parser.add_argument("--once", action="store_true", help="run a single cycle and exit")
@@ -188,7 +242,21 @@ def main() -> None:
     parser.add_argument("--block", action="append", metavar="SYM", help="never trade SYM (repeatable)")
     parser.add_argument("--unblock", action="append", metavar="SYM", help="remove SYM from the blocklist (repeatable)")
     parser.add_argument("--compare", action="store_true", help="show your portfolio vs the formula-only portfolio")
+    parser.add_argument("--brain", action="store_true", help="show the brain: regime, emotions, mood, top impacts")
+    parser.add_argument("--brain-simulate", metavar="HEADLINE",
+                        help="run a hypothetical headline through the brain, print JSON")
+    parser.add_argument("--brain-nodes", action="store_true", help="list all knowledge-graph nodes")
     args = parser.parse_args()
+
+    if args.brain:
+        _brain_status()
+        return
+    if args.brain_simulate:
+        _brain_simulate(args.brain_simulate)
+        return
+    if args.brain_nodes:
+        _brain_nodes()
+        return
 
     if args.briefing:
         print(news_mod.global_briefing(settings))

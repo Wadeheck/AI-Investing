@@ -134,6 +134,22 @@ class AltDataConfig:
 
 
 @dataclass
+class BrainConfig:
+    """The macro & relationship intelligence layer (see docs/BRAIN.md)."""
+    enabled: bool = field(default_factory=lambda: _get_bool("BRAIN_ENABLED", True))
+    graph_path: str = field(default_factory=lambda: _get("BRAIN_GRAPH_PATH", str(PROJECT_ROOT / "data" / "knowledge_graph.json")))
+    regime_path: str = field(default_factory=lambda: _get("BRAIN_REGIME_PATH", str(PROJECT_ROOT / "data" / "macro_regime.json")))
+    scenarios_path: str = field(default_factory=lambda: _get("BRAIN_SCENARIOS_PATH", str(PROJECT_ROOT / "data" / "scenarios.json")))
+    state_path: str = field(default_factory=lambda: _get("BRAIN_STATE_PATH", str(PROJECT_ROOT / "data" / "brain.json")))
+    macro_cache_path: str = field(default_factory=lambda: _get("BRAIN_MACRO_CACHE_PATH", str(PROJECT_ROOT / "data" / "macro_cache.json")))
+    field_path: str = field(default_factory=lambda: _get("BRAIN_FIELD_PATH", str(PROJECT_ROOT / "data" / "field_state.json")))
+    fred_api_key: str = field(default_factory=lambda: _get("FRED_API_KEY", ""))
+    credibility_threshold: float = field(default_factory=lambda: _get_float("BRAIN_CREDIBILITY_THRESHOLD", 0.35))
+    max_hops: int = field(default_factory=lambda: _get_int("BRAIN_MAX_HOPS", 3))
+    decay: float = field(default_factory=lambda: _get_float("BRAIN_DECAY", 0.6))
+
+
+@dataclass
 class SafetyConfig:
     # circuit breakers (drawdown halts)
     max_trailing_drawdown: float = field(default_factory=lambda: _get_float("SAFETY_MAX_TRAILING_DD", 0.15))
@@ -192,6 +208,7 @@ class Settings:
     regime: RegimeConfig = field(default_factory=RegimeConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     altdata: AltDataConfig = field(default_factory=AltDataConfig)
+    brain: BrainConfig = field(default_factory=BrainConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))

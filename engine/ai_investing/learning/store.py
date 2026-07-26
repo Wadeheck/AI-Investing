@@ -8,7 +8,8 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from ai_investing.learning.formula import FormulaModel
+from ai_investing.learning.features import FEATURE_NAMES
+from ai_investing.learning.formula import _DEFAULT_WEIGHTS, FormulaModel
 from ai_investing.learning.online import RLSLearner
 
 
@@ -22,9 +23,28 @@ class ParamStore:
                 d = json.load(fh)
             model = FormulaModel.from_dict(d["model"])
             rls = RLSLearner.from_dict(d["rls"]) if d.get("rls") else None
+            if self._migrate(model):
+                rls = None   # dimensions changed: RLS state re-initializes from θ
             return model, rls
         except (OSError, KeyError, json.JSONDecodeError):
             return FormulaModel(), None
+
+    @staticmethod
+    def _migrate(model: FormulaModel) -> bool:
+        """Append any features the code has grown since the model was saved (new
+        signals start at their default weight and earn trust through learning).
+        Returns True if the θ dimension changed."""
+        missing = [n for n in FEATURE_NAMES if n not in model.feature_names]
+        if not missing:
+            return False
+        for n in missing:
+            model.feature_names.append(n)
+            model.weights.append(_DEFAULT_WEIGHTS.get(n, 0.0))
+            if model.feature_mean is not None:
+                model.feature_mean.append(0.0)
+            if model.feature_std is not None:
+                model.feature_std.append(1.0)
+        return True
 
     def load_model(self) -> FormulaModel:
         return self.load()[0]
