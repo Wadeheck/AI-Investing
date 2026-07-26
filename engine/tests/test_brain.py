@@ -235,6 +235,23 @@ def test_adviser_ranks_and_explains():
     assert os.path.exists(s.brain.advice_path)      # persisted for the dashboard
 
 
+def test_ownership_follows_the_money():
+    g = KnowledgeGraph.seeded()
+    # Tencent selloff must hit Prosus hard (24% stake = most of its NAV)...
+    i, _, _ = g.propagate({"tencent": -0.5})
+    a = g.asset_impacts(i)
+    assert a.get("PRX.AS", {}).get("impact", 0) < -0.1
+    # ...and an Arm move must drag SoftBank
+    i2, _, _ = g.propagate({"arm": 0.5})
+    assert g.asset_impacts(i2).get("9984.T", {}).get("impact", 0) > 0.1
+    # Apple weakness reaches Berkshire via the holding
+    i3, _, _ = g.propagate({"aapl": -0.5})
+    assert g.asset_impacts(i3).get("BRK-B", {}).get("impact", 0) < 0
+    # Temasek is an actor node: DBS shock reaches it but it is NOT a tradable asset
+    i4, _, _ = g.propagate({"dbs": -0.5})
+    assert "temasek" in i4 and "TEMASEK" not in g.asset_impacts(i4)
+
+
 def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")

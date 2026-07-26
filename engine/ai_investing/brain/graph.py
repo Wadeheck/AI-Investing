@@ -33,6 +33,9 @@ EDGE_FLOW = {
     "member_of": "rev",        # theme/sector shock hits its members
     "regulated_by": "rev",     # regulator/policy action hits the regulated
     "correlates_with": "both",
+    "owns": "rev",             # src owns a stake in dst: the holding's move flows
+                               # back to the owner's value — follow the money.
+                               # weight ≈ how much of the owner the stake represents
 }
 
 
