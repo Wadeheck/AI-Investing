@@ -65,7 +65,11 @@ class Edge:
     dst: str
     type: str                    # see EDGE_FLOW
     sign: int = 1                # +1 same direction, -1 inverse
-    weight: float = 0.5          # 0..1 strength
+    weight: float = 0.5          # 0..1 strength in the edge's forward direction
+    weight_rev: Optional[float] = None   # asymmetric back-flow for "both" edges:
+                                 # NVDA is ~11% of TSMC's revenue, but TSMC is ~100%
+                                 # of NVDA's supply — the two directions differ.
+                                 # None = symmetric (weight both ways).
     confidence: float = 1.0      # curated=1.0; LLM-proposed lower
     delay_days: float = 0.0      # τ: real-world lag before the effect lands (0 = immediate)
     provenance: str = "seed"     # "seed" | "llm"
@@ -76,6 +80,8 @@ class Edge:
     def to_dict(self) -> dict:
         d = {"src": self.src, "dst": self.dst, "type": self.type, "sign": self.sign,
              "weight": self.weight, "confidence": self.confidence, "provenance": self.provenance}
+        if self.weight_rev is not None:
+            d["weight_rev"] = self.weight_rev
         if self.delay_days:
             d["delay_days"] = self.delay_days
         for k in ("note", "proposed_by", "proposed_at"):
@@ -152,11 +158,14 @@ class KnowledgeGraph:
                 continue
             flow = EDGE_FLOW.get(e.type, "fwd")
             sign = -1 if e.type == "competes_with" else e.sign
-            w = max(0.0, min(1.0, e.weight)) * max(0.0, min(1.0, e.confidence))
+            conf = max(0.0, min(1.0, e.confidence))
+            w_fwd = max(0.0, min(1.0, e.weight)) * conf
+            w_back = e.weight_rev if e.weight_rev is not None else e.weight
+            w_rev = max(0.0, min(1.0, w_back)) * conf
             if flow in ("fwd", "both"):
-                adj[e.src].append((e.dst, sign, w, e))
+                adj[e.src].append((e.dst, sign, w_fwd, e))
             if flow in ("rev", "both"):
-                adj[e.dst].append((e.src, sign, w, e))
+                adj[e.dst].append((e.src, sign, w_rev, e))
         self._adj = adj
         return adj
 
@@ -195,51 +204,64 @@ class KnowledgeGraph:
     # -- propagation (the actual thinking) ------------------------------------
     def propagate(self, impulses: dict[str, float], max_hops: int = 3,
                   decay: float = 0.6) -> tuple[dict[str, float], list[dict], list[dict]]:
-        """Ripple impulses through the graph.
+        """Ripple impulses through the graph — exact truncated path-sum.
 
-        Returns (impacts, trace, deferred). `impacts` maps node_id -> accumulated
-        impact in [-1, 1] — the SAME-CYCLE effects. `trace` lists every traversal
-        step so the dashboard can animate the ripple: {from, to, edge_type, hop,
-        contribution}. `deferred` carries contributions crossing time-delayed
-        edges (τ > 0): they do NOT land now — the caller queues them and re-injects
-        each as a fresh impulse on its dst node once due, at which point it
-        propagates onward from there. Best-magnitude relaxation per node prevents
-        loops from compounding.
+        The math: for every directed path p = (n0 -> n1 -> ... -> nk), k <= max_hops,
+        the contribution to nk is
+
+            impulse(n0) x prod_i [ sign_i x weight_i x decay ]
+
+        and a node's raw impact is the SUM over all such paths (linear
+        superposition — three medium paths converging on a node push their
+        combined force onward, unlike max-path relaxation). `decay` per hop
+        encodes growing model uncertainty with inference depth, on top of the
+        edge weights. Paths are enumerated with magnitude pruning (<0.015 dies),
+        which bounds the expansion; a path never immediately re-crosses the edge
+        it just arrived by, so bidirectional pairs (asset <-> proxy) cannot echo
+        a shock straight back onto its source. Genuine feedback loops through
+        DISTINCT edges are allowed and correctly summed.
+
+        Raw sums are squashed through tanh at read time — smooth saturation, so
+        stacked shocks keep their ordering instead of flat-lining at a clip.
+
+        Returns (impacts, trace, deferred). `deferred` carries contributions that
+        crossed time-delayed edges (τ > 0): they do NOT land now — the caller
+        queues them and re-injects each as a fresh impulse once due.
         """
+        import math
         adj = self._adjacency()
-        impacts: dict[str, float] = {}
+        raw: dict[str, float] = {}
         trace: list[dict] = []
         deferred: list[dict] = []
-        # visited[n] = strongest |impulse| already propagated OUT of n; a node only
-        # re-enters the frontier if a stronger shock reaches it (prevents loops).
-        visited: dict[str, float] = {}
-        frontier = {n: max(-1.0, min(1.0, v)) for n, v in impulses.items()
-                    if n in self.nodes and abs(v) > 1e-4}
-        for n, v in frontier.items():
-            impacts[n] = v
+        # frontier entries: (node, delta_to_push, edge_arrived_by | None)
+        frontier: list[tuple[str, float, Optional[Edge]]] = []
+        for n, v in impulses.items():
+            if n in self.nodes and abs(v) > 1e-4:
+                v = max(-1.0, min(1.0, v))
+                raw[n] = raw.get(n, 0.0) + v
+                frontier.append((n, v, None))
         for hop in range(1, max_hops + 1):
-            nxt: dict[str, float] = {}
-            for src, val in frontier.items():
-                if abs(val) <= visited.get(src, 0.0):
-                    continue
-                visited[src] = abs(val)
+            nxt: list[tuple[str, float, Optional[Edge]]] = []
+            for src, delta, in_edge in frontier:
                 for dst, sign, w, edge in adj.get(src, []):
-                    contrib = val * sign * w * decay
-                    if abs(contrib) < 0.02:
+                    if edge is in_edge:
+                        continue           # no instant echo back along the same edge
+                    contrib = delta * sign * w * decay
+                    if abs(contrib) < 0.015:
                         continue
                     if edge.delay_days > 0:
                         deferred.append({"node": dst, "contribution": round(contrib, 4),
                                          "delay_days": edge.delay_days, "via": src,
                                          "edge_type": edge.type})
                         continue
-                    impacts[dst] = max(-1.0, min(1.0, impacts.get(dst, 0.0) + contrib))
-                    if abs(contrib) > abs(nxt.get(dst, 0.0)):
-                        nxt[dst] = contrib
+                    raw[dst] = raw.get(dst, 0.0) + contrib
+                    nxt.append((dst, contrib, edge))
                     trace.append({"from": src, "to": dst, "edge_type": edge.type,
                                   "hop": hop, "contribution": round(contrib, 4)})
             if not nxt:
                 break
             frontier = nxt
+        impacts = {n: round(math.tanh(v), 4) for n, v in raw.items()}
         return impacts, trace, deferred
 
     def asset_impacts(self, impacts: dict[str, float]) -> dict[str, dict]:

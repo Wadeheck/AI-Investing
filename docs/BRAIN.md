@@ -293,6 +293,52 @@ credibility + persistent activations already cover it). The framework's own
 is answered here the same way as everything else: the graph's output is one
 signal whose formula weight is *learned* by walk-forward, not asserted.
 
+## 4d. The mathematics (v2) — and its honest limits
+
+The propagation is a truncated path-sum over the graph. For every directed path
+p = (n₀→n₁→…→n_k), k ≤ max_hops:
+
+    contribution(p) = impulse(n₀) · ∏ᵢ [ signᵢ · weightᵢ · decay ]
+    raw(n)          = Σ over all paths ending at n
+    impact(n)       = tanh(raw(n))                       — smooth saturation
+    impulse(n₀)     = polarity · magnitude · credibility · confidence
+
+Properties, deliberately: (1) **sum over paths, not max-path** — converging
+medium-strength paths add, which is how clusters actually move; (2) **tanh, not
+clipping** — stacked shocks keep their ordering near saturation; (3) **no
+same-edge echo** — a path never immediately re-crosses the edge it arrived by,
+so asset↔proxy pairs can't bounce a shock back onto its source, while genuine
+feedback loops through distinct edges are summed correctly; (4) **asymmetric
+edges** (`weight_rev`) — NVDA is ~11% of TSMC's revenue but TSMC is ~100% of
+NVDA's supply, and the two directions carry different weights; (5) **per-type
+persistence** — activations decay with type-specific half-lives (factor 96h,
+commodity 72h, theme 48h, asset 24h): policy regimes outlive single-name news;
+(6) **τ-delays** move contributions through a dated pending queue; (7) `decay`
+per hop is not physics — it encodes growing MODEL uncertainty with inference
+depth; (8) government influence is wiring, not commentary: state stakes /
+SOE control are `regulated_by` edges with real weights (US gov↔Intel/MP,
+Beijing↔ICBC/Moutai/CR), and equity stakes are `owns` edges weighted by the
+stake's share of the owner.
+
+Known simplifications that remain (the roadmap, in honesty):
+
+- **Linearity.** Real responses are nonlinear (a 10bp cut ≠ 1/10th of a 100bp
+  cut) and state-dependent (good jobs news is bad equity news in a tightening
+  regime). Today nonlinearity enters only via tanh and via composition through
+  intermediate nodes. Next step: per-node response curves / regime-conditional
+  weights — but every such parameter must be LEARNED, not asserted, or it's
+  astrology with extra steps.
+- **Hand-set weights.** Curated edge weights are educated priors. The honest
+  fix is empirical: regress historical node shocks against realized asset moves
+  and let data adjust weights (the framework doc's own "hardest problem").
+  node_history + events tables already collect exactly the data needed.
+- **No belief updating on old events.** A story judged noise is not upgraded
+  when a trusted source later confirms it; the confirmation arrives as a NEW
+  event instead. Adequate, not elegant.
+- **Volatility ≠ direction.** Some shocks (elections) mainly widen the
+  distribution rather than move its mean; the graph currently only models mean
+  shifts.
+
 ## 5. Guardrails (don't skip these)
 
 - **LLM-proposed graph edges need periodic review.** An auto-appended relationship

@@ -275,6 +275,54 @@ def test_supply_chains_move_the_cluster():
     assert a4.get("300750.SZ", {}).get("impact", 0) < 0
 
 
+def test_pathsum_confluence_and_asymmetry():
+    g = KnowledgeGraph.seeded()
+    # SUM-OF-PATHS: hitting tension and tariffs together must push oil harder
+    # than either alone (converging paths add, not max)
+    both, _, _ = g.propagate({"geopolitical_tension": 0.3, "us_china_tariffs": 0.3})
+    solo, _, _ = g.propagate({"geopolitical_tension": 0.3})
+    assert both["oil_price"] > solo["oil_price"] > 0
+    # ASYMMETRY: a TSMC shock hits NVDA harder than an NVDA shock hits TSMC
+    down, _, _ = g.propagate({"tsmc": -0.5})
+    up, _, _ = g.propagate({"nvda": -0.5})
+    assert abs(down.get("nvda", 0)) > abs(up.get("tsmc", 0)) > 0
+    # NO ECHO: a pure gold impulse must not inflate itself via the GLD pair
+    e, _, _ = g.propagate({"gold_price": 0.4})
+    assert e["gold_price"] <= 0.4 + 1e-9
+
+
+def test_per_type_half_life():
+    from datetime import datetime, timedelta, timezone
+    from ai_investing.brain.field import FieldState
+    now = datetime.now(timezone.utc)
+    f = FieldState({"fed_rate": 0.4, "nvda": 0.4},
+                   updated=(now - timedelta(hours=48)).isoformat())
+    f.decay(now, {"fed_rate": "factor", "nvda": "asset"})
+    # policy memory (96h HL) outlives single-name news (24h HL)
+    assert f.activations["fed_rate"] > 0.25 > f.activations["nvda"]
+
+
+def test_raw_materials_and_gov_influence():
+    g = KnowledgeGraph.seeded()
+    # tariffs: Chinese solar down, US domestic solar UP — nuanced signs in one theme
+    i, _, _ = g.propagate({"us_china_tariffs": 0.6})
+    a = g.asset_impacts(i)
+    assert a.get("JKS", {}).get("impact", 0) < 0 < a.get("FSLR", {}).get("impact", 0)
+    # rare-earth curbs make the ex-China producer MORE valuable
+    i2, _, _ = g.propagate({"rare_earths": 0.6})
+    assert g.asset_impacts(i2).get("MP", {}).get("impact", 0) > 0
+    # datacenter power squeeze reaches uranium and Cameco
+    i3, _, _ = g.propagate({"power_demand": 0.6})
+    assert g.asset_impacts(i3).get("CCJ", {}).get("impact", 0) > 0
+    # government action flows to state-influenced names (regulated_by rev flow)
+    i4, _, _ = g.propagate({"us_government": 0.5})
+    assert g.asset_impacts(i4).get("INTC", {}).get("impact", 0) != 0
+    # gold rally: miners are leveraged gold
+    i5, _, _ = g.propagate({"gold_price": 0.5})
+    a5 = g.asset_impacts(i5)
+    assert a5.get("GDX", {}).get("impact", 0) > a5.get("GLD", {}).get("impact", 0) * 0.4
+
+
 def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")

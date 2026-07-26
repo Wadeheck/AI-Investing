@@ -21,7 +21,17 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 
-HALF_LIFE_HOURS = 36.0     # a shock loses half its strength in ~1.5 days unless refreshed
+HALF_LIFE_HOURS = 36.0     # default: a shock halves in ~1.5 days unless refreshed
+# Different kinds of state persist differently: a policy-regime shock outlives a
+# single stock's sentiment blip by an order of magnitude.
+HALF_LIFE_BY_TYPE = {
+    "factor": 96.0,        # policy/macro regimes: ~4 days
+    "commodity": 72.0,
+    "actor": 48.0,
+    "theme": 48.0,
+    "sector": 48.0,
+    "asset": 24.0,         # single-name news is the fastest to fade
+}
 MIN_ACTIVATION = 0.01
 
 
@@ -48,17 +58,23 @@ class FieldState:
                        "updated": self.updated}, fh, indent=1)
 
     # -- dynamics --------------------------------------------------------------
-    def decay(self, now: datetime) -> None:
-        """Exponential decay toward the stable point since the last update."""
+    def decay(self, now: datetime, node_types: dict[str, str] | None = None) -> None:
+        """Exponential decay toward the stable point since the last update.
+        With `node_types`, each node decays at its own type's half-life
+        (factor 96h ... asset 24h); without, the flat default applies."""
         if self.updated:
             try:
                 prev = datetime.fromisoformat(self.updated)
                 hours = max(0.0, (now - prev).total_seconds() / 3600.0)
             except ValueError:
                 hours = 0.0
-            factor = math.pow(0.5, hours / HALF_LIFE_HOURS)
-            self.activations = {k: round(v * factor, 4) for k, v in self.activations.items()
-                                if abs(v * factor) >= MIN_ACTIVATION}
+            out: dict[str, float] = {}
+            for k, v in self.activations.items():
+                hl = HALF_LIFE_BY_TYPE.get((node_types or {}).get(k, ""), HALF_LIFE_HOURS)
+                decayed = v * math.pow(0.5, hours / hl)
+                if abs(decayed) >= MIN_ACTIVATION:
+                    out[k] = round(decayed, 4)
+            self.activations = out
         self.updated = now.isoformat()
 
     def absorb(self, impacts: dict[str, float]) -> None:

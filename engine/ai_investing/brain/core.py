@@ -61,7 +61,8 @@ class Brain:
 
         # τ pipeline: yesterday's delayed effects that are due today re-enter as
         # impulses on their destination nodes and propagate onward from there.
-        self.field.decay(now)
+        node_types = {nid: n.type for nid, n in self.graph.nodes.items()}
+        self.field.decay(now, node_types)
         for node, contrib in self.field.mature_pending(now).items():
             impulses[node] = max(impulses.get(node, 0.0), contrib, key=abs)
 
