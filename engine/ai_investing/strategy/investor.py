@@ -131,6 +131,11 @@ class Investor:
         for p in book.pending():                          # cash already spoken for
             if p.get("horizon") == "long" and p["side"] == "buy":
                 budget -= p.get("qty", 0) * p.get("price", 0)
+        try:
+            from ai_investing.data.fundamentals import get_fundamentals, quality_value
+            fund = get_fundamentals(self.settings, list(want))
+        except Exception:
+            fund, quality_value = {}, None
         for sym, t in want.items():
             px = prices_by_symbol.get(sym, 0.0)
             if px <= 0 or self._held(sym):
@@ -138,7 +143,12 @@ class Investor:
             side = "buy" if t["stance"] == "long" else "sell"
             if book.get(sym, side, "long"):
                 continue                                   # pending/decided already
-            target = equity * MAX_WEIGHT
+            # margin of safety: quality-at-a-fair-price sizes up, junk sizes down
+            qv, qv_reason = (quality_value(fund.get(sym, {})) if quality_value
+                             else (0.5, ""))
+            size_mult = 0.6 + 0.8 * qv                     # ×0.6 … ×1.4 of base weight
+            weight = min(0.15, MAX_WEIGHT * size_mult)
+            target = equity * weight
             if side == "buy":
                 if budget < max(500.0, target * 0.25):
                     continue                               # pot is (nearly) fully invested
@@ -149,7 +159,8 @@ class Investor:
             verb = "Buy and hold" if side == "buy" else "Bet against (short)"
             extra = {
                 "horizon": "long", "label": name,
-                "notional": round(qty * px, 2), "pct": MAX_WEIGHT,
+                "notional": round(qty * px, 2), "pct": round(weight, 4),
+                "quality_note": (f"📏 Sized ×{size_mult:.1f}: {qv_reason}" if qv_reason else ""),
                 "why": f"{t.get('thesis', '')}",
                 "assumptions": t.get("assumptions", ""),
                 "plan": (f"Hold for months while the thesis holds — this is the patient book. "
@@ -172,10 +183,11 @@ class Investor:
             notifier.send(
                 f"🏛 *Investing book — approval needed* (pretend money)\n\n"
                 f"*{verb}: {name}* ({sym}) — about *${qty * px:,.0f}* "
-                f"({MAX_WEIGHT:.0%} of the investing pot)\n"
+                f"({weight:.0%} of the investing pot)\n"
                 f"📜 *Thesis “{t.get('title')}”:* {extra['why']}\n"
                 f"🤔 {extra['assumptions']}\n"
-                f"🗺 {extra['plan']}\n"
+                + (extra["quality_note"] + "\n" if extra.get("quality_note") else "")
+                + f"🗺 {extra['plan']}\n"
                 + (extra["map_note"] + "\n" if extra.get("map_note") else "")
                 + (extra["bubble_note"] if extra.get("bubble_note") else ""),
                 [[(f"✅ yes, {('buy' if side == 'buy' else 'short')} {sym}", f"ap:{p['id']}"),
