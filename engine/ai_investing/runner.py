@@ -397,7 +397,8 @@ class Runner:
                     f"💡 *Why:* {p.get('why', p['reason'])}\n"
                     f"🤔 *This assumes:* {p.get('assumptions', 'the current picture holds')}\n"
                     f"🗺 *The plan:* {p.get('plan', 'hold while the reasons hold; automatic safety stop')}\n"
-                    f"_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
+                    + (f"{p['bubble_note']}\n" if p.get("bubble_note") else "")
+                    + f"_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
                     f"Selling to protect you never waits for approval._")
                 buttons = [[(f"✅ yes, {verb.lower()} {p['symbol']}", f"ap:{p['id']}"),
                             ("❌ skip", f"rj:{p['id']}"),

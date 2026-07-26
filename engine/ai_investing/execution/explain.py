@@ -110,9 +110,21 @@ def explain_entry(settings, symbol: str, side: str, qty: float, price: float,
     if not assumptions:
         assumptions = ("The recent price trend and news picture stay roughly as they are; "
                        "no company-specific surprises.")
-    return {"label": label, "market": market, "notional": round(notional, 2),
-            "pct": round(pct, 4), "why": why[:600], "assumptions": assumptions[:400],
-            "plan": plan}
+    out = {"label": label, "market": market, "notional": round(notional, 2),
+           "pct": round(pct, 4), "why": why[:600], "assumptions": assumptions[:400],
+           "plan": plan}
+    # bubble heads-up: buying a frothy name deserves a visible warning
+    if buying:
+        try:
+            from ai_investing.brain.bubble import bubble_scores
+            b = bubble_scores(settings).get("symbols", {}).get(symbol, 0.0)
+            if b >= 0.4:
+                out["bubble_note"] = (f"🫧 Heads-up: my bubble indicator scores {label} at "
+                                      f"{b:.2f}/1 — the price leans on story more than "
+                                      f"earnings. Skipping is respectable here.")
+        except Exception:
+            pass
+    return out
 
 
 def _llm_prose(settings, label, market, symbol, side, drivers, chain, events) -> tuple[str, str]:

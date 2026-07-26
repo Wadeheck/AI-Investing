@@ -151,6 +151,16 @@ class Investor:
                          f"It exits automatically if the thesis is dropped in a daily challenge "
                          f"or if the price moves {STOP_PCT:.0%} against us."),
             }
+            if side == "buy":
+                try:
+                    from ai_investing.brain.bubble import bubble_scores
+                    b = bubble_scores(self.settings).get("symbols", {}).get(sym, 0.0)
+                    if b >= 0.4:
+                        extra["bubble_note"] = (f"🫧 Heads-up: my bubble indicator scores {name} "
+                                                f"at {b:.2f}/1 — priced on story more than "
+                                                f"earnings. A 6-month hold here needs conviction.")
+                except Exception:
+                    pass
             p = book.propose(sym, side, qty, px, f"thesis: {t.get('title', '')}", extra)
             notifier.send(
                 f"🏛 *Investing book — approval needed* (pretend money)\n\n"
@@ -158,7 +168,8 @@ class Investor:
                 f"({MAX_WEIGHT:.0%} of the investing pot)\n"
                 f"📜 *Thesis “{t.get('title')}”:* {extra['why']}\n"
                 f"🤔 {extra['assumptions']}\n"
-                f"🗺 {extra['plan']}",
+                f"🗺 {extra['plan']}\n"
+                + (extra["bubble_note"] if extra.get("bubble_note") else ""),
                 [[(f"✅ yes, {('buy' if side == 'buy' else 'short')} {sym}", f"ap:{p['id']}"),
                   ("❌ skip", f"rj:{p['id']}"),
                   ("🚫 never", f"b:{sym}")]])
