@@ -119,8 +119,13 @@ class Investor:
                               f"~${qty * px:,.0f}, under thesis “{t.get('title')}”. "
                               f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop.")
 
-        # 3) propose entries for theses not yet expressed — one message per stock
+        # 3) propose entries for theses not yet expressed — one message per stock.
+        # Budget-aware: never queue more buying than the pot's cash can honor.
         equity = self._equity(prices_by_symbol)
+        budget = self.broker.get_cash()
+        for p in book.pending():                          # cash already spoken for
+            if p.get("horizon") == "long" and p["side"] == "buy":
+                budget -= p.get("qty", 0) * p.get("price", 0)
         for sym, t in want.items():
             px = prices_by_symbol.get(sym, 0.0)
             if px <= 0 or self._held(sym):
@@ -128,7 +133,13 @@ class Investor:
             side = "buy" if t["stance"] == "long" else "sell"
             if book.get(sym, side, "long"):
                 continue                                   # pending/decided already
-            qty = equity * MAX_WEIGHT / px
+            target = equity * MAX_WEIGHT
+            if side == "buy":
+                if budget < max(500.0, target * 0.25):
+                    continue                               # pot is (nearly) fully invested
+                target = min(target, budget)
+                budget -= target
+            qty = target / px
             name = labels.get(sym, sym)
             verb = "Buy and hold" if side == "buy" else "Bet against (short)"
             extra = {
