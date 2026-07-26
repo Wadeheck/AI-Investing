@@ -88,7 +88,7 @@ def fetch() -> None:
                 "enddatetime": d.strftime("%Y%m%d") + "235959"})
             url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
             heads, tries = [], 0
-            while tries < 4:
+            while tries < 5:
                 tries += 1
                 try:
                     req = urllib.request.Request(url, headers={"user-agent": "ai-investing-research/0.1"})
@@ -101,14 +101,16 @@ def fetch() -> None:
                         if t and t.lower() not in seen_titles:
                             seen_titles.add(t.lower())
                             heads.append({"title": t[:200], "source": a.get("domain", "")[:60]})
-                    break
+                    if heads:
+                        break
+                    time.sleep(30)          # empty can be silent throttling — retry
                 except Exception:
                     time.sleep(90)          # 429 / hiccup: long backoff, retry
             fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
             fh.flush()
             if i % 25 == 0:
                 print(f"[fetch] {d} ({i}/{len(days)}) — {len(heads)} headlines", flush=True)
-            time.sleep(8)                   # be a polite citizen of GDELT
+            time.sleep(10)                  # be a polite citizen of GDELT
 
 
 # ------------------------------------------------------------------ digest --
