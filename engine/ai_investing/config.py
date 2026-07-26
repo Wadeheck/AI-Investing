@@ -144,6 +144,11 @@ class BrainConfig:
     macro_cache_path: str = field(default_factory=lambda: _get("BRAIN_MACRO_CACHE_PATH", str(PROJECT_ROOT / "data" / "macro_cache.json")))
     field_path: str = field(default_factory=lambda: _get("BRAIN_FIELD_PATH", str(PROJECT_ROOT / "data" / "field_state.json")))
     fred_api_key: str = field(default_factory=lambda: _get("FRED_API_KEY", ""))
+    db_path: str = field(default_factory=lambda: _get("BRAIN_DB_PATH", str(PROJECT_ROOT / "data" / "brain.db")))
+    feed_cache_path: str = field(default_factory=lambda: _get("BRAIN_FEED_CACHE_PATH", str(PROJECT_ROOT / "data" / "feed_cache.json")))
+    advice_path: str = field(default_factory=lambda: _get("BRAIN_ADVICE_PATH", str(PROJECT_ROOT / "data" / "advice.json")))
+    sentiment_cache_path: str = field(default_factory=lambda: _get("BRAIN_SENTIMENT_CACHE_PATH", str(PROJECT_ROOT / "data" / "sentiment_cache.json")))
+    advise_top_n: int = field(default_factory=lambda: _get_int("BRAIN_ADVISE_TOP_N", 10))
     credibility_threshold: float = field(default_factory=lambda: _get_float("BRAIN_CREDIBILITY_THRESHOLD", 0.35))
     max_hops: int = field(default_factory=lambda: _get_int("BRAIN_MAX_HOPS", 3))
     decay: float = field(default_factory=lambda: _get_float("BRAIN_DECAY", 0.6))
@@ -192,12 +197,28 @@ class Settings:
     anthropic_model: str = field(default_factory=lambda: _get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))
     deepseek_api_key: str = field(default_factory=lambda: _get("DEEPSEEK_API_KEY", ""))
     deepseek_model: str = field(default_factory=lambda: _get("DEEPSEEK_MODEL", "deepseek-chat"))
+    # Local open-source LLM (Ollama / OpenAI-compatible). FREE — preferred when up.
+    local_llm_url: str = field(default_factory=lambda: _get("LOCAL_LLM_URL", "http://localhost:11434"))
+    local_llm_model: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL", "qwen3.6:27b"))          # smart tier
+    local_llm_model_fast: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL_FAST", "qwen3:8b"))   # per-cycle volume
+    llm_prefer_local: bool = field(default_factory=lambda: _get_bool("LLM_PREFER_LOCAL", True))
     byteplus_api_key: str = field(default_factory=lambda: _get("BYTEPLUS_API_KEY", ""))
     byteplus_model_smart: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_SMART", "seed-2-0-pro-260328"))
     byteplus_model_fast: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_FAST", "seed-2-0-mini-260428"))
     news_rss: list[str] = field(default_factory=lambda: _get_list("NEWS_RSS", [
+        # global markets / macro
         "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+        "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
         "http://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://www.theguardian.com/uk/business/rss",
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
+        # Asia: China / HK / Japan / SG
+        "https://www.scmp.com/rss/91/feed",
+        "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6936",
+        # crypto + energy
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://oilprice.com/rss/main",
     ]))
     db_path: str = field(default_factory=lambda: _get("DB_PATH", str(PROJECT_ROOT / "data" / "journal.db")))
     state_path: str = field(default_factory=lambda: _get("STATE_PATH", str(PROJECT_ROOT / "data" / "state.json")))

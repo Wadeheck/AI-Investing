@@ -1,6 +1,7 @@
 """Offline tests for alerts + alt-data (no network calls)."""
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -22,8 +23,10 @@ def test_telegram_disabled_without_creds():
 
 
 def test_get_notifier_never_raises():
-    n = get_notifier(settings)
-    assert n.send("x") in (True, False)  # must never raise
+    with patch("ai_investing.alerts.telegram.urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.status = 200
+        n = get_notifier(settings)
+        assert n.send("x") in (True, False)  # must never raise
     if not (settings.alerts.telegram_bot_token and settings.alerts.telegram_chat_id):
         assert isinstance(n, NullNotifier)
 

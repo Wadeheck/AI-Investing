@@ -22,6 +22,7 @@ from ai_investing.brain.field import FieldState
 from ai_investing.brain.graph import KnowledgeGraph
 from ai_investing.brain.regime import MacroRegime
 from ai_investing.brain.scenarios import ScenarioRegistry
+from ai_investing.brain.store import BrainStore
 
 
 class Brain:
@@ -32,12 +33,24 @@ class Brain:
         self.regime = MacroRegime.load(cfg.regime_path)
         self.scenarios = ScenarioRegistry.load(cfg.scenarios_path)
         self.field = FieldState.load(cfg.field_path)
+        self.store = BrainStore(cfg.db_path)
+        self.last_new_headlines: list[dict] = []   # set by think(); consumed by news.py
 
     # -- the per-cycle pass ---------------------------------------------------
     def think(self, headlines: list[dict], macro: Optional[dict] = None) -> dict:
         cfg = self.settings.brain
         now = datetime.now(timezone.utc)
-        events = events_mod.extract_events(headlines, self.graph, self.settings)
+
+        # THE COST GATE: only never-digested articles reach an LLM. Everything
+        # already known is remembered in brain.db and skipped. Busy cycles cap
+        # the batch; the backlog stays undigested and returns next cycle.
+        fresh, seen = self.store.filter_new(headlines)
+        new_heads, backlog = fresh[:30], max(0, len(fresh) - 30)
+        self.last_new_headlines = new_heads
+        events = events_mod.extract_events(new_heads, self.graph, self.settings) if new_heads else []
+        if events:
+            self.store.save_events(events)
+        self.store.mark_digested(new_heads)
 
         impulses: dict[str, float] = {}
         for ev in events:
@@ -89,6 +102,17 @@ class Brain:
                                            key=lambda kv: -abs(kv[1])))
         state["pending_effects"] = self.field.pending
         state["centrality"] = self.graph.centrality()
+        state["memory"] = {**self.store.stats(), "headlines_seen_before": seen,
+                           "headlines_new": len(new_heads), "backlog": backlog}
+        self.store.record_node_history(state["ts"], self.field.activations)
+
+        # the adviser reads the fresh field — every cycle, zero LLM cost
+        try:
+            from ai_investing.brain.adviser import advise
+            state["advice"] = advise(self.settings, self, log=bool(new_heads))
+        except Exception:
+            state["advice"] = None
+
         self._persist(state, added_edges)
         return state
 

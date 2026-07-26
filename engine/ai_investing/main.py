@@ -181,6 +181,13 @@ def _brain_status() -> None:
     print(f"  mood:    {r['mood_label']} (confidence {r['mood_confidence']:.2f}, "
           f"caution {r['mood_caution']:.2f}) -> conviction x{b.regime.conviction_multiplier()}")
     print(f"  book:    fragility {r['fragility']:.2f} (exposure x concentration)")
+    st = b.store.stats()
+    print(f"  memory:  {st['articles']} articles seen ({st['digested']} digested once, never re-paid), "
+          f"{st['events']} events, {st['advice_issued']} advice lists")
+    from ai_investing.data.news import local_llm_available
+    print(f"  llm:     local {settings.local_llm_model} "
+          f"{'UP (free, preferred)' if local_llm_available(settings) else 'down'}"
+          f"{' -> cloud fallback available' if settings.llm_available else ''}")
     if b.field.pending:
         print(f"  τ-queue: {len(b.field.pending)} delayed effect(s) in the pipe:")
         for p in b.field.pending[:5]:
@@ -205,6 +212,38 @@ def _brain_simulate(headline: str) -> None:
     import json as _json
     from ai_investing.brain import Brain
     print(_json.dumps(Brain(settings).simulate(headline)))
+
+
+def _advise(notify: bool = False) -> None:
+    """The 10 trades: rank the brain's current field into an explained list."""
+    from datetime import datetime, timezone
+    from ai_investing.brain import Brain
+    from ai_investing.brain.adviser import advise
+    b = Brain(settings)
+    b.field.decay(datetime.now(timezone.utc))   # score today's field, not a stale one
+    a = advise(settings, b, log=True)
+    print(f"Adviser — {a['ts'][:16]}Z  mood: {a['mood']}  conviction x{a['conviction_multiplier']}"
+          f"  ({a['regime_note']}; {a['considered']} assets considered)")
+    if not a["trades"]:
+        print("  No trades clear the bar right now — the field is quiet. That IS the advice.")
+        return
+    lines = []
+    for t in a["trades"]:
+        d = "LONG " if t["direction"] == "long" else "SHORT/AVOID"
+        line = (f"  #{t['rank']:<2} {d} {t['symbol']:<10} [{t['market']}] "
+                f"score {t['score']:+.3f}  wt≤{t['weight_suggestion']:.1%}\n"
+                f"      why: {t['chain']}\n"
+                f"      invalidated by: {t['invalidation']}")
+        print(line)
+        lines.append(f"#{t['rank']} {d} {t['symbol']} ({t['score']:+.2f}) — {t['chain']}")
+    print("\n  (decision support, not orders — feed convictions into --view SYM=VAL;"
+          "\n   the engine still trades through formula + risk + safety)")
+    if notify:
+        from ai_investing.alerts import get_notifier
+        n = get_notifier(settings)
+        if n.enabled:
+            n.send("🧠 *Brain adviser*\n" + "\n".join(lines[:10]))
+            print("  Sent to Telegram.")
 
 
 def _brain_nodes() -> None:
@@ -246,8 +285,13 @@ def main() -> None:
     parser.add_argument("--brain-simulate", metavar="HEADLINE",
                         help="run a hypothetical headline through the brain, print JSON")
     parser.add_argument("--brain-nodes", action="store_true", help="list all knowledge-graph nodes")
+    parser.add_argument("--advise", action="store_true", help="the top-10 trade list from the brain's field")
+    parser.add_argument("--notify", action="store_true", help="with --advise: also send the list to Telegram")
     args = parser.parse_args()
 
+    if args.advise:
+        _advise(notify=args.notify)
+        return
     if args.brain:
         _brain_status()
         return

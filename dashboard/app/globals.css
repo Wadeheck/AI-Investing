@@ -197,3 +197,15 @@ input[type="range"] { accent-color: var(--series-1); width: 100%; }
 .event.noise .etext { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(208, 59, 59, 0.4); }
 .badge.b-signal { background: rgba(12, 163, 12, 0.12); color: var(--pos); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; }
 .badge.b-noise { background: rgba(208, 59, 59, 0.12); color: var(--neg); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; }
+
+/* adviser panel */
+.trades { display: flex; flex-direction: column; gap: 10px; }
+.trade { display: grid; grid-template-columns: 32px 96px auto auto auto 1fr; gap: 8px; align-items: baseline; font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.trade:last-child { border-bottom: none; }
+.trade .tchain { grid-column: 1 / -1; color: var(--ink-2); font-size: 12px; }
+.trade .sub { font-size: 11px; }
+.trank { color: var(--muted); font-weight: 700; }
+.tdir { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+.tlong { background: rgba(12, 163, 12, 0.12); color: var(--pos); }
+.tshort { background: rgba(208, 59, 59, 0.12); color: var(--neg); }
+.tscore { font-weight: 700; }

@@ -27,6 +27,15 @@ type Regime = {
   labels?: Record<string, string>;
 };
 type Pending = { node: string; contribution: number; due?: string; via?: string; delay_days?: number };
+type Trade = {
+  rank: number; symbol: string; market?: string; label?: string; direction: string;
+  score: number; weight_suggestion: number; chain: string; invalidation: string;
+  drivers?: Record<string, number>;
+};
+type Advice = {
+  ts?: string; trades?: Trade[]; considered?: number; mood?: string;
+  conviction_multiplier?: number; regime_note?: string;
+};
 type BrainState = {
   ts?: string; simulated?: boolean; events?: BrainEvent[]; impulses?: Record<string, number>;
   impacts?: Record<string, number>; trace?: TraceStep[];
@@ -139,6 +148,7 @@ export default function BrainPage() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [live, setLive] = useState<BrainState | null>(null);
   const [regime, setRegime] = useState<Regime | null>(null);
+  const [advice, setAdvice] = useState<Advice | null>(null);
   const [sim, setSim] = useState<BrainState | null>(null);
   const [headline, setHeadline] = useState("");
   const [busy, setBusy] = useState(false);
@@ -156,6 +166,7 @@ export default function BrainPage() {
       if (j.graph) setGraph(j.graph as Graph);
       if (j.brain) setLive(j.brain as BrainState);
       if (j.regime) setRegime(j.regime as Regime);
+      if (j.advice) setAdvice(j.advice as Advice);
     } catch { /* keep last good */ }
   }, []);
 
@@ -400,6 +411,41 @@ export default function BrainPage() {
           )}
         </div>
       </div>
+
+      {/* ---------- the adviser: top trades from the field ---------- */}
+      {advice?.trades && advice.trades.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h3>
+            Top trades — from the field, not a black box
+            <span className="sub">
+              {" "}· mood {advice.mood} · conviction ×{(advice.conviction_multiplier ?? 1).toFixed(2)}
+              {advice.regime_note ? ` · ${advice.regime_note}` : ""}
+            </span>
+          </h3>
+          <div className="trades">
+            {advice.trades.map((t) => (
+              <div key={t.symbol} className="trade">
+                <span className="trank">#{t.rank}</span>
+                <span className={`tdir ${t.direction === "long" ? "tlong" : "tshort"}`}>
+                  {t.direction === "long" ? "LONG" : "SHORT/AVOID"}
+                </span>
+                <b>{t.symbol}</b>
+                <span className="sub">{t.market}</span>
+                <span className="tscore" style={{ color: t.score >= 0 ? "var(--pos)" : "var(--neg)" }}>
+                  {t.score >= 0 ? "+" : ""}{t.score.toFixed(3)}
+                </span>
+                <span className="sub">wt ≤ {(t.weight_suggestion * 100).toFixed(1)}%</span>
+                <div className="tchain">{t.chain}</div>
+                <div className="sub">invalidated by: {t.invalidation}</div>
+              </div>
+            ))}
+          </div>
+          <div className="sub" style={{ marginTop: 8 }}>
+            Decision support, not orders — the engine still trades through formula + risk + safety.
+            Feed convictions you agree with into your views.
+          </div>
+        </div>
+      )}
 
       {/* ---------- events: signal vs noise ---------- */}
       {events.length > 0 && (

@@ -22,7 +22,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from ai_investing.data.news import _call_llm, _extract_json
+from ai_investing.data.news import _call_llm, _extract_json, llm_ready
 
 EVENT_TYPES = ["monetary_policy", "fiscal_policy", "trade_policy", "regulation",
                "geopolitics", "earnings", "supply_chain", "commodity", "technology",
@@ -142,9 +142,12 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
     if not headlines:
         return []
     events: Optional[list[dict]] = None
-    if settings.llm_available:
+    if llm_ready(settings):
         node_ids = [n.id for n in graph.nodes.values() if n.type != "asset"]
-        raw = _call_llm(_prompt(headlines, node_ids), settings, max_tokens=3000, tier="smart")
+        # fast tier: this is the high-volume per-cycle job — locally that's the
+        # small qwen; the big model is reserved for the daily deep briefing
+        raw = _call_llm(_prompt(headlines, node_ids), settings, max_tokens=6000,
+                        tier="fast", json_mode=True)
         parsed = _extract_json(raw or "")
         if parsed and isinstance(parsed.get("events"), list):
             events = parsed["events"]

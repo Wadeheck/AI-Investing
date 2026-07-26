@@ -9,7 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 tmp = tempfile.mkdtemp()
 for var, name in [("BRAIN_GRAPH_PATH", "g"), ("BRAIN_REGIME_PATH", "r"),
                   ("BRAIN_SCENARIOS_PATH", "s"), ("BRAIN_STATE_PATH", "b"),
-                  ("BRAIN_MACRO_CACHE_PATH", "m"), ("BRAIN_FIELD_PATH", "f")]:
+                  ("BRAIN_MACRO_CACHE_PATH", "m"), ("BRAIN_FIELD_PATH", "f"),
+                  ("BRAIN_DB_PATH", "db"), ("BRAIN_FEED_CACHE_PATH", "fc"),
+                  ("BRAIN_ADVICE_PATH", "adv"), ("BRAIN_SENTIMENT_CACHE_PATH", "sc")]:
     os.environ[var] = os.path.join(tmp, name + ".json")
 
 from ai_investing.brain.events import corroboration, credibility, source_trust  # noqa: E402
@@ -191,6 +193,46 @@ def test_seed_merge_preserves_llm_edges():
     g2 = KnowledgeGraph.load(p)
     assert "tlt" in g2.nodes                              # new seed node merged in
     assert any(e.provenance == "llm" and e.dst == "sg_banks" for e in g2.edges)  # llm kept
+
+
+def test_store_dedupes_articles():
+    from ai_investing.brain.store import BrainStore
+    st = BrainStore(os.path.join(tmp, "dedupe.db"))
+    heads = [{"title": "Fed hikes rates by 25bps", "source": "reuters.com"},
+             {"title": "Oil surges on OPEC cut", "source": "oilprice.com"}]
+    fresh1, seen1 = st.filter_new(heads)
+    assert len(fresh1) == 2 and seen1 == 0
+    st.mark_digested(fresh1)
+    fresh2, seen2 = st.filter_new(heads)            # same stories again
+    assert len(fresh2) == 0 and seen2 == 2          # LLM never re-pays
+    # punctuation/case variants hash the same (normalized title)
+    fresh3, _ = st.filter_new([{"title": "FED HIKES RATES, by 25bps!", "source": "reuters.com"}])
+    assert len(fresh3) == 0
+    st.save_events([{"ts": "2026-07-26T00:00:00+00:00", "summary": "fed hike",
+                     "nodes": ["fed_rate"], "impulse": 0.3, "is_noise": False}])
+    assert st.stats()["events"] == 1 and len(st.recent_events(72)) <= 1
+    st.close()
+
+
+def test_adviser_ranks_and_explains():
+    from datetime import datetime, timezone
+    from ai_investing.brain import Brain
+    from ai_investing.brain.adviser import advise
+    s = Settings()
+    b = Brain(s)
+    # plant a field: chip controls up, semis down (as after a real shock)
+    b.field.activations = {"china_export_controls": 0.5, "semis": -0.3, "nvda": -0.2,
+                           "china_tech": -0.15, "tencent": -0.1}
+    b.field.updated = datetime.now(timezone.utc).isoformat()
+    a = advise(s, b, log=False)
+    assert a["trades"], "field this loud must produce advice"
+    syms = [t["symbol"] for t in a["trades"]]
+    assert "NVDA" in syms
+    nvda = next(t for t in a["trades"] if t["symbol"] == "NVDA")
+    assert nvda["direction"] == "short_or_avoid"
+    assert "→" in nvda["chain"]                     # causal chain present
+    assert nvda["rank"] >= 1 and nvda["weight_suggestion"] <= s.risk.max_position_weight
+    assert os.path.exists(s.brain.advice_path)      # persisted for the dashboard
 
 
 if __name__ == "__main__":

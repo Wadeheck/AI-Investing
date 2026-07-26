@@ -18,10 +18,11 @@ async function readJson(name: string): Promise<unknown | null> {
 }
 
 export async function GET() {
-  const [brain, graph, regime] = await Promise.all([
+  const [brain, graph, regime, advice] = await Promise.all([
     readJson("brain.json"),
     readJson("knowledge_graph.json"),
     readJson("macro_regime.json"),
+    readJson("advice.json"),
   ]);
-  return NextResponse.json({ brain, graph, regime });
+  return NextResponse.json({ brain, graph, regime, advice });
 }
