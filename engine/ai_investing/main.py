@@ -287,7 +287,20 @@ def main() -> None:
     parser.add_argument("--brain-nodes", action="store_true", help="list all knowledge-graph nodes")
     parser.add_argument("--advise", action="store_true", help="the top-10 trade list from the brain's field")
     parser.add_argument("--notify", action="store_true", help="with --advise: also send the list to Telegram")
+    parser.add_argument("--chat", action="store_true",
+                        help="two-way Telegram chat: discuss the brain/trades from your phone")
     args = parser.parse_args()
+
+    if args.chat:
+        if not (settings.alerts.telegram_bot_token and settings.alerts.telegram_chat_id):
+            print("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env first.")
+            return
+        from ai_investing.alerts.chat import ChatBot
+        try:
+            ChatBot(settings).run_forever()
+        except KeyboardInterrupt:
+            print("\nChat stopped.")
+        return
 
     if args.advise:
         _advise(notify=args.notify)

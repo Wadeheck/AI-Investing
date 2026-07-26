@@ -235,6 +235,33 @@ def test_adviser_ranks_and_explains():
     assert os.path.exists(s.brain.advice_path)      # persisted for the dashboard
 
 
+def test_chatbot_commands_offline():
+    import json
+    os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
+    os.environ["USER_VIEWS_PATH"] = os.path.join(tmp, "views.json")
+    os.environ["TELEGRAM_BOT_TOKEN"] = "t"
+    os.environ["TELEGRAM_CHAT_ID"] = "42"
+    from ai_investing.alerts.chat import ChatBot
+    s = Settings()
+    with open(s.brain.advice_path, "w") as fh:
+        json.dump({"mood": "measured", "conviction_multiplier": 0.7,
+                   "trades": [{"rank": 1, "symbol": "NVDA", "direction": "short_or_avoid",
+                               "score": -0.3, "weight_suggestion": 0.05,
+                               "chain": "chip controls ↑ → semis ↓ → NVDA ↓"}]}, fh)
+    bot = ChatBot(s)
+    assert "Top trades" in bot.handle("/advise") and "NVDA" in bot.handle("/advise")
+    assert "/advise" in bot.handle("/help")
+    out = bot.handle("/view NVDA=0.5")
+    assert "NVDA = +0.50" in out
+    from ai_investing.strategy import UserViews
+    assert UserViews.load(s.user_views_path).views.get("NVDA") == 0.5
+    assert "Blocked TSLA" in bot.handle("/block TSLA")
+    assert "Unblocked TSLA" in bot.handle("/unblock TSLA")
+    assert "equity" in bot.handle("/portfolio")
+    sim = bot.handle("/simulate PBOC cuts rates by 25bps")
+    assert "verdict" in sim
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):

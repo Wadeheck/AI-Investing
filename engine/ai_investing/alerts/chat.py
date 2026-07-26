@@ -1,0 +1,297 @@
+"""Two-way Telegram chat: discuss the brain, the book, and the trades from your phone.
+
+Run alongside the engine:   python3 -m ai_investing.main --chat
+
+Long-polls getUpdates (stdlib urllib, no SDK) and answers ONLY the configured
+TELEGRAM_CHAT_ID — anyone else messaging the bot is ignored. Commands are handled
+locally from the engine's state files (free, instant); free-form questions go to
+the LLM (local Qwen first) with a compact snapshot of the brain, the advice list,
+and the portfolio as context, so the answers are about YOUR system, not generic
+market chat.
+
+The chat can *read* everything but can *write* only through the sanctioned
+user-input overlay (views/stance/blocklist) — the same one the dashboard uses.
+It cannot place orders, change risk limits, or touch safety settings.
+"""
+from __future__ import annotations
+
+import json
+import os
+import urllib.parse
+import urllib.request
+
+HELP = """*AI-Investing chat* — talk to your engine.
+
+/advise — the current top-10 trade list, with reasons
+/brain — regime, emotions, mood, what's ringing in the field
+/portfolio — equity, positions, you-vs-formula
+/news — what was digested recently (signal vs noise)
+/simulate <headline> — ripple a hypothetical through the graph
+/view SYM=0.5 — set your tilt on an asset (-1..1)
+/block SYM · /unblock SYM — never / again trade a symbol
+/stance aggressive|normal|cautious|defensive|cash
+/help — this menu
+
+Anything else: just ask in plain words — I'll answer from the
+brain's current state (local model, free)."""
+
+_SYSTEM = """You are the user's own trading engine ("the brain") chatting on Telegram.
+Answer in plain, friendly language, 2-6 short sentences, no headers. Ground every
+answer in the CONTEXT below — it is your actual current state. If asked something
+the context can't answer, say so honestly. Never invent prices or news. You give
+decision support from your own analysis, and always note the user decides; you
+cannot place orders from chat.
+
+CONTEXT:
+{context}
+
+USER: {question}"""
+
+
+class ChatBot:
+    def __init__(self, settings):
+        self.settings = settings
+        self.token = settings.alerts.telegram_bot_token
+        self.chat_id = str(settings.alerts.telegram_chat_id)
+        self.data_dir = os.path.dirname(os.path.abspath(settings.state_path))
+        self.offset_path = os.path.join(self.data_dir, "chat_state.json")
+        self.offset = self._load_offset()
+        self.history: list[tuple[str, str]] = []   # (user, bot) turns, this run only
+
+    # -- telegram plumbing ----------------------------------------------------
+    def _api(self, method: str, params: dict, timeout: int = 60) -> dict:
+        url = f"https://api.telegram.org/bot{self.token}/{method}"
+        data = urllib.parse.urlencode(params).encode()
+        req = urllib.request.Request(url, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+
+    def _send(self, text: str) -> None:
+        for chunk in [text[i:i + 3900] for i in range(0, max(1, len(text)), 3900)]:
+            try:
+                self._api("sendMessage", {"chat_id": self.chat_id, "text": chunk,
+                                          "parse_mode": "Markdown",
+                                          "disable_web_page_preview": "true"}, timeout=15)
+            except Exception:
+                # markdown can 400 on odd characters — retry plain
+                try:
+                    self._api("sendMessage", {"chat_id": self.chat_id, "text": chunk}, timeout=15)
+                except Exception:
+                    pass
+
+    def _load_offset(self) -> int:
+        try:
+            with open(self.offset_path) as fh:
+                return int(json.load(fh).get("offset", 0))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return 0
+
+    def _save_offset(self) -> None:
+        try:
+            with open(self.offset_path, "w") as fh:
+                json.dump({"offset": self.offset}, fh)
+        except OSError:
+            pass
+
+    # -- state readers ----------------------------------------------------------
+    def _read(self, name: str) -> dict:
+        paths = {"brain.json": self.settings.brain.state_path,
+                 "advice.json": self.settings.brain.advice_path,
+                 "state.json": self.settings.state_path}
+        try:
+            with open(paths.get(name, os.path.join(self.data_dir, name))) as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _context(self) -> str:
+        """Compact snapshot the LLM answers from."""
+        brain = self._read("brain.json")
+        advice = self._read("advice.json")
+        state = self._read("state.json")
+        reg = brain.get("regime", {})
+        lab = reg.get("labels", {})
+        parts = [
+            f"Regime: risk {lab.get('risk_appetite')}, rates {lab.get('rate_trajectory')}, "
+            f"USD {lab.get('dollar_trend')}, inflation {lab.get('inflation_trend')}, "
+            f"china {lab.get('china_stance')}; tension {reg.get('geopolitical_tension')}, "
+            f"stability {reg.get('stability')}, fragility {reg.get('fragility')}",
+            f"Crowd emotion: {reg.get('emotion_label')} (fear {reg.get('fear')}, greed {reg.get('greed')}); "
+            f"my mood: {reg.get('mood_label')} (confidence {reg.get('mood_confidence')}, "
+            f"caution {reg.get('mood_caution')})",
+            "Strongest field activations: " + ", ".join(
+                f"{k} {v:+.2f}" for k, v in list(brain.get("activations", {}).items())[:10]),
+            "Delayed effects queued: " + ("; ".join(
+                f"{p.get('via')}->{p.get('node')} {p.get('contribution'):+.2f} due {str(p.get('due'))[:10]}"
+                for p in brain.get("pending_effects", [])[:5]) or "none"),
+            "Recent events: " + ("; ".join(
+                f"[{'NOISE' if e.get('is_noise') else 'signal'}] {e.get('summary','')[:90]}"
+                for e in brain.get("events", [])[:8]) or "none this cycle"),
+            "Top trades: " + ("; ".join(
+                f"#{t['rank']} {t['direction']} {t['symbol']} ({t['score']:+.2f}) because {t['chain']}"
+                for t in (advice.get("trades") or [])[:10]) or "none clear the bar"),
+            f"Portfolio: equity ${state.get('equity', 0):,.0f}, cash ${state.get('cash', 0):,.0f}, "
+            f"positions: " + (", ".join(
+                f"{p['symbol']} {p['qty']:+.3f} (pnl ${p['pnl']:,.0f})"
+                for p in state.get("positions", [])[:12]) or "none"),
+            f"You-vs-formula: {json.dumps({k: v for k, v in (state.get('comparison') or {}).items() if k != 'assets'})}",
+        ]
+        if self.history:
+            parts.append("Recent chat: " + " | ".join(f"U:{u[:60]} ME:{b[:60]}"
+                                                      for u, b in self.history[-3:]))
+        return "\n".join(parts)
+
+    # -- command handlers ---------------------------------------------------------
+    def handle(self, text: str) -> str:
+        text = text.strip()
+        low = text.lower()
+        if low in ("/start", "/help", "help"):
+            return HELP
+        if low.startswith("/advise"):
+            return self._fmt_advice()
+        if low.startswith("/brain"):
+            return self._fmt_brain()
+        if low.startswith("/portfolio") or low.startswith("/pnl"):
+            return self._fmt_portfolio()
+        if low.startswith("/news"):
+            return self._fmt_news()
+        if low.startswith("/simulate"):
+            headline = text[len("/simulate"):].strip()
+            return self._fmt_simulate(headline) if headline else "Give me a headline: /simulate PBOC cuts rates"
+        if low.startswith(("/view", "/block", "/unblock", "/stance")):
+            return self._apply_view(text)
+        return self._ask_llm(text)
+
+    def _fmt_advice(self) -> str:
+        a = self._read("advice.json")
+        trades = a.get("trades") or []
+        if not trades:
+            return "Nothing clears the bar right now — the field is quiet. That IS the advice."
+        lines = [f"🧠 *Top trades* (mood {a.get('mood')}, conviction ×{a.get('conviction_multiplier')})"]
+        for t in trades:
+            d = "🟩 LONG" if t["direction"] == "long" else "🟥 SHORT/AVOID"
+            lines.append(f"*#{t['rank']}* {d} *{t['symbol']}* ({t['score']:+.2f}, wt≤{t['weight_suggestion']:.0%})\n"
+                         f"   _{t['chain']}_")
+        lines.append("_Decision support — reply /view SYM=0.5 to act on one._")
+        return "\n".join(lines)
+
+    def _fmt_brain(self) -> str:
+        b = self._read("brain.json")
+        reg = b.get("regime", {})
+        lab = reg.get("labels", {})
+        act = ", ".join(f"{k} {v:+.2f}" for k, v in list(b.get("activations", {}).items())[:6])
+        fired = "; ".join(s.get("implication", "") for s in b.get("scenarios_fired", [])) or "none"
+        return (f"🌍 *World*: risk {lab.get('risk_appetite')}, rates {lab.get('rate_trajectory')}, "
+                f"USD {lab.get('dollar_trend')}, china {lab.get('china_stance')}\n"
+                f"😨 crowd: {reg.get('emotion_label')} (fear {reg.get('fear')}, greed {reg.get('greed')})\n"
+                f"🧠 my mood: *{reg.get('mood_label')}* — confidence {reg.get('mood_confidence')}, "
+                f"caution {reg.get('mood_caution')}\n"
+                f"📡 ringing now: {act or 'quiet'}\n"
+                f"🎯 scenarios fired: {fired}")
+
+    def _fmt_portfolio(self) -> str:
+        s = self._read("state.json")
+        comp = s.get("comparison") or {}
+        lines = [f"💼 equity *${s.get('equity', 0):,.0f}*  cash ${s.get('cash', 0):,.0f}  "
+                 f"({s.get('mode', '?')} mode)"]
+        for p in s.get("positions", [])[:15]:
+            lines.append(f"  {p['symbol']}: {p['qty']:+.4f} @ ${p['avg_price']:,.2f} "
+                         f"→ pnl ${p['pnl']:,.0f}")
+        if not s.get("positions"):
+            lines.append("  (no open positions)")
+        if comp:
+            lines.append(f"you vs formula-only: ${comp.get('input_value', 0):+,.0f}")
+        return "\n".join(lines)
+
+    def _fmt_news(self) -> str:
+        from ai_investing.brain.store import BrainStore
+        st = BrainStore(self.settings.brain.db_path)
+        evs = st.recent_events(24, signal_only=False)[:12]
+        stats = st.stats()
+        st.close()
+        if not evs:
+            return "No events digested in the last 24h."
+        lines = [f"📰 last 24h ({stats['articles']} articles remembered, digested once):"]
+        for e in evs:
+            tag = "🔇 NOISE" if e["is_noise"] else "📶"
+            lines.append(f"{tag} {e['summary'][:110]} _(cred {e['credibility']:.0%}, {e['emotion']})_")
+        return "\n".join(lines)
+
+    def _fmt_simulate(self, headline: str) -> str:
+        from ai_investing.brain import Brain
+        out = Brain(self.settings).simulate(headline)
+        ev = (out.get("events") or [{}])[0]
+        top = ", ".join(f"{k} {v:+.2f}" for k, v in list(out.get("impacts", {}).items())[:8])
+        assets = ", ".join(f"{k} {v['impact']:+.2f}" for k, v in out.get("asset_impacts", {}).items()) or "none"
+        verdict = "NOISE — I would not trade this" if ev.get("is_noise") else \
+            f"signal (credibility {ev.get('credibility', 0):.0%})"
+        return (f"🧪 *{headline}*\nverdict: {verdict}\nripple: {top or 'no node matched'}\n"
+                f"assets touched: {assets}")
+
+    def _apply_view(self, text: str) -> str:
+        from ai_investing.strategy import UserViews
+        from ai_investing.strategy import user_views as uv_mod
+        v = UserViews.load(self.settings.user_views_path)
+        parts = text.split()
+        cmd = parts[0].lower()
+        try:
+            if cmd == "/view" and len(parts) > 1 and "=" in parts[1]:
+                sym, _, val = parts[1].partition("=")
+                v.views[sym.upper()] = max(-1.0, min(1.0, float(val)))
+                msg = f"View set: {sym.upper()} = {v.views[sym.upper()]:+.2f}"
+            elif cmd == "/block" and len(parts) > 1:
+                if parts[1].upper() not in v.blocklist:
+                    v.blocklist.append(parts[1].upper())
+                msg = f"Blocked {parts[1].upper()} — any open position exits next cycle."
+            elif cmd == "/unblock" and len(parts) > 1:
+                if parts[1].upper() in v.blocklist:
+                    v.blocklist.remove(parts[1].upper())
+                msg = f"Unblocked {parts[1].upper()}."
+            elif cmd == "/stance" and len(parts) > 1 and parts[1].lower() in uv_mod.STANCE_MULT:
+                v.stance = parts[1].lower()
+                msg = f"Stance: {v.stance}."
+            else:
+                return "Format: /view NVDA=0.5 · /block SYM · /unblock SYM · /stance cautious"
+        except ValueError:
+            return "Couldn't parse that value. Example: /view NVDA=0.5"
+        v.save(self.settings.user_views_path)
+        return f"✅ {msg}\n_(applies from the next engine cycle; safety limits still override)_"
+
+    def _ask_llm(self, question: str) -> str:
+        from ai_investing.data.news import _call_llm, llm_ready
+        if not llm_ready(self.settings):
+            return "No LLM reachable right now (start Ollama or set an API key). Commands still work: /help"
+        prompt = _SYSTEM.format(context=self._context(), question=question[:500])
+        out = _call_llm(prompt, self.settings, max_tokens=700, tier="fast")
+        if not out:
+            return "Hmm, my model didn't answer — try again or use /help commands."
+        self.history.append((question, out))
+        self.history = self.history[-6:]
+        return out.strip()[:3900]
+
+    # -- the loop --------------------------------------------------------------------
+    def run_forever(self) -> None:
+        me = self._api("getMe", {}, timeout=10)
+        name = (me.get("result") or {}).get("username", "?")
+        print(f"Chat bot up as @{name} — talking only to chat {self.chat_id}. Ctrl-C to stop.")
+        self._send("🧠 Chat is live — ask me anything about the brain, the book, or the trades. /help")
+        while True:
+            try:
+                upd = self._api("getUpdates", {"offset": self.offset + 1, "timeout": 50}, timeout=60)
+            except Exception:
+                import time
+                time.sleep(5)
+                continue
+            for u in upd.get("result", []):
+                self.offset = max(self.offset, u.get("update_id", 0))
+                msg = u.get("message") or {}
+                text = (msg.get("text") or "").strip()
+                sender = str((msg.get("chat") or {}).get("id", ""))
+                if not text or sender != self.chat_id:
+                    continue   # strangers and non-text are ignored silently
+                print(f"  [chat] {text[:80]}")
+                try:
+                    self._send(self.handle(text))
+                except Exception as exc:
+                    self._send(f"⚠️ that broke on my side: {type(exc).__name__}: {exc}")
+            self._save_offset()
