@@ -504,6 +504,71 @@ def test_strategist_stability_contract():
     assert {t["id"] for t in strat["theses"]} == {"ai-capex", "cn-banks"}
 
 
+def test_scorecard_judges_and_learns():
+    import json, sqlite3
+    from datetime import datetime, timedelta, timezone
+    d = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(d, "state.json")
+    from ai_investing.brain.scorecard import Scorecard, reliability_weights
+    s = Settings()
+    sc = Scorecard(s)
+    # an advice list issued 6 days ago: long NVDA (goes up = hit), long TSLA (drops = miss)
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+    sc.conn.execute("CREATE TABLE IF NOT EXISTS advice_log("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, advice TEXT)")
+    sc.conn.execute("INSERT INTO advice_log(ts, advice) VALUES(?,?)", (old_ts, json.dumps(
+        {"trades": [{"symbol": "NVDA", "direction": "long"},
+                    {"symbol": "TSLA", "direction": "long"},
+                    {"symbol": "KO", "direction": "long"}]})))
+    old_day = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=6)).date().isoformat()
+    sc.conn.executemany("INSERT INTO price_history VALUES(?,?,?)",
+                        [(old_day, "NVDA", 100.0), (old_day, "TSLA", 200.0), (old_day, "KO", 60.0)])
+    sc.snapshot_prices({"NVDA": 110.0, "TSLA": 180.0, "KO": 60.05})   # +10%, -10%, flat
+    outs = sc.score_due(horizon_days=5)
+    by = {o["symbol"]: o for o in outs}
+    assert by["NVDA"]["hit"] == 1 and by["TSLA"]["hit"] == 0
+    assert by["KO"]["hit"] is None                     # deadband: flat is not claimed
+    # outcomes are frozen: scoring again scores nothing new
+    assert sc.score_due(horizon_days=5) == []
+    # learning: hit raises trust, miss trims it, both bounded
+    notes = sc.update_reliability(outs)
+    rel = reliability_weights(s)
+    assert rel["NVDA"] > 1.0 > rel["TSLA"]
+    assert any("NVDA" in n for n in notes) and any("TSLA" in n for n in notes)
+    tr = sc.track_record()
+    assert tr["total"] == 2 and tr["hits"] == 1
+    sc.close()
+
+
+def test_bubble_indicator_flags_froth():
+    import json
+    d = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(d, "state.json")
+    from ai_investing.brain.bubble import bubble_scores, bubble_line
+    s = Settings()
+    with open(os.path.join(d, "knowledge_graph.json"), "w") as fh:
+        json.dump({"nodes": [
+            {"id": "ai_theme", "type": "theme", "label": "AI/datacenter"},
+            {"id": "nvda", "type": "asset", "label": "Nvidia", "symbol": "NVDA"},
+            {"id": "crwv", "type": "asset", "label": "CoreWeave", "symbol": "CRWV"},
+            {"id": "ko", "type": "asset", "label": "Coca-Cola", "symbol": "KO"}],
+            "edges": [{"src": "nvda", "dst": "ai_theme", "type": "member"},
+                      {"src": "crwv", "dst": "ai_theme", "type": "member"}]}, fh)
+    with open(os.path.join(d, "fundamentals.json"), "w") as fh:
+        json.dump({"NVDA": {"trailingPE": 150, "ts": 1}, "CRWV": {"trailingPE": 120, "ts": 1},
+                   "KO": {"trailingPE": 22, "ts": 1}}, fh)
+    with open(os.path.join(d, "brain.json"), "w") as fh:
+        json.dump({"activations": {"ai_theme": 0.5, "nvda": 0.4},
+                   "circular_financing": [{"investor": "nvda", "counterparty": "crwv"}]}, fh)
+    b = bubble_scores(s)
+    assert b["symbols"]["NVDA"] >= 0.55, b["symbols"]          # rich PE + circular + hot field
+    assert b["symbols"].get("KO", 0) < 0.2                     # sane multiple stays cool
+    assert b["clusters"] and b["clusters"][0]["name"] == "AI/datacenter"
+    assert "NVDA" in b["flagged"]
+    line = bubble_line(b, {"NVDA": "Nvidia"})
+    assert "Bubble watch" in line and "AI/datacenter" in line
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_") and callable(fn):

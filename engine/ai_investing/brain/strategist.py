@@ -108,6 +108,11 @@ def _gather_evidence(settings, brain_state: dict, labels: dict[str, str]) -> dic
                                 if isinstance(v, (int, float, str))}
     except Exception:
         pass
+    try:
+        from ai_investing.brain.bubble import bubble_scores
+        ev["bubble_watch"] = bubble_scores(settings).get("clusters", [])
+    except Exception:
+        pass
     return ev
 
 
@@ -239,7 +244,9 @@ _TAG_EMOJI = {"bull": "🐂", "bear": "🐻", "steady": "➖"}
 _STANCE = {"long": "🟩 BUY/HOLD", "short": "🟥 BET AGAINST", "avoid": "⛔ STAY AWAY"}
 
 
-def compose_overview(strat: dict, evidence: dict, briefing: str) -> str:
+def compose_overview(strat: dict, evidence: dict, briefing: str,
+                     bubble: str = "", track: dict | None = None,
+                     learn_notes: list[str] | None = None) -> str:
     day = _today_sgt()
     lines = [f"🌅 *Daily overview — {day}*"]
     if briefing:
@@ -249,6 +256,15 @@ def compose_overview(strat: dict, evidence: dict, briefing: str) -> str:
         lines.append("\n*What caught my attention* (strongest ripples in my map):")
         for r in ripples:
             lines.append(f"{_TAG_EMOJI[r['tag']]} {r['label']} ({r['value']:+.2f})")
+    if bubble:
+        lines.append(f"\n{bubble}")
+    if track and track.get("total"):
+        lines.append(f"\n📊 *Track record* (30d, calls ≥5 days old): "
+                     f"{track['hits']}/{track['total']} right ({track['hit_rate']:.0%})"
+                     + (f" · best: {track['best']}" if track.get("best") else "")
+                     + (f" · worst: {track['worst']}" if track.get("worst") else ""))
+    if learn_notes:
+        lines.append("🧪 *Learned today:* " + "; ".join(learn_notes[:4]))
     rev30 = [c for c in strat.get("revisions", [])
              if c.get("date", "") >= (datetime.fromisoformat(day) - timedelta(days=30)).date().isoformat()]
     lines.append(f"\n*My 6-month strategy* — unchanged for {strat.get('days_unchanged', 0)} day(s), "
@@ -280,7 +296,8 @@ def compose_ideas(advice: dict, labels: dict[str, str]) -> str:
 
 # ------------------------------------------------------------------- entry --
 def maybe_daily_overview(settings, brain_state: dict, briefing: str,
-                         notifier, llm=None) -> bool:
+                         notifier, llm=None, track: dict | None = None,
+                         learn_notes: list[str] | None = None) -> bool:
     """Runs at most once per SGT day. Returns True if the overview was sent."""
     strat = load_strategy(settings)
     if strat.get("last_overview") == _today_sgt():
@@ -290,7 +307,12 @@ def maybe_daily_overview(settings, brain_state: dict, briefing: str,
     strat = challenge_strategy(settings, strat, evidence, llm=llm)
     strat["last_overview"] = _today_sgt()
     save_strategy(settings, strat)
-    notifier.send(compose_overview(strat, evidence, briefing))
+    try:
+        from ai_investing.brain.bubble import bubble_line, bubble_scores
+        bub = bubble_line(bubble_scores(settings), labels)
+    except Exception:
+        bub = ""
+    notifier.send(compose_overview(strat, evidence, briefing, bub, track, learn_notes))
     notifier.send(compose_ideas(brain_state.get("advice") or {}, labels))
     print(f"  [strategist] daily overview sent — {strat.get('challenge_note', '')}")
     return True

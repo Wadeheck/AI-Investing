@@ -113,6 +113,16 @@ def advise(settings, brain, log: bool = True) -> dict:
         in_loop.add(loop["investor"])
         in_loop.add(loop["counterparty"])
 
+    # learned trust: symbols where past field-driven calls kept missing get
+    # listened to less (scorecard EMA, r ∈ [0.5, 1.4]); bubble froth haircuts longs
+    from ai_investing.brain.scorecard import reliability_weights
+    from ai_investing.brain.bubble import bubble_scores
+    rel = reliability_weights(settings)
+    try:
+        froth = bubble_scores(settings).get("symbols", {})
+    except Exception:
+        froth = {}
+
     rows = []
     symbols = set(asset_impacts) | set(boosts) | set(formula)
     for sym in symbols:
@@ -120,7 +130,7 @@ def advise(settings, brain, log: bool = True) -> dict:
         if node is None or node.type != "asset":
             continue
         impact = asset_impacts.get(sym, {}).get("impact", 0.0)
-        score = W_FIELD * impact
+        score = W_FIELD * impact * rel.get(sym, 1.0)
         score += W_FORMULA * formula.get(sym, 0.0)
         score += W_SCENARIO * boosts.get(sym, 0.0)
         if risk_off:
@@ -135,6 +145,9 @@ def advise(settings, brain, log: bool = True) -> dict:
         circular = node.id in in_loop
         if circular and score > 0:
             score *= 0.6    # 40% haircut on long conviction inside a financing circle
+        b = froth.get(sym, 0.0)
+        if b >= 0.4 and score > 0:
+            score *= max(0.4, 1.0 - 0.6 * b)   # don't chase what already smells like a bubble
         score *= mood_mult
         if abs(score) < MIN_SCORE:
             continue

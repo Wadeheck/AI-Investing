@@ -152,17 +152,33 @@ class Runner:
         # Once a day (SGT): plain-language overview — strongest ripples, the
         # standing 6-month strategy (challenged, not rewritten), then the ideas.
         if context.get("brain"):
+            px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+            # scorecard: snapshot prices, judge every call ≥5 days old, learn
+            track = learn_notes = None
+            try:
+                from ai_investing.brain.scorecard import Scorecard
+                sc = Scorecard(self.settings)
+                sc.snapshot_prices(px_by_sym)
+                outcomes = sc.score_due()
+                learn_notes = sc.update_reliability(outcomes)
+                track = sc.track_record()
+                sc.close()
+                if outcomes:
+                    print(f"  [scorecard] judged {len(outcomes)} past calls; "
+                          f"30d hit-rate {track.get('hit_rate')}")
+            except Exception as exc:
+                print(f"  [scorecard] skipped: {type(exc).__name__}: {exc}")
             try:
                 from ai_investing.brain.strategist import maybe_daily_overview
                 maybe_daily_overview(self.settings, context["brain"],
-                                     context.get("briefing", ""), self.notifier)
+                                     context.get("briefing", ""), self.notifier,
+                                     track=track, learn_notes=learn_notes)
             except Exception as exc:
                 print(f"  [strategist] skipped: {type(exc).__name__}: {exc}")
             # the 🏛 investing book: express the 6-month theses (daily, gated inside)
             try:
                 from ai_investing.brain.strategist import load_strategy, _labels
                 from ai_investing.strategy.investor import Investor
-                px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
                 Investor(self.settings).daily_manage(
                     px_by_sym, load_strategy(self.settings), self.notifier,
                     _labels(self.settings))

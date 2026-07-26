@@ -83,6 +83,13 @@ class ProposalBook:
         proposals = self._load()
         proposals.append(p)
         self._save(proposals)
+        # append-only history: every proposal ever made survives for the scorecard
+        try:
+            log = os.path.join(os.path.dirname(os.path.abspath(self.path)), "proposal_log.jsonl")
+            with open(log, "a") as fh:
+                fh.write(json.dumps(p) + "\n")
+        except OSError:
+            pass
         return p
 
     def decide(self, pid: str, approved: bool) -> dict | None:
