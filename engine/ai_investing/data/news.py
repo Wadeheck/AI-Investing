@@ -275,7 +275,13 @@ HEADLINES:
 
 Return ONLY a JSON object, no prose, with this exact shape:
 {{
-  "briefing": "<=120 words on the most important global market-moving developments right now",
+  "briefing": "<=120 words on the most important MARKET-MOVING developments right now.
+HARD RULES: every sentence must name a market consequence (an asset class, sector,
+commodity, rate, or currency that moves). Dramatic-but-untradable stories — disasters,
+accidents, human tragedy, sports, culture — are EXCLUDED unless there is a concrete
+market channel (e.g. a supply disruption to a traded commodity), in which case lead
+with the market channel, not the drama. NEVER write 'this has no market implications';
+if it has none, it does not belong here at all. Order by market impact, biggest first.",
   "assets": {{
     "<TICKER>": {{
       "score": <number -1..1, net news sentiment>,
