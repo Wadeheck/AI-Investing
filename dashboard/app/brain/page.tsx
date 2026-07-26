@@ -277,13 +277,14 @@ export default function BrainPage() {
               const hot = trace.find(
                 (t) => (t.from === e.src && t.to === e.dst) || (t.from === e.dst && t.to === e.src)
               );
+              const w = e.weight ?? 0.5;
               return (
                 <line
                   key={i}
                   x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                   stroke={hot ? (hot.contribution >= 0 ? "var(--pos)" : "var(--neg)") : "var(--axis)"}
-                  strokeWidth={hot ? 2.2 : 0.7}
-                  strokeOpacity={hot ? 0.95 : 0.35}
+                  strokeWidth={hot ? 2.4 : 0.3 + w * 1.4}
+                  strokeOpacity={hot ? 0.95 : 0.2 + w * 0.3}
                   strokeDasharray={e.provenance === "llm" ? "4 3" : undefined}
                 />
               );
@@ -293,7 +294,8 @@ export default function BrainPage() {
               if (!p) return null;
               const imp = visibleImpacts[n.id] ?? 0;
               const mag = Math.min(1, Math.abs(imp));
-              const baseR = (TYPE_R[n.type] ?? 8) + (centrality[n.id] ?? 0) * 5; // systemic nodes render bigger
+              // influence = size: systemically central nodes render visually heavier
+              const baseR = (TYPE_R[n.type] ?? 8) + (centrality[n.id] ?? 0) * 10;
               const r = baseR + mag * 14;
               const impColor = imp > 0 ? "var(--pos)" : "var(--neg)";
               return (
@@ -325,6 +327,13 @@ export default function BrainPage() {
           {selNode && (
             <div className="nodecard">
               <b>{selNode.label}</b> <span className="sub">({selNode.type}{selNode.symbol ? ` · ${selNode.symbol} · ${selNode.market}` : ""})</span>
+              <div className="sub">
+                charge now: <b style={{ color: (impacts[selNode.id] ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" }}>
+                  {(impacts[selNode.id] ?? 0) >= 0 ? "+" : ""}{(impacts[selNode.id] ?? 0).toFixed(3)}
+                </b>
+                {" "}· systemic influence: {((centrality[selNode.id] ?? 0) * 100).toFixed(0)}/100
+                {active?.ts ? ` · field updated ${active.ts.slice(0, 16)}Z` : ""}
+              </div>
               {selNode.equilibrium && <div className="sub">stable point: {selNode.equilibrium}</div>}
               <div className="edgelist">
                 {selEdges.map((e, i) => (
