@@ -133,13 +133,29 @@ def digest() -> None:
     t0 = time.time()
     with IMPULSES.open("a") as fh:
         for i, r in enumerate(rows):
-            evs = events_mod.extract_events(r["headlines"][:20], g, settings)
+            try:
+                evs = events_mod.extract_events(r["headlines"][:20], g, settings)
+            except Exception as exc:
+                print(f"[digest] {r['date']} extract failed ({type(exc).__name__}) — skipping day",
+                      flush=True)
+                evs = []
             imp: dict[str, float] = {}
             for ev in evs:
                 if ev.get("is_noise"):
                     continue
-                for node in ev.get("nodes", []):
-                    imp[node] = max(imp.get(node, 0.0), ev.get("impulse", 0.0), key=abs)
+                val = ev.get("impulse", 0.0)
+                if isinstance(val, list):                 # small models improvise shapes
+                    val = val[0] if val else 0.0
+                try:
+                    val = max(-1.0, min(1.0, float(val)))
+                except (TypeError, ValueError):
+                    continue
+                nodes = ev.get("nodes") or []
+                if isinstance(nodes, str):
+                    nodes = [nodes]
+                for node in nodes:
+                    if isinstance(node, str):
+                        imp[node] = max(imp.get(node, 0.0), val, key=abs)
             fh.write(json.dumps({"date": r["date"], "impulses": imp,
                                  "events": len(evs)}) + "\n")
             fh.flush()
