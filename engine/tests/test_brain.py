@@ -386,6 +386,35 @@ def test_circular_financing_detection_and_haircut():
     assert any(t.get("circular_financing") for t in a["trades"] if t["symbol"] in ("NVDA", "CRWV"))
 
 
+def test_treasury_japan_korea_web():
+    g = KnowledgeGraph.seeded()
+    # US fiscal stress: yields up, TLT down, gold up WITH yields (fiscal signature),
+    # risk assets down — all from one bond_stress shock
+    i, _, _ = g.propagate({"bond_stress": 0.6}, max_hops=4)
+    a = g.asset_impacts(i)
+    assert i["us_10y_yield"] > 0 and a.get("TLT", {}).get("impact", 0) < 0
+    assert a.get("GLD", {}).get("impact", 0) > 0
+    assert i.get("risk_appetite", 0) < 0
+    # Japan debt stress: carry unwind AND US Treasury repatriation channel
+    i2, _, _ = g.propagate({"japan_debt": 0.6}, max_hops=4)
+    assert i2["yen_carry"] > 0 and i2["us_10y_yield"] > 0
+    assert i2.get("risk_appetite", 0) < 0
+    # A Korean market crash reaches Samsung, SK Hynix, EWY — and touches the
+    # NVDA supply chain through the memory makers
+    i3, _, _ = g.propagate({"korea_equities": -0.6})
+    a3 = g.asset_impacts(i3)
+    for sym in ("005930.KS", "000660.KS", "EWY"):
+        assert a3.get(sym, {}).get("impact", 0) < 0
+    assert a3.get("NVDA", {}).get("impact", 0) < 0
+    # And the reverse: an AI-capex boom amplifies through Korea (the 2025 pattern)
+    i4, _, _ = g.propagate({"ai_capex_cycle": 0.6}, max_hops=4)
+    assert g.asset_impacts(i4).get("EWY", {}).get("impact", 0) > 0
+    # China growth is now explicit: stimulus -> growth -> copper AND Korea
+    i5, _, _ = g.propagate({"china_stimulus": 0.6}, max_hops=4)
+    assert i5.get("china_growth", 0) > 0 and i5.get("korea_growth", 0) > 0
+    assert i5.get("copper_price", 0) > 0
+
+
 def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
