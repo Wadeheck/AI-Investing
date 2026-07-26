@@ -121,6 +121,11 @@ class Investor:
 
         # 3) propose entries for theses not yet expressed — one message per stock.
         # Budget-aware: never queue more buying than the pot's cash can honor.
+        from ai_investing.execution.explain import graph_map_notes
+        map_notes = graph_map_notes(
+            self.settings,
+            [(s, "buy" if t["stance"] == "long" else "sell") for s, t in want.items()
+             if not self._held(s)])
         equity = self._equity(prices_by_symbol)
         budget = self.broker.get_cash()
         for p in book.pending():                          # cash already spoken for
@@ -161,6 +166,8 @@ class Investor:
                                                 f"earnings. A 6-month hold here needs conviction.")
                 except Exception:
                     pass
+            if map_notes.get(sym):
+                extra["map_note"] = map_notes[sym]
             p = book.propose(sym, side, qty, px, f"thesis: {t.get('title', '')}", extra)
             notifier.send(
                 f"🏛 *Investing book — approval needed* (pretend money)\n\n"
@@ -169,6 +176,7 @@ class Investor:
                 f"📜 *Thesis “{t.get('title')}”:* {extra['why']}\n"
                 f"🤔 {extra['assumptions']}\n"
                 f"🗺 {extra['plan']}\n"
+                + (extra["map_note"] + "\n" if extra.get("map_note") else "")
                 + (extra["bubble_note"] if extra.get("bubble_note") else ""),
                 [[(f"✅ yes, {('buy' if side == 'buy' else 'short')} {sym}", f"ap:{p['id']}"),
                   ("❌ skip", f"rj:{p['id']}"),

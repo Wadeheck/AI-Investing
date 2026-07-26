@@ -386,6 +386,9 @@ class Runner:
                 extra["horizon"] = "short"
                 asked.append(book.propose(sym, o.side.value, o.qty, price, o.reason, extra))
         if asked:
+            from ai_investing.execution.explain import graph_map_notes
+            map_notes = graph_map_notes(self.settings,
+                                        [(p["symbol"], p["side"]) for p in asked])
             sent = True
             for p in asked:      # one message per stock — easy to answer one by one
                 verb = "Buy" if p["side"] == "buy" else "Bet against"
@@ -397,6 +400,7 @@ class Runner:
                     f"💡 *Why:* {p.get('why', p['reason'])}\n"
                     f"🤔 *This assumes:* {p.get('assumptions', 'the current picture holds')}\n"
                     f"🗺 *The plan:* {p.get('plan', 'hold while the reasons hold; automatic safety stop')}\n"
+                    + (f"{map_notes[p['symbol']]}\n" if map_notes.get(p["symbol"]) else "")
                     + (f"{p['bubble_note']}\n" if p.get("bubble_note") else "")
                     + f"_No answer = it quietly expires in {self.settings.approval_ttl_hours:g}h. "
                     f"Selling to protect you never waits for approval._")

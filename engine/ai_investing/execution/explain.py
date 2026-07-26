@@ -127,6 +127,36 @@ def explain_entry(settings, symbol: str, side: str, qty: float, price: float,
     return out
 
 
+def graph_map_notes(settings, sym_sides: list[tuple[str, str]]) -> dict[str, str]:
+    """For each (symbol, side): does the node web currently support, ignore, or
+    OPPOSE this trade? One Brain load per call; returns plain-language verdicts."""
+    try:
+        from ai_investing.brain import Brain
+        from ai_investing.brain.adviser import _chain
+        b = Brain(settings)
+        impacts = b.graph.asset_impacts(b.field.activations)
+        out: dict[str, str] = {}
+        for sym, side in sym_sides:
+            node = b.graph.node_for_symbol(sym)
+            if node is None:
+                continue
+            imp = impacts.get(sym, {}).get("impact", 0.0)
+            chain = _chain(b.graph, b.field.activations, node.id)
+            chain_s = " → ".join(chain) if len(chain) > 1 else ""
+            want = 1 if side == "buy" else -1
+            if abs(imp) < 0.05:
+                out[sym] = ("🕸 *Map check:* my node web is quiet on this one right now — "
+                            "the case rests on the thesis/valuations, not live ripples.")
+            elif imp * want > 0:
+                out[sym] = f"🕸 *Map check:* my node web agrees ({chain_s}; {imp:+.2f})."
+            else:
+                out[sym] = (f"⚠️ *Map conflict:* my node web currently leans the OTHER way "
+                            f"({chain_s}; {imp:+.2f}). Approve only if you accept that tension.")
+        return out
+    except Exception:
+        return {}
+
+
 def _llm_prose(settings, label, market, symbol, side, drivers, chain, events) -> tuple[str, str]:
     try:
         from ai_investing.data.news import _call_llm, llm_ready
