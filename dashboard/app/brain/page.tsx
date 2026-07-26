@@ -1,18 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import GraphField, { TYPE_COLOR } from "./GraphField";
+import type { Graph, TraceStep } from "./types";
 
 /* ---------- types mirroring the engine's JSON ---------- */
-type GNode = {
-  id: string; type: string; label: string; symbol?: string; market?: string;
-  equilibrium?: string; state?: string; aliases?: string[];
-};
-type GEdge = {
-  src: string; dst: string; type: string; sign?: number; weight?: number;
-  provenance?: string; note?: string;
-};
-type Graph = { nodes: GNode[]; edges: GEdge[] };
-type TraceStep = { from: string; to: string; edge_type: string; hop: number; contribution: number };
 type BrainEvent = {
   summary: string; source?: string; type?: string; nodes?: string[]; polarity?: number;
   magnitude?: number; credibility?: number; is_noise?: boolean; emotion?: string;
@@ -49,80 +41,6 @@ type BrainState = {
   centrality?: Record<string, number>;       // systemic importance, max=1
 };
 
-/* ---------- node visual encoding ---------- */
-const TYPE_COLOR: Record<string, string> = {
-  factor: "#8a63d2", commodity: "#b8860b", actor: "#d05c8c",
-  theme: "#2a78d6", sector: "#2a78d6", asset: "#1baf7a",
-};
-const TYPE_R: Record<string, number> = {
-  factor: 11, commodity: 10, actor: 10, theme: 9, sector: 9, asset: 7,
-};
-
-/* ---------- tiny force layout (no deps) ---------- */
-type P = { x: number; y: number; vx: number; vy: number };
-
-function useForceLayout(graph: Graph | null, w: number, h: number) {
-  const [pos, setPos] = useState<Record<string, P>>({});
-  const posRef = useRef<Record<string, P>>({});
-  useEffect(() => {
-    if (!graph) return;
-    const p: Record<string, P> = {};
-    const n = graph.nodes.length;
-    graph.nodes.forEach((nd, i) => {
-      const angle = (2 * Math.PI * i) / Math.max(1, n);
-      // start factors near center, assets on the rim — matches the field metaphor
-      const rBase = nd.type === "asset" ? 0.42 : nd.type === "theme" || nd.type === "sector" ? 0.28 : 0.15;
-      p[nd.id] = {
-        x: w / 2 + rBase * w * Math.cos(angle) + (i % 7) * 3,
-        y: h / 2 + rBase * h * Math.sin(angle) + (i % 5) * 3,
-        vx: 0, vy: 0,
-      };
-    });
-    posRef.current = p;
-    const edges = graph.edges.filter((e) => p[e.src] && p[e.dst]);
-    let tick = 0;
-    const id = setInterval(() => {
-      const cur = posRef.current;
-      const ids = Object.keys(cur);
-      // repulsion
-      for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          const a = cur[ids[i]], b = cur[ids[j]];
-          let dx = a.x - b.x, dy = a.y - b.y;
-          let d2 = dx * dx + dy * dy;
-          if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-          const f = 7000 / d2;
-          const d = Math.sqrt(d2);
-          a.vx += (dx / d) * f; a.vy += (dy / d) * f;
-          b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
-        }
-      }
-      // springs
-      for (const e of edges) {
-        const a = cur[e.src], b = cur[e.dst];
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const f = 0.008 * (d - 170) * (e.weight ?? 0.5);
-        a.vx += (dx / d) * f * d * 0.02; a.vy += (dy / d) * f * d * 0.02;
-        b.vx -= (dx / d) * f * d * 0.02; b.vy -= (dy / d) * f * d * 0.02;
-      }
-      // centering + integrate
-      for (const k of ids) {
-        const q = cur[k];
-        q.vx += (w / 2 - q.x) * 0.004; q.vy += (h / 2 - q.y) * 0.004;
-        q.vx *= 0.82; q.vy *= 0.82;
-        q.x = Math.max(40, Math.min(w - 40, q.x + q.vx));
-        q.y = Math.max(30, Math.min(h - 30, q.y + q.vy));
-      }
-      tick++;
-      setPos({ ...cur });
-      if (tick > 140) clearInterval(id);
-    }, 30);
-    return () => clearInterval(id);
-  }, [graph, w, h]);
-  return pos;
-}
-
 /* ---------- small UI bits ---------- */
 function Dial({ label, value, left, right }: { label: string; value: number; left: string; right: string }) {
   const pct = Math.round(((value + 1) / 2) * 100);
@@ -156,38 +74,6 @@ export default function BrainPage() {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [visibleHop, setVisibleHop] = useState(99);
-  // zoom & pan: k = scale, (tx, ty) = translation in view units
-  const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
-  const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-
-  const W = 1700, H = 1050;
-  const pos = useForceLayout(graph, W, H);
-
-  const onWheel = (e: React.WheelEvent) => {
-    const factor = Math.exp(-e.deltaY * 0.0012);
-    setView((v) => {
-      const k = Math.min(5, Math.max(0.5, v.k * factor));
-      if (!svgRef.current) return { ...v, k };
-      // zoom toward the cursor
-      const rect = svgRef.current.getBoundingClientRect();
-      const mx = ((e.clientX - rect.left) / rect.width) * W;
-      const my = ((e.clientY - rect.top) / rect.height) * H;
-      const wx = (mx - v.tx) / v.k, wy = (my - v.ty) / v.k;
-      return { k, tx: mx - wx * k, ty: my - wy * k };
-    });
-  };
-  const onMouseDown = (e: React.MouseEvent) => {
-    dragRef.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
-  };
-  const onMouseMove = (e: React.MouseEvent) => {
-    const d = dragRef.current;
-    if (!d || !svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const sx = W / rect.width, sy = H / rect.height;
-    setView((v) => ({ ...v, tx: d.tx + (e.clientX - d.x) * sx, ty: d.ty + (e.clientY - d.y) * sy }));
-  };
-  const endDrag = () => { dragRef.current = null; };
 
   const load = useCallback(async () => {
     try {
@@ -264,10 +150,6 @@ export default function BrainPage() {
     (a, b) => Math.abs(b[1].impact) - Math.abs(a[1].impact)
   );
   const pendingRows: Pending[] = sim ? sim.delayed_preview ?? [] : live?.pending_effects ?? [];
-  const selNode = selected && graph ? graph.nodes.find((n) => n.id === selected) : null;
-  const selEdges = selNode && graph
-    ? graph.edges.filter((e) => e.src === selNode.id || e.dst === selNode.id)
-    : [];
 
   return (
     <div className="wrap wrap-wide">
@@ -299,102 +181,22 @@ export default function BrainPage() {
 
       <div className="brain-grid">
         {/* ---------- the field ---------- */}
-        <div className="card">
-          <svg
-            ref={svgRef}
-            viewBox={`0 0 ${W} ${H}`}
-            className="field"
-            onWheel={onWheel}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={endDrag}
-            onMouseLeave={endDrag}
-            style={{ cursor: dragRef.current ? "grabbing" : "grab" }}
-          >
-            <g transform={`translate(${view.tx},${view.ty}) scale(${view.k})`}>
-            {graph?.edges.map((e, i) => {
-              const a = pos[e.src], b = pos[e.dst];
-              if (!a || !b) return null;
-              const hot = trace.find(
-                (t) => (t.from === e.src && t.to === e.dst) || (t.from === e.dst && t.to === e.src)
-              );
-              const w = e.weight ?? 0.5;
-              return (
-                <line
-                  key={i}
-                  x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                  stroke={hot ? (hot.contribution >= 0 ? "var(--pos)" : "var(--neg)") : "var(--axis)"}
-                  strokeWidth={hot ? 2.4 : 0.3 + w * 1.4}
-                  strokeOpacity={hot ? 0.95 : 0.2 + w * 0.3}
-                  strokeDasharray={e.provenance === "llm" ? "4 3" : undefined}
-                />
-              );
-            })}
-            {graph?.nodes.map((n) => {
-              const p = pos[n.id];
-              if (!p) return null;
-              const imp = visibleImpacts[n.id] ?? 0;
-              const mag = Math.min(1, Math.abs(imp));
-              // influence = size: systemically central nodes render visually heavier
-              const baseR = (TYPE_R[n.type] ?? 8) + (centrality[n.id] ?? 0) * 10;
-              const r = baseR + mag * 14;
-              const impColor = imp > 0 ? "var(--pos)" : "var(--neg)";
-              return (
-                <g key={n.id} onClick={() => setSelected(n.id === selected ? null : n.id)} style={{ cursor: "pointer" }}>
-                  {mag > 0.02 && (
-                    <circle cx={p.x} cy={p.y} r={r + 5} fill={impColor} opacity={0.18 + mag * 0.3} />
-                  )}
-                  <circle
-                    cx={p.x} cy={p.y} r={baseR}
-                    fill={TYPE_COLOR[n.type] ?? "#888"}
-                    stroke={selected === n.id ? "var(--ink)" : mag > 0.02 ? impColor : "var(--surface)"}
-                    strokeWidth={selected === n.id ? 2.5 : mag > 0.02 ? 2 : 1}
-                    opacity={0.92}
-                  />
-                  {(n.type !== "asset" || mag > 0.02 || selected === n.id || view.k > 1.6) && (
-                    <text x={p.x} y={p.y - baseR - 5} textAnchor="middle" className="nlabel">
-                      {n.label}{mag > 0.02 ? ` ${imp > 0 ? "+" : ""}${imp.toFixed(2)}` : ""}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-            </g>
-          </svg>
+        <div className="card card-field">
+          <GraphField
+            graph={graph}
+            impacts={visibleImpacts}
+            centrality={centrality}
+            trace={trace}
+            selected={selected}
+            onSelect={setSelected}
+            fieldTs={active?.ts}
+          />
           <div className="legend">
             {Object.entries(TYPE_COLOR).filter(([t]) => t !== "sector").map(([t, c]) => (
               <span key={t}><i style={{ background: c }} />{t}</span>
             ))}
             <span><i className="dash" />LLM-proposed edge</span>
-            <span className="sub">scroll to zoom · drag to pan · click a node for its wiring &amp; stable point</span>
-            {view.k !== 1 && (
-              <button className="resetview" onClick={() => setView({ k: 1, tx: 0, ty: 0 })}>
-                reset view
-              </button>
-            )}
           </div>
-          {selNode && (
-            <div className="nodecard">
-              <b>{selNode.label}</b> <span className="sub">({selNode.type}{selNode.symbol ? ` · ${selNode.symbol} · ${selNode.market}` : ""})</span>
-              <div className="sub">
-                charge now: <b style={{ color: (impacts[selNode.id] ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" }}>
-                  {(impacts[selNode.id] ?? 0) >= 0 ? "+" : ""}{(impacts[selNode.id] ?? 0).toFixed(3)}
-                </b>
-                {" "}· systemic influence: {((centrality[selNode.id] ?? 0) * 100).toFixed(0)}/100
-                {active?.ts ? ` · field updated ${active.ts.slice(0, 16)}Z` : ""}
-              </div>
-              {selNode.equilibrium && <div className="sub">stable point: {selNode.equilibrium}</div>}
-              <div className="edgelist">
-                {selEdges.map((e, i) => (
-                  <div key={i} className="sub">
-                    {e.src === selNode.id ? "→" : "←"} {e.src === selNode.id ? e.dst : e.src}
-                    {" "}({e.type}{(e.sign ?? 1) < 0 ? ", inverse" : ""}, w{(e.weight ?? 0.5).toFixed(1)}
-                    {e.provenance === "llm" ? ", llm-proposed" : ""}){e.note ? ` — ${e.note}` : ""}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* ---------- right rail ---------- */}
