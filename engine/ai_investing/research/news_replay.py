@@ -133,12 +133,18 @@ def digest() -> None:
     t0 = time.time()
     with IMPULSES.open("a") as fh:
         for i, r in enumerate(rows):
-            try:
-                evs = events_mod.extract_events(r["headlines"][:20], g, settings)
-            except Exception as exc:
-                print(f"[digest] {r['date']} extract failed ({type(exc).__name__}) — skipping day",
-                      flush=True)
-                evs = []
+            evs = []
+            for attempt in (1, 2):     # a zero-event day on 10+ headlines is almost
+                try:                   # always a failed call, not a quiet news day
+                    evs = events_mod.extract_events(r["headlines"][:20], g, settings)
+                except Exception as exc:
+                    print(f"[digest] {r['date']} extract failed ({type(exc).__name__})",
+                          flush=True)
+                    evs = []
+                if evs or len(r["headlines"]) < 8:
+                    break
+                print(f"[digest] {r['date']} returned 0 events from "
+                      f"{len(r['headlines'])} headlines — retrying", flush=True)
             imp: dict[str, float] = {}
             for ev in evs:
                 if ev.get("is_noise"):
