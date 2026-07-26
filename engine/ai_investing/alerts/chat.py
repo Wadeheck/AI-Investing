@@ -23,6 +23,7 @@ import urllib.request
 HELP = """*AI-Investing chat* — talk to your engine.
 
 /advise — the current top-10 trade list, with reasons
+/pending — entries waiting for your approve/skip
 /brain — regime, emotions, mood, what's ringing in the field
 /portfolio — equity, positions, you-vs-formula
 /news — what was digested recently (signal vs noise)
@@ -152,7 +153,8 @@ class ChatBot:
 
     # -- command handlers ---------------------------------------------------------
     MENU = [[("📊 advise", "c:/advise"), ("🧠 brain", "c:/brain")],
-            [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")]]
+            [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")],
+            [("⏳ pending approvals", "c:/pending")]]
 
     def handle(self, text: str) -> tuple[str, list | None]:
         """Returns (message, inline_buttons)."""
@@ -162,6 +164,8 @@ class ChatBot:
             return HELP, self.MENU
         if low.startswith("/advise"):
             return self._fmt_advice()
+        if low.startswith("/pending"):
+            return self._fmt_pending()
         if low.startswith("/brain"):
             return self._fmt_brain(), self.MENU
         if low.startswith("/portfolio") or low.startswith("/pnl"):
@@ -189,7 +193,36 @@ class ChatBot:
             return self._apply_view(f"/view {sym}={val}"), None
         if kind == "b":
             return self._apply_view(f"/block {rest}"), None
+        if kind in ("ap", "rj"):
+            return self._decide_proposal(rest, approved=(kind == "ap")), None
         return "That button confused me — try /help.", self.MENU
+
+    def _book(self):
+        from ai_investing.execution.approvals import ProposalBook
+        return ProposalBook(self.settings.proposals_path, self.settings.approval_ttl_hours)
+
+    def _decide_proposal(self, pid: str, approved: bool) -> str:
+        p = self._book().decide(pid, approved)
+        if p is None:
+            return "That proposal already expired or was decided — /pending shows what's live."
+        if approved:
+            return (f"✅ Approved: *{p['side'].upper()} {p['symbol']}*. "
+                    "Executes on the next engine cycle (sized fresh at market). "
+                    "_Risk & safety limits still cap it._")
+        return f"❌ Skipped {p['symbol']} — I won't re-ask until this idea expires."
+
+    def _fmt_pending(self) -> tuple[str, list | None]:
+        pend = self._book().pending()
+        if not pend:
+            return "Nothing waiting on you — no pending entry proposals.", self.MENU
+        lines = ["⏳ *Waiting for your call:*"]
+        buttons = []
+        for p in pend:
+            lines.append(f"• *{p['side'].upper()} {p['symbol']}* ~{p['qty']:g} @ ${p['price']:,.2f}\n"
+                         f"   _{p['reason'] or 'formula conviction'}_ · expires {p['expires'][:16]}Z")
+            buttons.append([(f"✅ {p['side']} {p['symbol']}", f"ap:{p['id']}"),
+                            ("❌ skip", f"rj:{p['id']}")])
+        return "\n".join(lines), buttons
 
     def _fmt_advice(self) -> tuple[str, list | None]:
         a = self._read("advice.json")

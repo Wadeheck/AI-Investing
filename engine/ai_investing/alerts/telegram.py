@@ -7,6 +7,7 @@ Without both, alerts silently no-op (NullNotifier).
 """
 from __future__ import annotations
 
+import json
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
@@ -16,14 +17,14 @@ class Notifier(ABC):
     enabled: bool = False
 
     @abstractmethod
-    def send(self, text: str) -> bool:
+    def send(self, text: str, buttons=None) -> bool:
         ...
 
 
 class NullNotifier(Notifier):
     enabled = False
 
-    def send(self, text: str) -> bool:  # no-op
+    def send(self, text: str, buttons=None) -> bool:  # no-op
         return False
 
 
@@ -33,16 +34,23 @@ class TelegramNotifier(Notifier):
         self.chat_id = chat_id
         self.enabled = bool(token) and bool(chat_id)
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> bool:
+        """buttons: rows of (label, callback_data) — the chat bot process
+        handles the resulting taps; this notifier only sends."""
         if not self.enabled:
             return False
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        data = urllib.parse.urlencode({
+        params = {
             "chat_id": self.chat_id,
             "text": text[:4000],
             "parse_mode": "Markdown",
             "disable_web_page_preview": "true",
-        }).encode()
+        }
+        if buttons:
+            params["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": lbl, "callback_data": data[:64]} for lbl, data in row]
+                for row in buttons]})
+        data = urllib.parse.urlencode(params).encode()
         try:
             req = urllib.request.Request(url, data=data, method="POST")
             with urllib.request.urlopen(req, timeout=10) as resp:

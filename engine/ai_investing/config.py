@@ -231,6 +231,10 @@ class Settings:
     ]))
     db_path: str = field(default_factory=lambda: _get("DB_PATH", str(PROJECT_ROOT / "data" / "journal.db")))
     state_path: str = field(default_factory=lambda: _get("STATE_PATH", str(PROJECT_ROOT / "data" / "state.json")))
+    # human-in-the-loop: new entries wait for your Telegram approval
+    trade_approval: bool = field(default_factory=lambda: _get_bool("TRADE_APPROVAL", False))
+    approval_ttl_hours: float = field(default_factory=lambda: float(_get("APPROVAL_TTL_HOURS", "12")))
+    proposals_path: str = field(default_factory=lambda: _get("PROPOSALS_PATH", str(PROJECT_ROOT / "data" / "proposals.json")))
     params_path: str = field(default_factory=lambda: _get("PARAMS_PATH", str(PROJECT_ROOT / "data" / "formula.json")))
     risk: RiskConfig = field(default_factory=RiskConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)

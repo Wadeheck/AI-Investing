@@ -187,9 +187,14 @@ class Runner:
             self.journal.record_decision(d)
 
         # 4) Size and open new positions — only if the breaker allows it.
+        # With TRADE_APPROVAL on, entries first go to you on Telegram and only
+        # execute once approved (exits above are never gated).
         if breaker.allow_new:
-            for o in self.risk.size_orders(decisions, portfolio, prices, equity,
-                                           market=self._stats, model=self.model):
+            entries = self.risk.size_orders(decisions, portfolio, prices, equity,
+                                            market=self._stats, model=self.model)
+            if self.settings.trade_approval:
+                entries = self._gate_entries(entries, prices)
+            for o in entries:
                 executed.append(self._execute(o, prices))
         elif breaker.reason:
             print(f"  (no new positions — {breaker.reason})")
@@ -313,6 +318,47 @@ class Runner:
                 "input_value": round(your_eq - formula_eq, 2), "assets": assets}
 
     # -- execution helpers --------------------------------------------------
+    def _gate_entries(self, entries: list[Order], prices: dict[str, float]) -> list[Order]:
+        """Human-in-the-loop: an entry executes only against a fresh approval.
+        Unseen entries become proposals pushed to Telegram with tap buttons;
+        pending/rejected ones wait silently until decided or expired."""
+        from ai_investing.execution.approvals import ProposalBook
+        book = ProposalBook(self.settings.proposals_path, self.settings.approval_ttl_hours)
+        book.prune()
+        allowed: list[Order] = []
+        asked: list[dict] = []
+        for o in entries:
+            sym = o.asset.symbol
+            p = book.get(sym, o.side.value)
+            if p and p["status"] == "approved":
+                book.consume(p["id"])          # one approval buys one entry
+                allowed.append(o)
+            elif p:                            # pending or rejected: wait, don't nag
+                continue
+            else:
+                asked.append(book.propose(sym, o.side.value, o.qty,
+                                          prices.get(o.asset.key, 0.0), o.reason))
+        if asked:
+            lines = ["🕹 *Approval needed* — I want to open these (paper), you decide:"]
+            buttons = []
+            for p in asked:
+                lines.append(f"• *{p['side'].upper()} {p['symbol']}* ~{p['qty']:g} @ ${p['price']:,.2f}\n"
+                             f"   _{p['reason'] or 'formula conviction'}_")
+                buttons.append([(f"✅ {p['side']} {p['symbol']}", f"ap:{p['id']}"),
+                                (f"❌ skip", f"rj:{p['id']}"),
+                                (f"🚫 never", f"b:{p['symbol']}")])
+            lines.append(f"_No answer = expires in {self.settings.approval_ttl_hours:g}h. "
+                         "Exits and safety never wait for approval._")
+            sent = self.notifier.send("\n".join(lines), buttons)
+            if not sent:
+                print("  !! TRADE_APPROVAL is on but Telegram is not configured — "
+                      f"{len(asked)} entries will wait unheard (set the bot up or unset TRADE_APPROVAL)")
+            print(f"  (awaiting your approval: {', '.join(p['symbol'] for p in asked)})")
+        waiting = [p["symbol"] for p in book.pending() if p["symbol"] not in {q["symbol"] for q in asked}]
+        if waiting:
+            print(f"  (still awaiting approval: {', '.join(waiting)})")
+        return allowed
+
     def _execute(self, order: Order, prices: dict[str, float], guard_slippage: bool = True) -> Order:
         cid = f"{self._run_id}-{self._cycles}-{order.asset.key}-{order.side.value}"
         if cid in self._submitted:

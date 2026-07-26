@@ -50,6 +50,36 @@ def test_place_stop_default_none():
     assert PaperBroker(10_000).place_stop(_asset(), Side.SELL, 5, 90.0) is None
 
 
+def test_proposal_book_lifecycle():
+    import tempfile, os
+    from ai_investing.execution.approvals import ProposalBook
+    path = os.path.join(tempfile.mkdtemp(), "proposals.json")
+    book = ProposalBook(path, ttl_hours=12)
+    # propose is idempotent per symbol+side while fresh
+    p1 = book.propose("NVDA", "buy", 3.0, 180.0, "momentum+field")
+    p2 = book.propose("NVDA", "buy", 4.0, 181.0, "different sizing, same idea")
+    assert p1["id"] == p2["id"] and p1["status"] == "pending"
+    assert [q["id"] for q in book.pending()] == [p1["id"]]
+    # a pending proposal blocks execution; approval enables exactly one entry
+    assert book.get("NVDA", "buy")["status"] == "pending"
+    assert book.decide("nope1234", True) is None          # unknown id
+    assert book.decide(p1["id"], True)["status"] == "approved"
+    assert book.decide(p1["id"], True) is None            # can't re-decide
+    assert book.get("NVDA", "buy")["status"] == "approved"
+    book.consume(p1["id"])
+    assert book.get("NVDA", "buy") is None                # consumed -> can re-propose
+    # rejection sticks (no nagging) until expiry
+    p3 = book.propose("TSLA", "sell", 1.0, 300.0)
+    book.decide(p3["id"], False)
+    assert book.get("TSLA", "sell")["status"] == "rejected"
+    assert book.pending() == []
+    # expired proposals vanish
+    expired = ProposalBook(path, ttl_hours=-1)
+    expired.propose("AAPL", "buy", 1.0, 200.0)
+    expired.prune()
+    assert expired.get("AAPL", "buy") is None
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
