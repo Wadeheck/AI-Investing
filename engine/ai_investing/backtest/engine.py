@@ -24,6 +24,7 @@ from ai_investing.signals.base import Signal
 from ai_investing.strategy.decision import DecisionEngine
 from ai_investing.strategy.market import build_market_stats
 from ai_investing.strategy.risk import RiskManager
+from ai_investing.strategy.user_views import UserViews
 
 
 @dataclass
@@ -72,7 +73,8 @@ class Backtester:
         return X, y
 
     def run(self, model: FormulaModel, assets: list[Asset], bars_by_key: dict[str, list[Bar]],
-            sim_start: int | None = None, sim_end: int | None = None, regime_gate=None) -> BacktestResult:
+            sim_start: int | None = None, sim_end: int | None = None, regime_gate=None,
+            user_views: UserViews | None = None) -> BacktestResult:
         aligned, length = self._aligned(bars_by_key)
         asset_by_key = {a.key: a for a in assets if a.key in aligned}
         keys = list(asset_by_key)
@@ -84,7 +86,7 @@ class Backtester:
 
         cfg = dataclasses.replace(self.risk_cfg, per_trade_stop_loss=model.stop_loss, take_profit=model.take_profit)
         broker = PaperBroker(self.starting_cash, allow_short=cfg.allow_short)
-        engine = DecisionEngine(self.signals, model=model)
+        engine = DecisionEngine(self.signals, model=model, user_views=user_views)
         risk = RiskManager(cfg, regime_gate=regime_gate)
         tracker = OutcomeTracker()
 

@@ -17,7 +17,9 @@ class CcxtBroker(BrokerAdapter):
     """Crypto execution via ccxt (Coinbase / Gemini / Binance / Kraken).
 
     Env: CRYPTO_API_KEY, CRYPTO_API_SECRET, CRYPTO_API_PASSWORD (Coinbase passphrase).
-    Test on the exchange sandbox (Gemini sandbox, Binance testnet) first.
+    When CRYPTO_SANDBOX=true, uses CRYPTO_SANDBOX_API_KEY/SECRET/PASSWORD instead
+    (sandbox accounts, e.g. exchange.sandbox.gemini.com, are separate from production
+    and issue their own keys - they don't work against the production ones above).
     """
 
     name = "ccxt"
@@ -27,13 +29,15 @@ class CcxtBroker(BrokerAdapter):
         import ccxt  # type: ignore
         self.settings = settings
         self.base = settings.base_currency
+        sandbox = getattr(settings, "crypto_sandbox", False)
+        prefix = "CRYPTO_SANDBOX_API_" if sandbox else "CRYPTO_API_"
         self.client = getattr(ccxt, settings.crypto_exchange)({
-            "apiKey": os.environ.get("CRYPTO_API_KEY", ""),
-            "secret": os.environ.get("CRYPTO_API_SECRET", ""),
-            "password": os.environ.get("CRYPTO_API_PASSWORD", ""),
+            "apiKey": os.environ.get(f"{prefix}KEY", ""),
+            "secret": os.environ.get(f"{prefix}SECRET", ""),
+            "password": os.environ.get(f"{prefix}PASSWORD", ""),
             "enableRateLimit": True,
         })
-        if getattr(settings, "crypto_sandbox", False):
+        if sandbox:
             try:
                 self.client.set_sandbox_mode(True)   # exchange testnet/sandbox (test first!)
             except Exception:
