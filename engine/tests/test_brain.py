@@ -220,6 +220,9 @@ def test_adviser_ranks_and_explains():
     from ai_investing.brain import Brain
     from ai_investing.brain.adviser import advise
     s = Settings()
+    # hermetic: don't let the live engine's per-symbol formula scores (state.json,
+    # sized by the user's watchlist) drown out the small field planted below
+    s.state_path = os.path.join(tempfile.mkdtemp(), "state.json")
     b = Brain(s)
     # plant a field: chip controls up, semis down (as after a real shock)
     b.field.activations = {"china_export_controls": 0.5, "semis": -0.3, "nvda": -0.2,
@@ -419,6 +422,7 @@ def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
     os.environ["USER_VIEWS_PATH"] = os.path.join(tmp, "views.json")
+    os.environ["BRAIN_ADVICE_PATH"] = os.path.join(tmp, "advice.json")  # never the live file
     os.environ["TELEGRAM_BOT_TOKEN"] = "t"
     os.environ["TELEGRAM_CHAT_ID"] = "42"
     from ai_investing.alerts.chat import ChatBot
@@ -429,17 +433,30 @@ def test_chatbot_commands_offline():
                                "score": -0.3, "weight_suggestion": 0.05,
                                "chain": "chip controls ↑ → semis ↓ → NVDA ↓"}]}, fh)
     bot = ChatBot(s)
-    assert "Top trades" in bot.handle("/advise") and "NVDA" in bot.handle("/advise")
-    assert "/advise" in bot.handle("/help")
-    out = bot.handle("/view NVDA=0.5")
+    advice_text, advice_btns = bot.handle("/advise")
+    assert "Top trades" in advice_text and "NVDA" in advice_text
+    # tap-to-act buttons on the strongest calls
+    flat = [data for row in advice_btns for _, data in row]
+    assert "v:NVDA:-0.4" in flat and "b:NVDA" in flat
+    help_text, menu = bot.handle("/help")
+    assert "/advise" in help_text and menu
+    out, _ = bot.handle("/view NVDA=0.5")
     assert "NVDA = +0.50" in out
     from ai_investing.strategy import UserViews
     assert UserViews.load(s.user_views_path).views.get("NVDA") == 0.5
-    assert "Blocked TSLA" in bot.handle("/block TSLA")
-    assert "Unblocked TSLA" in bot.handle("/unblock TSLA")
-    assert "equity" in bot.handle("/portfolio")
-    sim = bot.handle("/simulate PBOC cuts rates by 25bps")
+    # tapping a button routes through the same sanctioned overlay
+    out, _ = bot.handle_callback("v:NVDA:-0.4")
+    assert "NVDA = -0.40" in out
+    assert "Blocked TSLA" in bot.handle("/block TSLA")[0]
+    assert "Unblocked TSLA" in bot.handle("/unblock TSLA")[0]
+    assert "equity" in bot.handle("/portfolio")[0]
+    sim, _ = bot.handle("/simulate PBOC cuts rates by 25bps")
     assert "verdict" in sim
+    # conversation history survives a restart
+    bot.history.append(("what moved today?", "mostly the PBOC cut"))
+    bot._save_state()
+    bot2 = ChatBot(s)
+    assert ("what moved today?", "mostly the PBOC cut") in bot2.history
 
 
 if __name__ == "__main__":

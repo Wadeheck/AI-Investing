@@ -32,8 +32,9 @@ HELP = """*AI-Investing chat* — talk to your engine.
 /stance aggressive|normal|cautious|defensive|cash
 /help — this menu
 
-Anything else: just ask in plain words — I'll answer from the
-brain's current state (local model, free)."""
+Most replies come with tap buttons, so you rarely need to type
+commands. Anything else: just ask in plain words — I'll answer from
+the brain's current state (local model, free)."""
 
 _SYSTEM = """You are the user's own trading engine ("the brain") chatting on Telegram.
 Answer in plain, friendly language, 2-6 short sentences, no headers. Ground every
@@ -55,8 +56,7 @@ class ChatBot:
         self.chat_id = str(settings.alerts.telegram_chat_id)
         self.data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.offset_path = os.path.join(self.data_dir, "chat_state.json")
-        self.offset = self._load_offset()
-        self.history: list[tuple[str, str]] = []   # (user, bot) turns, this run only
+        self.offset, self.history = self._load_state()   # history survives restarts
 
     # -- telegram plumbing ----------------------------------------------------
     def _api(self, method: str, params: dict, timeout: int = 60) -> dict:
@@ -66,30 +66,39 @@ class ChatBot:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
 
-    def _send(self, text: str) -> None:
-        for chunk in [text[i:i + 3900] for i in range(0, max(1, len(text)), 3900)]:
+    def _send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> None:
+        """buttons: rows of (label, callback_data) rendered as tappable inline keys."""
+        chunks = [text[i:i + 3900] for i in range(0, max(1, len(text)), 3900)]
+        for i, chunk in enumerate(chunks):
+            params = {"chat_id": self.chat_id, "text": chunk,
+                      "parse_mode": "Markdown", "disable_web_page_preview": "true"}
+            if buttons and i == len(chunks) - 1:   # keyboard on the last chunk
+                params["reply_markup"] = json.dumps({"inline_keyboard": [
+                    [{"text": lbl, "callback_data": data[:64]} for lbl, data in row]
+                    for row in buttons]})
             try:
-                self._api("sendMessage", {"chat_id": self.chat_id, "text": chunk,
-                                          "parse_mode": "Markdown",
-                                          "disable_web_page_preview": "true"}, timeout=15)
+                self._api("sendMessage", params, timeout=15)
             except Exception:
                 # markdown can 400 on odd characters — retry plain
                 try:
-                    self._api("sendMessage", {"chat_id": self.chat_id, "text": chunk}, timeout=15)
+                    params["parse_mode"] = ""
+                    self._api("sendMessage", params, timeout=15)
                 except Exception:
                     pass
 
-    def _load_offset(self) -> int:
+    def _load_state(self) -> tuple[int, list[tuple[str, str]]]:
         try:
             with open(self.offset_path) as fh:
-                return int(json.load(fh).get("offset", 0))
+                st = json.load(fh)
+            return int(st.get("offset", 0)), [tuple(t) for t in st.get("history", [])][-12:]
         except (OSError, ValueError, json.JSONDecodeError):
-            return 0
+            return 0, []
 
-    def _save_offset(self) -> None:
+    def _save_state(self) -> None:
         try:
             with open(self.offset_path, "w") as fh:
-                json.dump({"offset": self.offset}, fh)
+                json.dump({"offset": self.offset,
+                           "history": [list(t) for t in self.history[-12:]]}, fh)
         except OSError:
             pass
 
@@ -142,38 +151,68 @@ class ChatBot:
         return "\n".join(parts)
 
     # -- command handlers ---------------------------------------------------------
-    def handle(self, text: str) -> str:
+    MENU = [[("📊 advise", "c:/advise"), ("🧠 brain", "c:/brain")],
+            [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")]]
+
+    def handle(self, text: str) -> tuple[str, list | None]:
+        """Returns (message, inline_buttons)."""
         text = text.strip()
         low = text.lower()
-        if low in ("/start", "/help", "help"):
-            return HELP
+        if low in ("/start", "/help", "help", "/menu"):
+            return HELP, self.MENU
         if low.startswith("/advise"):
             return self._fmt_advice()
         if low.startswith("/brain"):
-            return self._fmt_brain()
+            return self._fmt_brain(), self.MENU
         if low.startswith("/portfolio") or low.startswith("/pnl"):
-            return self._fmt_portfolio()
+            return self._fmt_portfolio(), self.MENU
         if low.startswith("/news"):
-            return self._fmt_news()
+            return self._fmt_news(), self.MENU
         if low.startswith("/simulate"):
             headline = text[len("/simulate"):].strip()
-            return self._fmt_simulate(headline) if headline else "Give me a headline: /simulate PBOC cuts rates"
+            return (self._fmt_simulate(headline) if headline
+                    else "Give me a headline: /simulate PBOC cuts rates"), None
         if low.startswith(("/view", "/block", "/unblock", "/stance")):
-            return self._apply_view(text)
-        return self._ask_llm(text)
+            return self._apply_view(text), None
+        return self._ask_llm(text), self.MENU
 
-    def _fmt_advice(self) -> str:
+    def handle_callback(self, data: str) -> tuple[str, list | None]:
+        """Route a tapped inline button. Data forms:
+        c:<command>  — run a chat command
+        v:SYM:VAL    — set a view tilt on SYM
+        b:SYM        — block SYM"""
+        kind, _, rest = data.partition(":")
+        if kind == "c" and rest.startswith("/"):
+            return self.handle(rest)
+        if kind == "v":
+            sym, _, val = rest.partition(":")
+            return self._apply_view(f"/view {sym}={val}"), None
+        if kind == "b":
+            return self._apply_view(f"/block {rest}"), None
+        return "That button confused me — try /help.", self.MENU
+
+    def _fmt_advice(self) -> tuple[str, list | None]:
         a = self._read("advice.json")
         trades = a.get("trades") or []
         if not trades:
-            return "Nothing clears the bar right now — the field is quiet. That IS the advice."
+            return ("Nothing clears the bar right now — the field is quiet. "
+                    "That IS the advice."), self.MENU
         lines = [f"🧠 *Top trades* (mood {a.get('mood')}, conviction ×{a.get('conviction_multiplier')})"]
+        buttons: list[list[tuple[str, str]]] = []
         for t in trades:
             d = "🟩 LONG" if t["direction"] == "long" else "🟥 SHORT/AVOID"
             lines.append(f"*#{t['rank']}* {d} *{t['symbol']}* ({t['score']:+.2f}, wt≤{t['weight_suggestion']:.0%})\n"
-                         f"   _{t['chain']}_")
-        lines.append("_Decision support — reply /view SYM=0.5 to act on one._")
-        return "\n".join(lines)
+                         f"   _{t['chain']}_\n"
+                         f"   ⛔ invalidated by: _{t.get('invalidation', '?')}_")
+        for t in trades[:4]:   # tap-to-act on the strongest calls
+            sym = t["symbol"]
+            tilt = "0.4" if t["direction"] == "long" else "-0.4"
+            arrow = "👍 agree" if t["direction"] == "long" else "👎 agree (avoid)"
+            buttons.append([(f"{arrow} {sym}", f"v:{sym}:{tilt}"),
+                            (f"🚫 never trade {sym}", f"b:{sym}")])
+        lines.append("_Tap to feed a view into sizing, or reply /view SYM=0.5. "
+                     "Views tilt the formula; risk & safety still cap everything._")
+        return "\n".join(lines), buttons
 
     def _fmt_brain(self) -> str:
         b = self._read("brain.json")
@@ -274,7 +313,8 @@ class ChatBot:
         me = self._api("getMe", {}, timeout=10)
         name = (me.get("result") or {}).get("username", "?")
         print(f"Chat bot up as @{name} — talking only to chat {self.chat_id}. Ctrl-C to stop.")
-        self._send("🧠 Chat is live — ask me anything about the brain, the book, or the trades. /help")
+        self._send("🧠 Chat is live — ask me anything about the brain, the book, or the trades.",
+                   self.MENU)
         while True:
             try:
                 upd = self._api("getUpdates", {"offset": self.offset + 1, "timeout": 50}, timeout=60)
@@ -284,6 +324,25 @@ class ChatBot:
                 continue
             for u in upd.get("result", []):
                 self.offset = max(self.offset, u.get("update_id", 0))
+                # tapped inline button
+                cb = u.get("callback_query") or {}
+                if cb:
+                    sender = str((cb.get("from") or {}).get("id", ""))
+                    data = (cb.get("data") or "")[:64]
+                    try:
+                        self._api("answerCallbackQuery", {"callback_query_id": cb.get("id", "")},
+                                  timeout=10)
+                    except Exception:
+                        pass
+                    if sender != self.chat_id or not data:
+                        continue
+                    print(f"  [chat:tap] {data}")
+                    try:
+                        reply, btns = self.handle_callback(data)
+                        self._send(reply, btns)
+                    except Exception as exc:
+                        self._send(f"⚠️ that broke on my side: {type(exc).__name__}: {exc}")
+                    continue
                 msg = u.get("message") or {}
                 text = (msg.get("text") or "").strip()
                 sender = str((msg.get("chat") or {}).get("id", ""))
@@ -291,7 +350,8 @@ class ChatBot:
                     continue   # strangers and non-text are ignored silently
                 print(f"  [chat] {text[:80]}")
                 try:
-                    self._send(self.handle(text))
+                    reply, btns = self.handle(text)
+                    self._send(reply, btns)
                 except Exception as exc:
                     self._send(f"⚠️ that broke on my side: {type(exc).__name__}: {exc}")
-            self._save_offset()
+            self._save_state()
