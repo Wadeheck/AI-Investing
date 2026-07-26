@@ -62,7 +62,7 @@ class Brain:
         # τ pipeline: yesterday's delayed effects that are due today re-enter as
         # impulses on their destination nodes and propagate onward from there.
         node_types = {nid: n.type for nid, n in self.graph.nodes.items()}
-        self.field.decay(now, node_types)
+        self.field.decay(now, node_types, anchors=self._anchors(macro))
         for node, contrib in self.field.mature_pending(now).items():
             impulses[node] = max(impulses.get(node, 0.0), contrib, key=abs)
 
@@ -105,6 +105,7 @@ class Brain:
         state["centrality"] = self.graph.centrality()
         state["memory"] = {**self.store.stats(), "headlines_seen_before": seen,
                            "headlines_new": len(new_heads), "backlog": backlog}
+        state["circular_financing"] = self.graph.detect_circular_financing()
         self.store.record_node_history(state["ts"], self.field.activations)
 
         # the adviser reads the fresh field — every cycle, zero LLM cost
@@ -164,6 +165,30 @@ class Brain:
             "noise_events": sum(1 for e in events if e.get("is_noise")),
             "signal_events": sum(1 for e in events if not e.get("is_noise")),
         }
+
+    @staticmethod
+    def _anchors(macro: Optional[dict]) -> dict[str, float]:
+        """Translate hard indicator readings into node resting levels in [-1, 1].
+        Each formula is (reading − equilibrium) / scale, matching the node's
+        documented stable point — data anchors the field, news moves around it."""
+        m = macro or {}
+        a: dict[str, float] = {}
+
+        def put(node: str, val, eq: float, scale: float, invert: bool = False):
+            if val is None:
+                return
+            x = (float(val) - eq) / scale
+            a[node] = round(max(-1.0, min(1.0, -x if invert else x)), 4)
+
+        put("us_inflation", m.get("cpi_yoy"), 2.0, 3.0)          # Fed target 2%
+        put("fed_rate", m.get("fed_funds"), 3.0, 3.0)            # neutral ~3%
+        put("us_employment", m.get("unemployment"), 4.2, 2.0, invert=True)  # low U = hot labor
+        put("us_gov_debt", m.get("us_debt_gdp"), 100.0, 40.0)    # % GDP above 100 = strained
+        put("money_supply", m.get("m2_yoy"), 5.0, 6.0)           # nominal-GDP-ish growth
+        put("ecb_policy", m.get("eu_cpi_yoy"), 2.0, 2.5)         # hot HICP = hawkish ECB
+        put("china_consumer", m.get("cn_cpi_yoy"), 1.5, 2.5)     # deflation = weak demand
+        put("yen_carry", m.get("jp_cpi_yoy"), 2.0, 2.5)          # hot JP CPI = BOJ normalizes
+        return a
 
     def _performance(self) -> dict:
         """Own-performance inputs for mood: drawdown (history.json) and portfolio

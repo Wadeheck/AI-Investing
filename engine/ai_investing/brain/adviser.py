@@ -106,6 +106,12 @@ def advise(settings, brain, log: bool = True) -> dict:
     mood_mult = brain.regime.conviction_multiplier()
     risk_off = brain.regime.risk_appetite < -0.2
     risk_on = brain.regime.risk_appetite > 0.2
+    # circular-financing haircut: revenue booked around an owns+supplies loop is
+    # partly the same dollar twice — never take that growth story at face value
+    in_loop: set[str] = set()
+    for loop in graph.detect_circular_financing():
+        in_loop.add(loop["investor"])
+        in_loop.add(loop["counterparty"])
 
     rows = []
     symbols = set(asset_impacts) | set(boosts) | set(formula)
@@ -126,6 +132,9 @@ def advise(settings, brain, log: bool = True) -> dict:
                     if n == node.id or any(e.src == node.id and e.dst == n for e in graph.edges))
         if score > 0 and crowd > 0:
             score -= W_CROWD * min(score, crowd)
+        circular = node.id in in_loop
+        if circular and score > 0:
+            score *= 0.6    # 40% haircut on long conviction inside a financing circle
         score *= mood_mult
         if abs(score) < MIN_SCORE:
             continue
@@ -142,6 +151,7 @@ def advise(settings, brain, log: bool = True) -> dict:
             "drivers": {"field": round(impact, 3), "formula": round(formula.get(sym, 0.0), 3),
                         "scenarios": round(boosts.get(sym, 0.0), 3),
                         "crowding_penalty": round(crowd, 3)},
+            **({"circular_financing": True} if circular else {}),
         })
     rows.sort(key=lambda r: -abs(r["score"]))
     top = rows[:settings.brain.advise_top_n]

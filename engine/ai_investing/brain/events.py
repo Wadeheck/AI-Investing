@@ -133,7 +133,14 @@ Return ONLY JSON:
 }}
 Merge duplicate headlines into ONE event. Skip celebrity/sports/fluff. Be aggressive
 flagging manipulation_likelihood on single-source hype, anonymous "sources", and
-promotional language."""
+promotional language.
+
+CIRCULAR-FINANCING RADAR: when a company INVESTS IN or LENDS TO its own customer
+(who then buys its products), or two firms announce mutual investment + purchase
+agreements, that revenue is partly the same dollar counted twice. Tag such events
+with node "ai_circularity" (polarity +1 = more round-tripping revealed), type
+"market_flow", and set manipulation_likelihood >= 0.4 — the deal is real but the
+implied growth is inflated."""
 
 
 def extract_events(headlines: list[dict], graph, settings) -> list[dict]:

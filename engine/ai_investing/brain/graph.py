@@ -295,6 +295,27 @@ class KnowledgeGraph:
         top = max(score.values()) or 1.0
         return {k: round(v / top, 4) for k, v in score.items()}
 
+    def detect_circular_financing(self) -> list[dict]:
+        """Spot vendor-financing round-trips: A OWNS a stake in B while ALSO
+        supplying B — the classic value-inflation circle (A invests in B, B
+        spends the money buying A's product, both book it as growth). Revenue
+        booked around such a loop is partly the same dollar counted twice; the
+        adviser discounts long conviction on every participant."""
+        owns = {(e.src, e.dst) for e in self.edges if e.type == "owns"}
+        supplies = {(e.src, e.dst): e for e in self.edges if e.type == "supplies"}
+        loops = []
+        for (a, b) in owns:
+            e = supplies.get((a, b)) or supplies.get((b, a))
+            if e is not None:
+                na, nb = self.nodes.get(a), self.nodes.get(b)
+                loops.append({
+                    "investor": a, "counterparty": b,
+                    "labels": f"{na.label if na else a} ↔ {nb.label if nb else b}",
+                    "pattern": "owns + supplies (vendor financing)",
+                    "note": e.note or "capital goes out as investment, comes back as revenue",
+                })
+        return loops
+
     # -- growth: LLM-proposed edges -------------------------------------------
     def propose_edge(self, src: str, dst: str, type_: str, sign: int, weight: float,
                      confidence: float, proposed_by: str, ts: str) -> bool:

@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 9
+SEED_VERSION = 10
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -156,6 +156,10 @@ SEED_NODES = [
     {"id": "crypto_regulation", "type": "factor", "label": "Crypto regulation (up = tightening)",
      "aliases": ["crypto crackdown", "stablecoin law", "etf approval", "sec crypto"],
      "equilibrium": "approvals (node DOWN) unlock flows; crackdowns choke liquidity"},
+    {"id": "ai_circularity", "type": "factor", "label": "AI circular financing (up = more round-tripping)",
+     "aliases": ["circular deals", "vendor financing", "round-tripping", "circular revenue",
+                 "gpu-backed loans", "invest in customer"],
+     "equilibrium": "some vendor financing is normal capex grease; when the circle IS the growth story, the revenue is partly fictitious and the unwind is violent"},
     {"id": "crypto_adoption", "type": "factor", "label": "Crypto institutional adoption",
      "aliases": ["corporate treasury bitcoin", "institutional crypto", "tokenization",
                  "crypto etf inflows", "sovereign bitcoin reserve"],
@@ -300,6 +304,8 @@ SEED_NODES = [
     {"id": "arm", "type": "asset", "label": "Arm Holdings", "symbol": "ARM", "market": "US"},
     {"id": "berkshire", "type": "asset", "label": "Berkshire Hathaway", "symbol": "BRK-B",
      "market": "US", "aliases": ["warren buffett", "berkshire"]},
+    {"id": "crwv", "type": "asset", "label": "CoreWeave", "symbol": "CRWV", "market": "US",
+     "aliases": ["coreweave"]},
     {"id": "coin", "type": "asset", "label": "Coinbase", "symbol": "COIN", "market": "US"},
     {"id": "mstr", "type": "asset", "label": "Strategy (MicroStrategy)", "symbol": "MSTR",
      "market": "US", "aliases": ["microstrategy", "saylor"]},
@@ -716,6 +722,16 @@ SEED_EDGES = [
      "note": "magnets for defense supply chains"},
     {"src": "intc", "dst": "semis", "type": "member_of", "weight": 0.7},
     {"src": "intc", "dst": "hardware_chain", "type": "member_of", "weight": 0.5},
+    # ---- the AI money circle (detectable: owns + supplies the same party) ----
+    {"src": "nvda", "dst": "crwv", "type": "owns", "weight": 0.1,
+     "note": "equity stake in a customer"},
+    {"src": "nvda", "dst": "crwv", "type": "supplies", "weight": 0.7, "weight_rev": 0.3,
+     "note": "the stake's recipient spends it on GPUs — capital out as investment, back as revenue"},
+    {"src": "crwv", "dst": "ai_datacenter", "type": "member_of", "weight": 0.8},
+    {"src": "ai_circularity", "dst": "ai_capex_cycle", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "when the circle gets exposed/questioned, the capex growth story deflates"},
+    {"src": "ai_circularity", "dst": "crwv", "type": "influences", "sign": -1, "weight": 0.5,
+     "note": "the financed party takes the direct hit"},
     # ---- government influence (state ownership / golden shares) ----
     {"src": "intc", "dst": "us_government", "type": "regulated_by", "weight": 0.4,
      "note": "US gov equity stake + CHIPS Act: policy IS a fundamental here"},

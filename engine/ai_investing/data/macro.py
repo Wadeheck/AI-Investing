@@ -62,25 +62,41 @@ def _fred_series(series_id: str, api_key: str, limit: int = 14) -> list[float]:
     return vals  # newest first
 
 
+def _yoy(series: list[float]) -> float | None:
+    """Year-over-year % change from a newest-first monthly index."""
+    if len(series) >= 13 and series[12]:
+        return round((series[0] / series[12] - 1.0) * 100, 2)
+    return None
+
+
 def _fred_snapshot(api_key: str) -> dict:
+    """Hard indicators for the MAJOR economies + US debt/liquidity levels.
+    Every fetch is independent and optional — a missing series just leaves
+    its key absent."""
     out: dict = {}
     if not api_key:
         return out
-    try:
-        cpi = _fred_series("CPIAUCSL", api_key)         # monthly index
-        if len(cpi) >= 13:
-            out["cpi_yoy"] = round((cpi[0] / cpi[12] - 1.0) * 100, 2)
-        ff = _fred_series("FEDFUNDS", api_key, limit=2)
-        if ff:
-            out["fed_funds"] = ff[0]
-        un = _fred_series("UNRATE", api_key, limit=2)
-        if un:
-            out["unemployment"] = un[0]
-        spread = _fred_series("T10Y2Y", api_key, limit=2)
-        if spread:
-            out["yield_curve_10y2y"] = spread[0]
-    except Exception:
-        pass
+    fetches = [
+        # --- United States ---
+        ("cpi_yoy", "CPIAUCSL", _yoy),
+        ("fed_funds", "FEDFUNDS", lambda s: s[0] if s else None),
+        ("unemployment", "UNRATE", lambda s: s[0] if s else None),
+        ("yield_curve_10y2y", "T10Y2Y", lambda s: s[0] if s else None),
+        ("us_debt_gdp", "GFDEGDQ188S", lambda s: s[0] if s else None),   # federal debt % GDP
+        ("m2_yoy", "M2SL", _yoy),                                        # money supply growth
+        # --- Euro area / Japan / China (OECD MEI series on FRED) ---
+        ("eu_cpi_yoy", "CP0000EZ19M086NEST", _yoy),
+        ("eu_unemployment", "LRHUTTTTEZM156S", lambda s: s[0] if s else None),
+        ("jp_cpi_yoy", "JPNCPIALLMINMEI", _yoy),
+        ("cn_cpi_yoy", "CHNCPIALLMINMEI", _yoy),
+    ]
+    for key, series_id, fn in fetches:
+        try:
+            val = fn(_fred_series(series_id, api_key, limit=14))
+            if val is not None:
+                out[key] = val
+        except Exception:
+            continue
     return out
 
 

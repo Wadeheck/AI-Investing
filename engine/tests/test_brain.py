@@ -347,6 +347,45 @@ def test_crypto_wiring():
     assert a5.get("TSM", {}).get("impact", 0) < 0
 
 
+def test_hard_data_anchors():
+    from datetime import datetime, timedelta, timezone
+    from ai_investing.brain import Brain
+    from ai_investing.brain.field import FieldState
+    # indicator readings -> node resting levels
+    a = Brain._anchors({"cpi_yoy": 5.0, "unemployment": 6.2, "us_debt_gdp": 124.0,
+                        "m2_yoy": 11.0, "cn_cpi_yoy": -0.5})
+    assert a["us_inflation"] == 1.0            # 5% CPI = fully hot
+    assert a["us_employment"] == -1.0          # 6.2% U = weak labor (inverted)
+    assert a["us_gov_debt"] > 0.5 and a["money_supply"] > 0.9
+    assert a["china_consumer"] < -0.5          # deflation = weak demand
+    # decay pulls TOWARD the anchor, not toward zero
+    now = datetime.now(timezone.utc)
+    f = FieldState({"us_inflation": 0.0}, updated=(now - timedelta(hours=500)).isoformat())
+    f.decay(now, {"us_inflation": "factor"}, anchors={"us_inflation": 0.8})
+    assert f.activations["us_inflation"] > 0.7  # settled onto the data, not ignorance
+
+
+def test_circular_financing_detection_and_haircut():
+    from datetime import datetime, timezone
+    from ai_investing.brain import Brain
+    from ai_investing.brain.adviser import advise
+    g = KnowledgeGraph.seeded()
+    loops = g.detect_circular_financing()
+    assert any({l["investor"], l["counterparty"]} == {"nvda", "crwv"} for l in loops), \
+        "NVDA<->CoreWeave owns+supplies loop must be flagged"
+    # the adviser must haircut long conviction on loop members
+    s = Settings()
+    b = Brain(s)
+    b.field.activations = {"ai_capex_cycle": 0.6, "ai_datacenter": 0.5,
+                           "crwv": 0.5, "nvda": 0.5, "msft": 0.5}
+    b.field.updated = datetime.now(timezone.utc).isoformat()
+    a = advise(s, b, log=False)
+    by = {t["symbol"]: t for t in a["trades"]}
+    if "CRWV" in by and "MSFT" in by:
+        assert by["CRWV"]["score"] < by["MSFT"]["score"]   # same field charge, haircut applied
+    assert any(t.get("circular_financing") for t in a["trades"] if t["symbol"] in ("NVDA", "CRWV"))
+
+
 def test_chatbot_commands_offline():
     import json
     os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")

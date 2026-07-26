@@ -58,10 +58,16 @@ class FieldState:
                        "updated": self.updated}, fh, indent=1)
 
     # -- dynamics --------------------------------------------------------------
-    def decay(self, now: datetime, node_types: dict[str, str] | None = None) -> None:
-        """Exponential decay toward the stable point since the last update.
-        With `node_types`, each node decays at its own type's half-life
+    def decay(self, now: datetime, node_types: dict[str, str] | None = None,
+              anchors: dict[str, float] | None = None) -> None:
+        """Exponential decay since the last update — toward each node's ANCHOR,
+        not blindly toward zero. Anchors are resting levels set by hard data
+        (CPI deviation from target, unemployment vs NAIRU, debt/GDP, M2 growth):
+        news moves the field AROUND what the numbers say, and when the news
+        fades, the node settles back to the data, not to ignorance.
+        With `node_types`, each node decays at its type's half-life
         (factor 96h ... asset 24h); without, the flat default applies."""
+        anchors = anchors or {}
         if self.updated:
             try:
                 prev = datetime.fromisoformat(self.updated)
@@ -69,12 +75,18 @@ class FieldState:
             except ValueError:
                 hours = 0.0
             out: dict[str, float] = {}
-            for k, v in self.activations.items():
+            for k in set(self.activations) | set(anchors):
+                v = self.activations.get(k, anchors.get(k, 0.0))
+                a = anchors.get(k, 0.0)
                 hl = HALF_LIFE_BY_TYPE.get((node_types or {}).get(k, ""), HALF_LIFE_HOURS)
-                decayed = v * math.pow(0.5, hours / hl)
+                decayed = a + (v - a) * math.pow(0.5, hours / hl)
                 if abs(decayed) >= MIN_ACTIVATION:
                     out[k] = round(decayed, 4)
             self.activations = out
+        else:
+            for k, a in anchors.items():
+                if abs(a) >= MIN_ACTIVATION:
+                    self.activations.setdefault(k, round(a, 4))
         self.updated = now.isoformat()
 
     def absorb(self, impacts: dict[str, float]) -> None:

@@ -42,6 +42,7 @@ type BrainState = {
   asset_impacts?: Record<string, { impact: number; label?: string; market?: string; scenarios?: string[] }>;
   scenarios_fired?: Scenario[]; regime?: Regime; conviction_multiplier?: number;
   signal_events?: number; noise_events?: number;
+  circular_financing?: { investor: string; counterparty: string; labels: string; pattern: string; note?: string }[];
   activations?: Record<string, number>;      // persistent field (live view)
   pending_effects?: Pending[];               // τ-queue: effects landing later
   delayed_preview?: Pending[];               // simulation: what WOULD land later
@@ -433,6 +434,18 @@ export default function BrainPage() {
                   <b>{s.id}</b>
                   <div className="sub">{s.implication}</div>
                   {s.fired_by && <div className="sub">trigger: {s.fired_by}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {(live?.circular_financing?.length ?? 0) > 0 && (
+            <div className="card">
+              <h3>⚠ Circular financing watch</h3>
+              {live!.circular_financing!.map((l, i) => (
+                <div key={i} className="scen">
+                  <b>{l.labels}</b>
+                  <div className="sub">{l.pattern} — {l.note}</div>
+                  <div className="sub">long conviction on both parties is haircut 40%</div>
                 </div>
               ))}
             </div>
