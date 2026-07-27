@@ -1,0 +1,181 @@
+# Training Record — The Web Learns to Trade
+
+*Covering 2026-07-26 → 2026-07-28. Every number here survived the anti-cheat
+protocol or is labeled as the failure it was. Latest state: see
+`data/web_training.json` (config), `data/web_training_history.jsonl` (every
+cycle ever run), `data/web_training_report.md` (latest cycle report).*
+
+---
+
+## 1. The mandate (user's rules, in force everywhere)
+
+1. **Capital preservation first, growth second.**
+2. **Hard rule: no single trade or investment may lose more than 10%** —
+   `RISK_MAX_LOSS_PER_POSITION=0.10` caps every stop in every book, live and
+   simulated (commit `86c55c7`).
+3. **Monthly high-water-mark ratchet** — a month that closes higher locks that
+   equity as the new base; falling 10% below it blocks new entries until
+   recovery (`5ba3a90`).
+4. **Targets:** stocks ~50%/yr; crypto ~3×/yr as HODL core + daily tactical.
+5. **The nodes and web are the sole source of truth** — every factor must live
+   *in* the graph (valuation anchors, price pulses, news impulses, crypto
+   signals as node anchors); proposals must cite web support (`d804b27`).
+6. **No cheating** — no tweak may be justified by a single backtest. Made
+   structural: parameters tune only on the TRAIN window (first ~2/3 of 3
+   years); adoption requires the untouched HOLDOUT window (final ~1/3) to
+   agree. Rejections are logged, not hidden.
+
+## 2. The data (all free)
+
+| Dataset | Source | Coverage |
+|---|---|---|
+| Prices, 86 assets (US/HK/CN/SG/JP/KR/TW/EU + BTC/ETH/SOL) | yfinance | 3y daily |
+| Historical news → node impulses | GDELT archive + Wikipedia Current Events fallback, digested by local qwen3:8b through the SAME event extractor the live brain uses | 782/785 trading days |
+| Funding rates (BTC/ETH/SOL, leverage crowding) | Binance (keyless) | 1,169 days |
+| Crypto Fear & Greed | alternative.me | full history (8y) |
+| On-chain activity (BTC active addresses) | blockchain.info | 1,164 days |
+| Macro anchors (CPI, rates, debt/GDP, M2…) | FRED | live |
+| Fundamentals (P/E, P/B, ROE, margins, debt) | yfinance | weekly cache |
+
+Pipeline battle scars worth remembering: GDELT hard-throttles (~1 req/10s,
+long bans) — failures must never be recorded as "quiet news days"; Wikipedia
+filled 500+ days working backward while GDELT was banned; the digester needed
+retry-on-zero-events because a failed LLM call is indistinguishable from a
+quiet day; PC suspend froze everything for 9h (now `systemd-inhibit` blocked).
+
+## 3. How the strategy evolved (chronological)
+
+### Stage 0 — price-only replay (the humbling baseline)
+Mechanical core only (price pulses through the web + momentum/mean-reversion),
+2023-07 → 2026-07, all proposals auto-accepted, costs on:
+**trading book +5% total with −62% maxDD; SPY +70%.** Verdict: no edge in the
+mechanical core — confirmed independently by the walk-forward optimizer's
+Deflated Sharpe gate refusing its own best formula (DSR 0.176 < 0.6).
+
+### Stage 1 — news enters the web
+Backdated news digested into node impulses transformed the same machinery:
+baseline jumped to **stocks +17.6%/yr (Sharpe 1.11), crypto +94%/yr** on the
+train window — before any tuning. The web's thesis (news → ripples → assets)
+carries the signal; prices alone don't.
+
+### Stage 2 — the user's rules reshape behavior (cycle 1, full ruleset)
+10% stops + HWM ratchet: **crypto drawdown −54% → −19% while CAGR doubled**
+(21% → 40%) — stopped riding winters, re-entered on recovery. Preservation
+target met for the first time and **never violated in any cycle since**.
+
+### Stage 3 — factor families, holdout-gated
+Adopted (survived out-of-sample):
+- **Emotion factor** (headline fear/greed pulses the risk node), gain 0.4
+- **Influential figures** (Powell/Trump/Xi/OPEC amplify their nodes), refined
+  0.2 → 0.32 → 0.48 with holdout approval each step
+- **Regime gate era-1** (deep risk-off cuts gross) — later superseded by
+  crypto-specific gates
+- **Crypto mix** (HODL 40% / tactical 60%, tactical gain 1.2)
+- **Crypto winter gate** (BTC < 100d average → tactical off, HODL trimmed)
+- **On-chain adoption trend** (BTC active addresses), weight 0.4
+
+Rejected by the holdout, repeatedly ("looked good in training only — that
+would be cheating"): parameter re-sweeps (R1, every cycle), manipulation
+discount (R3), crypto-mix retunes (R6), field-momentum + web/tape agreement
+(R9), funding-rate crowding (R11), F&G extremes (R12 — likely redundant with
+the winter gate already adopted).
+
+### Stage 4 — convergence and the ceiling (cycles 3-7)
+Seven consecutive cycles plateaued at stock +21.9%, crypto +37.3%. The loop
+self-terminated honestly: *"search converged at this function structure — the
+remaining gap needs NEW factor families."*
+
+**Ceiling diagnosis:** exits. Fixed 6-9×ATR take-profit caps every winner at
+roughly +12-18% while the hard rule cuts losers at 10%; at a ~40% win rate
+that asymmetry arithmetically bounds CAGR near the observed plateau.
+
+### Stage 5 — structural exit rebuild (running now)
+- **R14 trailing exits**: no fixed cap; the stop ratchets behind the peak
+  (initial risk still ≤10% per the hard rule). Cut losers fast, let winners run.
+- **R15 learned reliability**: per-symbol trust EMA (0.5-1.5×) earned from
+  that symbol's own closed trades reweights its field term — trailing data
+  only, no lookahead.
+
+## 4. Cycle ledger (full-period metrics per cycle)
+
+| Cycle (UTC) | Stocks CAGR / Sharpe / maxDD | Crypto CAGR / Sharpe / maxDD | Preservation |
+|---|---|---|---|
+| 07-27 14:17 #1 | +17.2% / 1.00 / −15% | +40.1% / 1.49 / −19% | ✅ |
+| 14:27 #2 | +3.2% / 0.28 / −20% *(data shifted mid-cycle)* | +38.3% / 1.44 / −19% | ✅ |
+| 14:39 #3 | +23.8% / 1.05 / −19% | +37.3% / 1.40 / −21% | ✅ |
+| 14:49 #4 | +24.0% / 1.05 / −19% | +40.7% / 1.50 / −19% | ✅ |
+| 15:05 #1′ *(full news + crypto signals)* | +18.7% / 0.92 / −20% | +40.6% / 1.50 / −19% | ✅ |
+| 15:17 #2′ | +21.8% / 1.05 / −19% | +37.3% / 1.43 / −21% | ✅ |
+| 15:29–16:12 #3′–#7′ | +21.9% / ~1.06 / −19% (plateau) | +37.3% / 1.43 / −21% | ✅ |
+| 22:20 → | **R14/R15 era — running** | | |
+
+## 5. The current strategy (incumbent config, plain language)
+
+**Conviction function (per asset, daily):**
+`score = 1.4 × web_field_impact + 0.48 × price_formula` — the web's voice
+weighs ~3× the price signal. Entry requires |score| ≥ 0.22 (a high bar: only
+strong, corroborated ripples trade). Propagation: 3 hops, 0.5 decay per hop.
+
+**What feeds the web daily:** news events (LLM-tagged to origin nodes),
+price pulses (≥1% moves shock their own node and ripple to neighbors),
+valuation anchors (stretched multiples = standing downward pull), macro
+anchors (FRED), headline emotion (gain 0.4) on the risk node, influential-
+figure amplification (0.48), BTC on-chain trend (0.4), crypto funding/F&G
+anchors (live, conservative fixed weights).
+
+**Stock book:** max 12 positions, gross ≤ 100%, vol-targeted sizing, entries
+only with web conviction; stops ≤10% always; monthly HWM ratchet blocks new
+buying 10% under the locked base.
+
+**Crypto book:** 40% HODL core + 60% tactical sleeve driven by field impact;
+winter gate (BTC < 100d MA) turns the tactical sleeve off and trims the HODL
+core to half (rebought on recovery); 10% stops throughout, HODL included
+(re-entry above the 100d average).
+
+**Current full-period results (3y replay, all rules):**
+
+| Window | Stocks | Crypto |
+|---|---|---|
+| Train (2y) | +20.2% / Sharpe 0.91 / −19% | +75.1% / 2.12 / −16% |
+| Holdout (1y) | **+57.7% / 2.20 / −7.8%** | −7.0% / −0.61 / −14% |
+| Full 3y | +21.9% / 1.06 / −19% | +37.3% / 1.43 / −21% |
+| Trades | 394, win rate 33%, 5-day precision 52% | |
+
+Note the split: the stock strategy's holdout year actually *exceeds* the 50%
+target with a tiny drawdown — but one good year is not proof; the full-period
+number is the honest one. Crypto's negative holdout year (a sideways/down
+crypto tape where the HODL core pays its keep-alive costs) is the current
+weak spot.
+
+## 6. Distance to targets
+
+| Objective | Target | Current | Status |
+|---|---|---|---|
+| Preservation (dd ≤ 25% + 10% rule + HWM) | always | never violated | ✅ **achieved** |
+| Stocks growth | 50%/yr | ~22%/yr (holdout yr: 58%) | ~44% of target |
+| Crypto growth | 200%/yr | ~37%/yr | ~19% of target |
+
+## 7. Known biases and honest caveats
+
+- **LLM hindsight**: qwen tagging 2024 headlines knows what 2024 led to.
+  Tagging is mechanical (origin node + sign) so the leak is bounded — but it
+  flatters results. Discount accordingly.
+- **Graph structural hindsight**: the node/edge seed was written in 2026 with
+  knowledge of 2023-26 (AI-capex nodes, NVDA↔CoreWeave circularity, etc.).
+- **FX simplification**: HKD/SGD/KRW prices treated 1:1 as USD — per-position
+  % returns are right; cross-currency sizing is approximate.
+- **Wiki news days** (~500 of 782) are thinner than market headlines.
+- **Replay ≠ live**: fills at daily closes, no intraday gaps through stops.
+- Therefore: **the forward paper test remains the only proof.** These replays
+  guide the search; the scorecard grades the live (paper) engine's real calls.
+
+## 8. Next levers (need the user)
+
+1. **NYT Archive + Guardian API keys** (free registration) — market-grade
+   historical headlines to replace the wiki-thin days.
+2. **Crypto holdout-year fix** — the sideways-tape bleed suggests a cash-yield
+   / stablecoin parking assumption and better re-entry logic.
+3. **Structural book ideas not yet built**: pyramiding winners, weekly
+   compounding rebalance, cross-book capital rotation.
+4. **When paper-live accumulates ~4-8 weeks**: reconcile scorecard hit-rates
+   against replay expectations; retire whatever reality contradicts.
