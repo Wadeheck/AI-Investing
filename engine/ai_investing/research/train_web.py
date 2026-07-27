@@ -177,7 +177,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             stop_atr=3.0, take_atr=6.0, use_emotion=0, emotion_gain=0.0,
             use_manip=0, use_figures=0, figure_gain=0.0,
             regime_gate=0, gate_level=-0.35, gate_frac=0.3,
-            crypto_hodl=0.6, crypto_gain=0.5)
+            crypto_hodl=0.6, crypto_gain=0.5,
+            crypto_gate=0,                  # deep risk-off also trims the HODL core
+            short_bias=0.0)                 # lower entry bar for SHORTS in risk-off
 COST = 0.0005
 
 
@@ -283,7 +285,10 @@ def run_replay(ds, cfg, i0, i1):
                                       + 0.015 * max(-1, min(1, -z / 2))))
             score = (cfg["w_field"] * asset_imp.get(s, {}).get("impact", 0.0)
                      + cfg["w_formula"] * formula)
-            if abs(score) >= cfg["entry"]:
+            bar = cfg["entry"]
+            if score < 0 and risk < -0.1:   # bear regime: shorts get an easier bar
+                bar = cfg["entry"] * (1.0 - cfg["short_bias"])
+            if abs(score) >= bar:
                 cands.append((abs(score), score, s, h))
         for _, score, s, h in sorted(cands, reverse=True):
             if len(book["pos"]) >= 12 or gross >= gate * eq:
@@ -302,6 +307,24 @@ def run_replay(ds, cfg, i0, i1):
             gross += notional
 
         # ---- crypto book: HODL core + web-driven tactical sleeve ----
+        # preservation reflex for crypto too: deep risk-off halves the HODL
+        # core (sold to cash); it is rebought when the field recovers
+        if cfg["crypto_gate"]:
+            deep = risk < cfg["gate_level"]
+            for s in cryptos:
+                if np.isnan(px[s]):
+                    continue
+                h_ = cbook["hodl"].get(s)
+                if deep and h_ and not h_.get("trimmed"):
+                    sell = h_["qty"] * 0.5
+                    cbook["cash"] += sell * px[s] * (1 - COST)
+                    h_["qty"] -= sell
+                    h_["trimmed"] = True
+                elif not deep and h_ and h_.get("trimmed"):
+                    buy = min(h_["qty"], cbook["cash"] * 0.3 / max(px[s], 1e-9))
+                    cbook["cash"] -= buy * px[s] * (1 + COST)
+                    h_["qty"] += buy
+                    h_["trimmed"] = False
         ceq = eq_of(cbook, px)
         for s in cryptos:
             if np.isnan(px[s]):
@@ -362,6 +385,10 @@ ROUNDS = [
         "regime_gate": [1], "gate_level": [-0.25, -0.4], "gate_frac": [0.2, 0.4]}),
     ("R6 crypto mix tuning (HODL share + tactical aggressiveness)", {
         "crypto_hodl": [0.4, 0.6, 0.8], "crypto_gain": [0.5, 1.0]}),
+    ("R7 crypto preservation (deep risk-off trims the HODL core)", {
+        "crypto_gate": [1], "gate_level": [-0.2, -0.3]}),
+    ("R8 bear-market shorting (risk-off lowers the entry bar for shorts)", {
+        "short_bias": [0.3, 0.5]}),
 ]
 
 
