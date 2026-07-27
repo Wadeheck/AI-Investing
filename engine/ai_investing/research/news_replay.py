@@ -152,8 +152,7 @@ def fetch_wiki() -> None:
     with WIKI_ARCHIVE.open("a") as fh:
         for d in days:
             if d.isoformat() in _done_dates(ARCHIVE):
-                print(f"[wiki] {d} already fetched by GDELT — frontiers met, stopping", flush=True)
-                break
+                continue          # GDELT covered it meanwhile — skip, keep filling gaps
             page = f"Portal:Current events/{d.year} {d.strftime('%B')} {d.day}"
             url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
                 {"action": "parse", "page": page, "prop": "wikitext",
