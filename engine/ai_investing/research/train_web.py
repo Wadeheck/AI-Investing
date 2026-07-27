@@ -204,7 +204,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             crypto_trend=0,                 # BTC under its 100d average = crypto winter
             w_funding=0.0,                  # contrarian leverage-crowding (funding z)
             w_fng=0.0,                      # contrarian crypto fear/greed extremes
-            w_onchain=0.0)                  # on-chain usage trend (BTC adoption)
+            w_onchain=0.0,                  # on-chain usage trend (BTC adoption)
+            trail_atr=0.0,                  # >0: trailing exits — let winners RUN
+            use_rel=0)                      # per-symbol reliability reweighting
 COST = 0.0005
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
@@ -220,6 +222,7 @@ def run_replay(ds, cfg, i0, i1):
     prev_imp: dict[str, float] = {}
     btc = next((s for s in cryptos if s.startswith("BTC")), None)
     book = {"cash": 100_000.0, "pos": {}}
+    rel: dict[str, float] = {}              # learned per-symbol trust (trailing)
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
     curve, ccurve = [], []
     hwm = {"tb": None, "cb": None}         # monthly high-water marks (user ratchet)
@@ -323,11 +326,18 @@ def run_replay(ds, cfg, i0, i1):
             if np.isnan(v):
                 continue
             d_ = 1 if p["qty"] > 0 else -1
+            if cfg["trail_atr"] > 0:            # winners run: stop ratchets behind peak
+                p["peak"] = max(p.get("peak", p["entry"]) * d_, v * d_) * d_
+                trail = p["peak"] - cfg["trail_atr"] * p.get("atr0", 0.0) * d_
+                p["stop"] = max(p["stop"] * d_, trail * d_) * d_
+                p["take"] = p["entry"] * (1 + 99 * d_)      # no fixed cap
             if (d_ == 1 and (v <= p["stop"] or v >= p["take"])) or \
                (d_ == -1 and (v >= p["stop"] or v <= p["take"])):
                 book["cash"] += p["qty"] * v * (1 - COST * d_)
                 total += 1
-                wins += 1 if (v - p["entry"]) * p["qty"] > 0 else 0
+                won = (v - p["entry"]) * p["qty"] > 0
+                wins += 1 if won else 0
+                rel[s] = max(0.5, min(1.5, rel.get(s, 1.0) + (0.08 if won else -0.08)))
                 hz = min(p["ei"] + 5, len(close) - 1)
                 graded += 1 if (close[s].iloc[hz] / p["entry"] - 1) * d_ > 0.003 else 0
                 del book["pos"][s]
@@ -346,6 +356,8 @@ def run_replay(ds, cfg, i0, i1):
             formula = math.tanh(20 * (0.02 * max(-1, min(1, mom / 0.10))
                                       + 0.015 * max(-1, min(1, -z / 2))))
             fimp = asset_imp.get(s, {}).get("impact", 0.0)
+            if cfg["use_rel"]:
+                fimp *= rel.get(s, 1.0)                 # learned trust, trailing only
             fmom = fimp - prev_imp.get(s, 0.0)          # ripple building vs fading
             agree = (min(abs(fimp), abs(formula))       # web & tape in agreement
                      * (1 if fimp * formula > 0 else -0.5))
@@ -367,7 +379,7 @@ def run_replay(ds, cfg, i0, i1):
             atr = h.diff().abs().mean()
             qty = (notional / px[s]) * (1 if score > 0 else -1)
             book["cash"] -= qty * px[s] * (1 + COST * (1 if qty > 0 else -1))
-            book["pos"][s] = {"qty": qty, "entry": px[s], "ei": i,
+            book["pos"][s] = {"qty": qty, "entry": px[s], "ei": i, "atr0": atr,
                               "stop": px[s] - min(cfg["stop_atr"] * atr, HARD_STOP * px[s]) * (1 if qty > 0 else -1),
                               "take": px[s] + cfg["take_atr"] * atr * (1 if qty > 0 else -1)}
             gross += notional
@@ -492,11 +504,15 @@ ROUNDS = [
         "w_fng": [0.4, 0.8]}),
     ("R13 on-chain adoption trend (BTC active addresses into the web)", {
         "w_onchain": [0.4, 0.8]}),
+    ("R14 trailing exits — cut losers at 10%, let winners RUN", {
+        "trail_atr": [1.5, 2.5, 3.5]}),
+    ("R15 per-symbol reliability — learned trust reweights the field", {
+        "use_rel": [1]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
-           "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain")
+           "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain", "trail_atr")
 
 
 def refine(ds, cfg, base_obj, warm, split, n, history, widen=1.0):
