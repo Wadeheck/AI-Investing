@@ -152,9 +152,24 @@ def load_dataset():
         f"factors {len(factors)} days, risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
                 rets=close.pct_change(), spy=spy, news=news, factors=factors,
-                symbols=symbols, risk_node=risk_node,
+                symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 HL=HALF_LIFE_BY_TYPE, HL_DEF=HALF_LIFE_HOURS,
                 cryptos=[s for s in symbols if "/" in s])
+
+
+def refresh_news(ds) -> None:
+    """Re-read impulses so holdout evaluation sees news digested since startup
+    (training may begin while the digester is still finishing the tail)."""
+    news = {}
+    if IMPULSES.exists():
+        for line in IMPULSES.open():
+            try:
+                r = json.loads(line)
+                news[r["date"]] = {k: v for k, v in r.get("impulses", {}).items()
+                                   if k in ds["valid_nodes"]}
+            except (json.JSONDecodeError, KeyError):
+                pass
+    ds["news"] = news
 
 
 # ------------------------------------------------------------------- replay --
@@ -376,6 +391,7 @@ def train() -> None:
             log(f"{round_name}: no candidate beat incumbent — feature NOT adopted")
             continue
         # anti-cheat: the winner must also help OUT-OF-SAMPLE, unseen by tuning
+        refresh_news(ds)          # include any news digested while we trained
         oos_old = run_replay(ds, best_cfg, split, n)
         oos_new = run_replay(ds, round_best, split, n)
         if objective(oos_new) >= objective(oos_old) - 0.01:
@@ -388,6 +404,7 @@ def train() -> None:
         history.append({"round": round_name, "holdout_old": oos_old, "holdout_new": oos_new,
                         "adopted": best_cfg == round_best})
 
+    refresh_news(ds)
     final_train = run_replay(ds, best_cfg, warm, split)
     final_oos = run_replay(ds, best_cfg, split, n)
     final_full = run_replay(ds, best_cfg, warm, n)
