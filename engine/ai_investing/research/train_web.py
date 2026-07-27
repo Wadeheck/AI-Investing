@@ -201,6 +201,10 @@ def run_replay(ds, cfg, i0, i1):
     book = {"cash": 100_000.0, "pos": {}}
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
     curve, ccurve = [], []
+    hwm = {"tb": None, "cb": None}         # monthly high-water marks (user ratchet)
+    mclose = {"tb": None, "cb": None}
+    cur_month = None
+    blocked = {"tb": False, "cb": False}
     graded = wins = total = 0
 
     def decay_field(f):
@@ -232,6 +236,16 @@ def run_replay(ds, cfg, i0, i1):
     for i in range(i0, i1):
         px = close.iloc[i]
         dstr = close.index[i].date().isoformat()
+        m = dstr[:7]
+        if cur_month != m:
+            for k in hwm:
+                if mclose[k] is not None and (hwm[k] is None or mclose[k] > hwm[k]):
+                    hwm[k] = mclose[k]
+            cur_month = m
+        if curve:
+            mclose["tb"], mclose["cb"] = curve[-1], ccurve[-1]
+            for k, v in (("tb", curve[-1]), ("cb", ccurve[-1])):
+                blocked[k] = bool(hwm[k]) and v < hwm[k] * (1 - HARD_STOP)
         fac = ds["factors"].get(dstr, {})
         manip_disc = (1.0 - 0.5 * fac.get("hype", 0.0)) if cfg["use_manip"] else 1.0
 
@@ -301,7 +315,7 @@ def run_replay(ds, cfg, i0, i1):
                 bar = cfg["entry"] * (1.0 - cfg["short_bias"])
             if abs(score) >= bar:
                 cands.append((abs(score), score, s, h))
-        for _, score, s, h in sorted(cands, reverse=True):
+        for _, score, s, h in (sorted(cands, reverse=True) if not blocked["tb"] else []):
             if len(book["pos"]) >= 12 or gross >= gate * eq:
                 break
             vol = h.pct_change().std()
@@ -372,7 +386,7 @@ def run_replay(ds, cfg, i0, i1):
             if tact and (fimp < -0.05 or px[s] <= tact["entry"] * (1 - HARD_STOP)):
                 cbook["cash"] += tact["qty"] * px[s] * (1 - COST)
                 del cbook["tact"][s]
-            elif not tact and fimp > 0.10 and gate == 1.0 and not winter:
+            elif (not tact and fimp > 0.10 and gate == 1.0 and not winter and not blocked["cb"]):
                 notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4, cbook["cash"] * 0.9)
                 if notional > 1000:
                     cbook["cash"] -= notional * (1 + COST)

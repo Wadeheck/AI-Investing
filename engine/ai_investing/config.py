@@ -162,6 +162,10 @@ class SafetyConfig:
     # circuit breakers (drawdown halts)
     max_trailing_drawdown: float = field(default_factory=lambda: _get_float("SAFETY_MAX_TRAILING_DD", 0.15))
     max_inception_drawdown: float = field(default_factory=lambda: _get_float("SAFETY_MAX_INCEPTION_DD", 0.25))
+    # monthly high-water mark (user's ratchet): a month that ends higher locks
+    # that equity as the new base; falling this far below the locked base
+    # blocks new positions until recovery
+    hwm_drawdown_limit: float = field(default_factory=lambda: _get_float("SAFETY_HWM_DD", 0.10))
     # per-day hard caps
     max_trades_per_day: int = field(default_factory=lambda: _get_int("SAFETY_MAX_TRADES_PER_DAY", 50))
     max_notional_per_day: float = field(default_factory=lambda: _get_float("SAFETY_MAX_NOTIONAL_PER_DAY", 0.0))  # 0 = off

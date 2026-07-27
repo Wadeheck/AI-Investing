@@ -76,6 +76,17 @@ class CircuitBreaker:
             s["day_start_equity"] = equity
         s["peak_equity"] = equity if s["peak_equity"] is None else max(s["peak_equity"], equity)
 
+        # monthly high-water mark (user's ratchet): when a month closes higher
+        # than the locked base, that equity becomes the new base — banked gains
+        # are never treated as risk capital again
+        month = today[:7]
+        if s.get("hwm_month") != month:
+            prev_eq = s.get("month_close_equity")
+            if prev_eq is not None and (s.get("hwm") is None or prev_eq > s["hwm"]):
+                s["hwm"] = prev_eq
+            s["hwm_month"] = month
+        s["month_close_equity"] = equity                   # rolls until month flips
+
         if s["halted"]:                                   # latched (trailing/inception, or same-day daily)
             self._save()
             return BreakerDecision(False, True, s["halt_reason"])
@@ -92,6 +103,13 @@ class CircuitBreaker:
             s["halt_reason"] = f"daily drawdown {day:.1%} >= {self.daily_limit:.0%}"
             self._save()
             return BreakerDecision(False, True, s["halt_reason"])
+
+        hwm_dd = self._dd(s.get("hwm"), equity)
+        if s.get("hwm") and hwm_dd >= self.cfg.hwm_drawdown_limit:
+            self._save()                # not latched: recovery re-opens the gate
+            return BreakerDecision(False, False,
+                                   f"{hwm_dd:.1%} below the monthly high-water mark "
+                                   f"(${s['hwm']:,.0f}) — protecting banked gains")
 
         if self.cfg.max_trades_per_day and s["trades_today"] >= self.cfg.max_trades_per_day:
             self._save()
