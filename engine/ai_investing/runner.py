@@ -391,6 +391,7 @@ class Runner:
                 if self.settings.risk.use_atr_stops and ms is not None and ms.atr > 0 and price > 0:
                     stop_pct = self.settings.risk.atr_stop_mult * ms.atr / price
                     take_pct = self.settings.risk.atr_take_mult * ms.atr / price
+                stop_pct = min(stop_pct, self.settings.risk.max_loss_per_position)
                 from ai_investing.execution.explain import explain_entry
                 equity = self.broker.portfolio().equity(prices)
                 extra = explain_entry(self.settings, sym, o.side.value, o.qty, price,

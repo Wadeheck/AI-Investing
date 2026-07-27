@@ -63,6 +63,9 @@ class RiskConfig:
     max_position_weight: float = field(default_factory=lambda: _get_float("RISK_MAX_POSITION_WEIGHT", 0.15))
     max_gross_exposure: float = field(default_factory=lambda: _get_float("RISK_MAX_GROSS_EXPOSURE", 1.0))
     per_trade_stop_loss: float = field(default_factory=lambda: _get_float("RISK_STOP_LOSS", 0.08))
+    # HARD RULE (user): no single position may lose more than this — caps every
+    # stop (flat or ATR-scaled) in every book. Not advisory.
+    max_loss_per_position: float = field(default_factory=lambda: _get_float("RISK_MAX_LOSS_PER_POSITION", 0.10))
     take_profit: float = field(default_factory=lambda: _get_float("RISK_TAKE_PROFIT", 0.25))
     max_daily_drawdown: float = field(default_factory=lambda: _get_float("RISK_MAX_DAILY_DRAWDOWN", 0.05))
     min_confidence: float = field(default_factory=lambda: _get_float("RISK_MIN_CONFIDENCE", 0.35))

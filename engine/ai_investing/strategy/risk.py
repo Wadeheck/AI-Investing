@@ -69,6 +69,8 @@ class RiskManager:
                 atr_frac = ms.atr / pos.avg_price
                 stop_frac = self.cfg.atr_stop_mult * atr_frac
                 take_frac = self.cfg.atr_take_mult * atr_frac
+            # hard rule: no position may lose more than max_loss_per_position
+            stop_frac = min(stop_frac, self.cfg.max_loss_per_position)
 
             reason = None
             if move <= -stop_frac:

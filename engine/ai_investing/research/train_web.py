@@ -185,6 +185,7 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             w_agree=0.0,                    # bonus when web and price action AGREE
             crypto_trend=0)                 # BTC under its 100d average = crypto winter
 COST = 0.0005
+HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
 
 def run_replay(ds, cfg, i0, i1):
@@ -312,7 +313,7 @@ def run_replay(ds, cfg, i0, i1):
             qty = (notional / px[s]) * (1 if score > 0 else -1)
             book["cash"] -= qty * px[s] * (1 + COST * (1 if qty > 0 else -1))
             book["pos"][s] = {"qty": qty, "entry": px[s], "ei": i,
-                              "stop": px[s] - cfg["stop_atr"] * atr * (1 if qty > 0 else -1),
+                              "stop": px[s] - min(cfg["stop_atr"] * atr, HARD_STOP * px[s]) * (1 if qty > 0 else -1),
                               "take": px[s] + cfg["take_atr"] * atr * (1 if qty > 0 else -1)}
             gross += notional
 
@@ -347,7 +348,7 @@ def run_replay(ds, cfg, i0, i1):
                 continue
             fimp = asset_imp.get(s, {}).get("impact", 0.0)
             tact = cbook["tact"].get(s)
-            if tact and (fimp < -0.05 or px[s] <= tact["entry"] * 0.85):
+            if tact and (fimp < -0.05 or px[s] <= tact["entry"] * (1 - HARD_STOP)):
                 cbook["cash"] += tact["qty"] * px[s] * (1 - COST)
                 del cbook["tact"][s]
             elif not tact and fimp > 0.10 and gate == 1.0 and not winter:

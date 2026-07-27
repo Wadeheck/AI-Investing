@@ -26,7 +26,7 @@ from ai_investing.brokers.paper import PaperBroker
 from ai_investing.execution.approvals import ProposalBook
 from ai_investing.models import Asset, AssetClass, Order, Side
 
-STOP_PCT = 0.25            # wide: a 6-month thesis survives normal wobble
+STOP_PCT = 0.10            # HARD RULE (user): max 10% loss on any investment
 MAX_WEIGHT = 0.12          # target weight per position in the investing pot
 
 
