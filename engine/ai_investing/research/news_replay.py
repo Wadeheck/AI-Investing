@@ -156,7 +156,8 @@ def digest() -> None:
             evs = []
             for attempt in (1, 2):     # a zero-event day on 10+ headlines is almost
                 try:                   # always a failed call, not a quiet news day
-                    evs = events_mod.extract_events(r["headlines"][:20], g, settings)
+                    # 14 headlines carry a day's signal at ~2/3 the LLM time
+                    evs = events_mod.extract_events(r["headlines"][:14], g, settings)
                 except Exception as exc:
                     print(f"[digest] {r['date']} extract failed ({type(exc).__name__})",
                           flush=True)
