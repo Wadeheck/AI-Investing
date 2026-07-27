@@ -169,7 +169,41 @@ weak spot.
 - Therefore: **the forward paper test remains the only proof.** These replays
   guide the search; the scorecard grades the live (paper) engine's real calls.
 
-## 8. Next levers (need the user)
+## 8. Evidence protocol v2 (2026-07-28) — the replay stopped flattering us
+
+The expert review found the replay's physics too kind, so the trainer was
+rebuilt to be pessimistic enough to trust. **All numbers above this section
+were measured under v1 physics and are NOT comparable to anything after.**
+
+What changed in `research/train_web.py`:
+
+1. **Real frictions.** The flat 5bps/side became per-market commissions +
+   taxes + half-spread wired through `execution/costs.py` (sqrt market
+   impact off real 20-day ADV). Measured per side: US ~4bps, HK ~25bps
+   (stamp duty), SG ~20bps, crypto ~15bps.
+2. **No same-bar fills.** Stock entries decided at day t's close fill at
+   day t+1's open. Stops/takes are resting intraday orders triggered off
+   high/low; a gap through the stop fills at the open — so the 10% rule is
+   now a *target the sim can miss*, exactly as live trading can. Crypto hard
+   stops are checked daily (was every 5 days), gap-aware.
+3. **Benchmarks in every report.** SPY, QQQ, 60/40, BTC buy-and-hold beside
+   every window — alpha must beat doing nothing.
+4. **Lockbox.** Windows moved from 66/34 to train 55% / holdout 25% /
+   **lockbox 20%** (currently ≈ 2025-12 → today). No adoption decision ever
+   sees the lockbox; `--lockbox` evaluates it manually, ONCE, when freezing
+   a strategy for deployment. Honesty note: rounds adopted before this date
+   saw that data through the old holdout, so the lockbox is only fully clean
+   for decisions made after v2.
+
+**First honest measurement** (incumbent config, v2 physics, new windows):
+stock train fell from +20%/yr to **+2.4%/yr (Sharpe 0.22) — below SPY's
++17.5%**; crypto train +49%/yr vs BTC hodl's +108%. Holdout: stock +17.0%
+(Sharpe 0.84) vs SPY +28%, crypto +3.6%. Conclusion: most of the v1 edge
+was execution-assumption artifact, not alpha. The incumbent was tuned under
+v1 physics; the next training run re-tunes under v2 — treat everything
+before then as unproven.
+
+## 9. Next levers (need the user)
 
 1. **NYT Archive + Guardian API keys** (free registration) — market-grade
    historical headlines to replace the wiki-thin days.

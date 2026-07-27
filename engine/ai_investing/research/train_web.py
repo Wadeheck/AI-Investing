@@ -8,10 +8,25 @@ The user's mandate:
     never a tweak that only flatters one test run.
 
 ANTI-CHEAT PROTOCOL (the user's "do not cheat" rule, made structural):
-  every candidate upgrade is tuned ONLY on the TRAIN window (first ~2/3 of the
-  3 years) and then judged blind on the HOLDOUT window (final ~1/3) that no
-  parameter ever saw. An upgrade is adopted only if it helps BOTH windows.
-  Every round is logged to data/web_training.json — including the failures.
+  every candidate upgrade is tuned ONLY on the TRAIN window and then judged
+  blind on the HOLDOUT window that no parameter ever saw. An upgrade is
+  adopted only if it helps BOTH windows. Every round is logged to
+  data/web_training.json — including the failures.
+
+EVIDENCE PROTOCOL v2 (2026-07-28) — the replay must be pessimistic enough
+to trust:
+  frictions : per-market commissions/taxes/half-spread + sqrt market impact
+              (HK stamp duty, KR/TW transaction taxes, crypto taker fees) —
+              replaces the old flat 5bps assumption
+  fills     : stock entries fill at the NEXT day's open (no same-bar fills);
+              stops/takes are resting intraday orders — a gap through the
+              stop fills at the open, so losses CAN exceed the 10% rule
+  windows   : train 55% / holdout 25% / LOCKBOX 20%. No adoption decision
+              ever sees the lockbox; evaluate_lockbox() (--lockbox) runs it
+              manually, ONCE, when a strategy is frozen for deployment
+  benchmarks: SPY, QQQ, 60/40, BTC buy-and-hold reported beside every
+              window — alpha must beat doing nothing
+  Numbers produced before v2 are NOT comparable to numbers after it.
 
 New factor families the trainer can add to the web (all computed from the
 day's own headlines — replicable live, no hindsight):
@@ -39,6 +54,8 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from ai_investing.execution.costs import CostModel  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 ARCHIVE = DATA_DIR / "news_archive.jsonl"
@@ -140,14 +157,33 @@ def load_dataset():
 
     symbols = sorted(node_by_sym)
     yfs = lambda s: s.replace("/", "-")
+    ren = {yfs(s): s for s in symbols}
     data = yf.download([yfs(s) for s in symbols], period="3y", interval="1d",
                        auto_adjust=True, progress=False)
-    close = data["Close"].rename(columns={yfs(s): s for s in symbols})
+    close = data["Close"].rename(columns=ren)
     close = close[close.notna().mean(axis=1) > 0.33].ffill(limit=5)
     close = close.dropna(axis=1, thresh=int(len(close) * 0.8))
     symbols = [s for s in symbols if s in close.columns]
-    spy = yf.download("SPY", period="3y", interval="1d", auto_adjust=True,
-                      progress=False)["Close"].squeeze().reindex(close.index).ffill()
+    close = close[symbols]
+    # intraday OHLC for resting-order (stop/take) fills; volume for impact
+    opn = data["Open"].rename(columns=ren).reindex(close.index)[symbols]
+    high = data["High"].rename(columns=ren).reindex(close.index)[symbols]
+    low = data["Low"].rename(columns=ren).reindex(close.index)[symbols]
+    adv = (data["Volume"].rename(columns=ren).reindex(close.index)[symbols]
+           .rolling(20, min_periods=5).mean())
+    rets = close.pct_change()
+    vol20 = rets.rolling(20, min_periods=10).std()
+    # benchmarks: what doing nothing clever earns over the same dates
+    bpx = yf.download(["SPY", "QQQ", "AGG"], period="3y", interval="1d",
+                      auto_adjust=True, progress=False)["Close"]
+    bench = {"SPY": bpx["SPY"].reindex(close.index).ffill(),
+             "QQQ": bpx["QQQ"].reindex(close.index).ffill()}
+    agg = bpx["AGG"].reindex(close.index).ffill()
+    r6040 = 0.6 * bench["SPY"].pct_change() + 0.4 * agg.pct_change()
+    bench["60/40"] = 100.0 * (1.0 + r6040.fillna(0.0)).cumprod()
+    btc_sym = next((s for s in symbols if s.startswith("BTC")), None)
+    if btc_sym:
+        bench["BTC hodl"] = close[btc_sym]
     # crypto-native signals (funding z / fear-greed / on-chain trend), computed
     # with trailing windows only — nothing from the future leaks backward
     crypto_sig = {"fz": {}, "fng": {}, "addr": {}}
@@ -168,7 +204,8 @@ def load_dataset():
         f"factors {len(factors)} days, crypto-sig days {len(crypto_sig['fng'])}, "
         f"risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
-                rets=close.pct_change(), spy=spy, news=news, factors=factors,
+                open=opn, high=high, low=low, adv=adv, vol20=vol20, bench=bench,
+                rets=rets, news=news, factors=factors,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 crypto_sig=crypto_sig,
                 HL=HALF_LIFE_BY_TYPE, HL_DEF=HALF_LIFE_HOURS,
@@ -207,14 +244,67 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             w_onchain=0.0,                  # on-chain usage trend (BTC adoption)
             trail_atr=0.0,                  # >0: trailing exits — let winners RUN
             use_rel=0)                      # per-symbol reliability reweighting
-COST = 0.0005
+# -------------------------------------------------------------- frictions --
+# Real per-market frictions, charged on EVERY fill (per side):
+#   commission_bps : commissions + transaction taxes (HK stamp duty 0.1%;
+#                    KR/TW sell-side taxes averaged across both sides)
+#   spread_bps     : half the typical bid-ask spread for liquid names there
+# plus square-root market impact (execution.costs.CostModel) using the real
+# 20-day share ADV — negligible at this book size, but charged anyway.
+# Crypto pays taker fee + spread and skips the impact term (yfinance reports
+# quote-currency volume, so share-participation would be meaningless).
+COST_MODELS = {
+    "us": CostModel(commission_bps=1.5, spread_bps=2.5),
+    "hk": CostModel(commission_bps=15.0, spread_bps=10.0),
+    "cn": CostModel(commission_bps=5.0, spread_bps=5.0),
+    "sg": CostModel(commission_bps=8.0, spread_bps=12.0),
+    "jp": CostModel(commission_bps=3.0, spread_bps=5.0),
+    "kr": CostModel(commission_bps=12.0, spread_bps=6.0),
+    "tw": CostModel(commission_bps=17.0, spread_bps=6.0),
+    "eu": CostModel(commission_bps=5.0, spread_bps=5.0),
+    "crypto": CostModel(commission_bps=10.0, spread_bps=5.0),
+}
+_SUFFIX_MKT = {"HK": "hk", "SS": "cn", "SZ": "cn", "SI": "sg", "T": "jp",
+               "KS": "kr", "KQ": "kr", "TW": "tw", "TWO": "tw",
+               "PA": "eu", "DE": "eu", "AS": "eu", "L": "eu", "MI": "eu"}
+
+
+def market_of(s: str) -> str:
+    if "/" in s:
+        return "crypto"
+    if "." in s:
+        return _SUFFIX_MKT.get(s.rsplit(".", 1)[1], "us")
+    return "us"
+
+
+def cost_frac(ds, s: str, qty: float, price: float, i: int) -> float:
+    """Per-side cost fraction for filling |qty| of s at price on day i."""
+    mkt = market_of(s)
+    adv = None
+    if mkt != "crypto" and s in ds["adv"].columns:
+        a = float(ds["adv"][s].iloc[i])
+        adv = a if a == a and a > 0 else None
+    v = float(ds["vol20"][s].iloc[i]) if s in ds["vol20"].columns else float("nan")
+    return COST_MODELS[mkt].cost_fraction(abs(qty), price, adv, v if v == v else None)
+
+
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
 
 def run_replay(ds, cfg, i0, i1):
-    """One walk-forward pass over close.iloc[i0:i1]. Returns metrics per book."""
+    """One walk-forward pass over close.iloc[i0:i1]. Returns metrics per book.
+
+    Execution realism (evidence protocol v2):
+      - stock entries decided at day t's close FILL AT DAY t+1's OPEN
+      - stock stops/takes rest intraday: triggered off high/low; a gap
+        through the stop fills at the open — losses CAN exceed the 10% stop
+      - crypto fills at the daily close (continuous market); hard stops are
+        checked daily off the intraday low, gap-aware
+      - every fill pays per-market commission/tax/spread + sqrt impact
+    """
     import numpy as np
     g, close, rets = ds["g"], ds["close"], ds["rets"]
+    opn, high, low = ds["open"], ds["high"], ds["low"]
     node_by_sym, node_types = ds["node_by_sym"], ds["node_types"]
     symbols, cryptos = ds["symbols"], ds["cryptos"]
     stocks = [s for s in symbols if s not in cryptos]
@@ -222,6 +312,7 @@ def run_replay(ds, cfg, i0, i1):
     prev_imp: dict[str, float] = {}
     btc = next((s for s in cryptos if s.startswith("BTC")), None)
     book = {"cash": 100_000.0, "pos": {}}
+    pending: list[dict] = []                # stock orders awaiting next open
     rel: dict[str, float] = {}              # learned per-symbol trust (trailing)
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
     curve, ccurve = [], []
@@ -254,7 +345,7 @@ def run_replay(ds, cfg, i0, i1):
     for s in cryptos:
         if not np.isnan(px0[s]):
             qty = per / px0[s]
-            cbook["cash"] -= per * (1 + COST)
+            cbook["cash"] -= per * (1 + cost_frac(ds, s, qty, px0[s], i0))
             cbook["hodl"][s] = {"qty": qty, "entry": px0[s]}
 
     for i in range(i0, i1):
@@ -270,6 +361,24 @@ def run_replay(ds, cfg, i0, i1):
             mclose["tb"], mclose["cb"] = curve[-1], ccurve[-1]
             for k, v in (("tb", curve[-1]), ("cb", ccurve[-1])):
                 blocked[k] = bool(hwm[k]) and v < hwm[k] * (1 - HARD_STOP)
+        po, phi, plo = opn.iloc[i], high.iloc[i], low.iloc[i]
+
+        # ---- fill stock entries queued at yesterday's close, at today's open
+        for od in pending:
+            s = od["s"]
+            o = po[s]
+            if np.isnan(o) or o <= 0 or s in book["pos"] or len(book["pos"]) >= 12:
+                continue
+            qty = (od["notional"] / o) * od["dir"]
+            frac = cost_frac(ds, s, qty, o, i)
+            if od["dir"] > 0 and od["notional"] * (1 + frac) > book["cash"]:
+                continue
+            book["cash"] -= qty * o * (1 + frac * od["dir"])
+            book["pos"][s] = {
+                "qty": qty, "entry": o, "ei": i, "atr0": od["atr"],
+                "stop": o - min(cfg["stop_atr"] * od["atr"], HARD_STOP * o) * od["dir"],
+                "take": o + cfg["take_atr"] * od["atr"] * od["dir"]}
+        pending = []
         fac = ds["factors"].get(dstr, {})
         manip_disc = (1.0 - 0.5 * fac.get("hype", 0.0)) if cfg["use_manip"] else 1.0
 
@@ -319,28 +428,43 @@ def run_replay(ds, cfg, i0, i1):
         risk = field.get(ds["risk_node"], 0.0) if ds["risk_node"] else 0.0
         gate = cfg["gate_frac"] if (cfg["regime_gate"] and risk < cfg["gate_level"]) else 1.0
 
-        # ---- stock book ----
+        # ---- stock book: resting stop/take orders, gap-aware intraday fills
         win = close.iloc[max(0, i - 20):i + 1]
         for s in list(book["pos"]):
             p, v = book["pos"][s], px[s]
             if np.isnan(v):
                 continue
+            o, hi_, lo_ = po[s], phi[s], plo[s]
+            if np.isnan(o):
+                o = v
+            if np.isnan(hi_):
+                hi_ = max(o, v)
+            if np.isnan(lo_):
+                lo_ = min(o, v)
             d_ = 1 if p["qty"] > 0 else -1
-            if cfg["trail_atr"] > 0:            # winners run: stop ratchets behind peak
-                p["peak"] = max(p.get("peak", p["entry"]) * d_, v * d_) * d_
-                trail = p["peak"] - cfg["trail_atr"] * p.get("atr0", 0.0) * d_
-                p["stop"] = max(p["stop"] * d_, trail * d_) * d_
-                p["take"] = p["entry"] * (1 + 99 * d_)      # no fixed cap
-            if (d_ == 1 and (v <= p["stop"] or v >= p["take"])) or \
-               (d_ == -1 and (v >= p["stop"] or v <= p["take"])):
-                book["cash"] += p["qty"] * v * (1 - COST * d_)
+            hit_stop = lo_ <= p["stop"] if d_ == 1 else hi_ >= p["stop"]
+            hit_take = hi_ >= p["take"] if d_ == 1 else lo_ <= p["take"]
+            if hit_stop or hit_take:
+                if hit_stop:    # both touched same day -> assume the worst
+                    fill = min(o, p["stop"]) if d_ == 1 else max(o, p["stop"])
+                else:           # limit take: gap past it fills at the open
+                    fill = max(o, p["take"]) if d_ == 1 else min(o, p["take"])
+                frac = cost_frac(ds, s, p["qty"], fill, i)
+                book["cash"] += p["qty"] * fill * (1 - frac * d_)
                 total += 1
-                won = (v - p["entry"]) * p["qty"] > 0
+                won = (fill - p["entry"]) * p["qty"] > 0
                 wins += 1 if won else 0
                 rel[s] = max(0.5, min(1.5, rel.get(s, 1.0) + (0.08 if won else -0.08)))
                 hz = min(p["ei"] + 5, len(close) - 1)
                 graded += 1 if (close[s].iloc[hz] / p["entry"] - 1) * d_ > 0.003 else 0
                 del book["pos"][s]
+                continue
+            if cfg["trail_atr"] > 0:    # ratchet AFTER the exit check: today's
+                # peak can only move TOMORROW's stop (no same-day lookahead)
+                p["peak"] = max(p.get("peak", p["entry"]) * d_, v * d_) * d_
+                trail = p["peak"] - cfg["trail_atr"] * p.get("atr0", 0.0) * d_
+                p["stop"] = max(p["stop"] * d_, trail * d_) * d_
+                p["take"] = p["entry"] * (1 + 99 * d_)      # no fixed cap
         eq = eq_of(book, px)
         gross = sum(abs(p["qty"]) * px[s] for s, p in book["pos"].items()
                     if not np.isnan(px[s]))
@@ -369,7 +493,7 @@ def run_replay(ds, cfg, i0, i1):
             if abs(score) >= bar:
                 cands.append((abs(score), score, s, h))
         for _, score, s, h in (sorted(cands, reverse=True) if not blocked["tb"] else []):
-            if len(book["pos"]) >= 12 or gross >= gate * eq:
+            if len(book["pos"]) + len(pending) >= 12 or gross >= gate * eq:
                 break
             vol = h.pct_change().std()
             w = min(0.15, min(0.15, abs(score) * 0.3) * min(3.0, 0.02 / (vol + 1e-9))) * gate
@@ -377,11 +501,9 @@ def run_replay(ds, cfg, i0, i1):
             if notional < 500 or (score > 0 and notional > book["cash"]):
                 continue
             atr = h.diff().abs().mean()
-            qty = (notional / px[s]) * (1 if score > 0 else -1)
-            book["cash"] -= qty * px[s] * (1 + COST * (1 if qty > 0 else -1))
-            book["pos"][s] = {"qty": qty, "entry": px[s], "ei": i, "atr0": atr,
-                              "stop": px[s] - min(cfg["stop_atr"] * atr, HARD_STOP * px[s]) * (1 if qty > 0 else -1),
-                              "take": px[s] + cfg["take_atr"] * atr * (1 if qty > 0 else -1)}
+            # no same-bar fills: the order rests and fills at TOMORROW's open
+            pending.append({"s": s, "dir": 1 if score > 0 else -1,
+                            "notional": notional, "atr": atr})
             gross += notional
 
         # ---- crypto book: HODL core + web-driven tactical sleeve ----
@@ -393,27 +515,40 @@ def run_replay(ds, cfg, i0, i1):
         if cfg["crypto_trend"] and btc and i >= 100:
             ma = close[btc].iloc[i - 100:i].mean()
             winter = not np.isnan(px[btc]) and px[btc] < ma
-        # HARD RULE applies to the HODL core too: -10% from entry stops it
-        # out to cash; it re-enters when price recovers above its 100d average
+        # HARD RULE applies to the HODL core too — checked DAILY as a resting
+        # stop: the intraday low triggers it, a gap through it fills at the
+        # open. Re-entry (above the 100d average) stays on the 5-day cadence.
+        for s in cryptos:
+            h_ = cbook["hodl"].get(s)
+            if not h_ or h_["qty"] <= 0 or np.isnan(px[s]):
+                continue
+            o, lo_ = po[s], plo[s]
+            if np.isnan(o):
+                o = px[s]
+            if np.isnan(lo_):
+                lo_ = min(o, px[s])
+            stop_px = h_["entry"] * (1 - HARD_STOP)
+            if lo_ <= stop_px:
+                fill = min(o, stop_px)
+                cbook["cash"] += h_["qty"] * fill * (1 - cost_frac(ds, s, h_["qty"], fill, i))
+                h_["qty"] = 0.0
+                h_["stopped"] = True
         if i % 5 == 0:
             for s in cryptos:
                 if np.isnan(px[s]):
                     continue
                 h_ = cbook["hodl"].get(s)
-                if h_ and h_["qty"] > 0 and px[s] <= h_["entry"] * (1 - HARD_STOP):
-                    cbook["cash"] += h_["qty"] * px[s] * (1 - COST)
-                    h_["qty"] = 0.0
-                    h_["stopped"] = True
-                elif h_ and h_.get("stopped") and i >= 100:
+                if h_ and h_.get("stopped") and i >= 100:
                     ma = close[s].iloc[i - 100:i].mean()
                     if px[s] > ma:
                         share = cfg["crypto_hodl"] * eq_of(cbook, px) / max(1, len(cryptos))
                         buy = min(share, cbook["cash"] * 0.9)
                         if buy > 500:
-                            h_["qty"] = buy / px[s]
+                            qty = buy / px[s]
+                            h_["qty"] = qty
                             h_["entry"] = px[s]
                             h_["stopped"] = False
-                            cbook["cash"] -= buy * (1 + COST)
+                            cbook["cash"] -= buy * (1 + cost_frac(ds, s, qty, px[s], i))
         if cfg["crypto_gate"] or winter:
             deep = winter or (cfg["crypto_gate"] and risk < cfg["gate_level"])
             for s in cryptos:
@@ -422,12 +557,12 @@ def run_replay(ds, cfg, i0, i1):
                 h_ = cbook["hodl"].get(s)
                 if deep and h_ and not h_.get("trimmed"):
                     sell = h_["qty"] * 0.5
-                    cbook["cash"] += sell * px[s] * (1 - COST)
+                    cbook["cash"] += sell * px[s] * (1 - cost_frac(ds, s, sell, px[s], i))
                     h_["qty"] -= sell
                     h_["trimmed"] = True
                 elif not deep and h_ and h_.get("trimmed"):
                     buy = min(h_["qty"], cbook["cash"] * 0.3 / max(px[s], 1e-9))
-                    cbook["cash"] -= buy * px[s] * (1 + COST)
+                    cbook["cash"] -= buy * px[s] * (1 + cost_frac(ds, s, buy, px[s], i))
                     h_["qty"] += buy
                     h_["trimmed"] = False
         ceq = eq_of(cbook, px)
@@ -436,14 +571,30 @@ def run_replay(ds, cfg, i0, i1):
                 continue
             fimp = asset_imp.get(s, {}).get("impact", 0.0)
             tact = cbook["tact"].get(s)
-            if tact and (fimp < -0.05 or px[s] <= tact["entry"] * (1 - HARD_STOP)):
-                cbook["cash"] += tact["qty"] * px[s] * (1 - COST)
-                del cbook["tact"][s]
-            elif (not tact and fimp > 0.10 and gate == 1.0 and not winter and not blocked["cb"]):
+            exited = False
+            if tact:
+                o, lo_ = po[s], plo[s]
+                if np.isnan(o):
+                    o = px[s]
+                if np.isnan(lo_):
+                    lo_ = min(o, px[s])
+                stop_px = tact["entry"] * (1 - HARD_STOP)
+                if lo_ <= stop_px:      # resting hard stop, gap-aware
+                    fill = min(o, stop_px)
+                    cbook["cash"] += tact["qty"] * fill * (1 - cost_frac(ds, s, tact["qty"], fill, i))
+                    del cbook["tact"][s]
+                    tact, exited = None, True
+                elif fimp < -0.05:      # signal exit at the close
+                    cbook["cash"] += tact["qty"] * px[s] * (1 - cost_frac(ds, s, tact["qty"], px[s], i))
+                    del cbook["tact"][s]
+                    tact, exited = None, True
+            if (not tact and not exited and fimp > 0.10 and gate == 1.0
+                    and not winter and not blocked["cb"]):
                 notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4, cbook["cash"] * 0.9)
                 if notional > 1000:
-                    cbook["cash"] -= notional * (1 + COST)
-                    cbook["tact"][s] = {"qty": notional / px[s], "entry": px[s]}
+                    qty = notional / px[s]
+                    cbook["cash"] -= notional * (1 + cost_frac(ds, s, qty, px[s], i))
+                    cbook["tact"][s] = {"qty": qty, "entry": px[s]}
         curve.append(eq)
         ccurve.append(eq_of(cbook, px))
 
@@ -462,6 +613,21 @@ def run_replay(ds, cfg, i0, i1):
     out["win_rate"] = round(wins / max(1, total), 3)
     out["precision5d"] = round(graded / max(1, total), 3)
     return out
+
+
+def series_metrics(c):
+    """CAGR / Sharpe / maxDD for a price-like series on a trading-day index."""
+    c = c.dropna()
+    r = c.pct_change().dropna()
+    yrs = max(len(c) / 252, 1e-9)
+    return {"cagr": round(float((c.iloc[-1] / c.iloc[0]) ** (1 / yrs) - 1), 4),
+            "sharpe": round(float(r.mean() / (r.std() + 1e-12) * math.sqrt(252)), 2),
+            "maxdd": round(float(((c / c.cummax()) - 1).min()), 4)}
+
+
+def bench_metrics(ds, i0, i1):
+    """Buy-and-hold benchmarks over the same window — alpha must beat these."""
+    return {name: series_metrics(c.iloc[i0:i1]) for name, c in ds["bench"].items()}
 
 
 def objective(m):
@@ -515,7 +681,7 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain", "trail_atr")
 
 
-def refine(ds, cfg, base_obj, warm, split, n, history, widen=1.0):
+def refine(ds, cfg, base_obj, warm, t_end, h_end, history, widen=1.0):
     """Local finetuning: perturb each numeric parameter ±20%·widen around the
     incumbent; keep a perturbation only if it helps train AND holdout."""
     best_cfg, best_obj = dict(cfg), base_obj
@@ -525,12 +691,12 @@ def refine(ds, cfg, base_obj, warm, split, n, history, widen=1.0):
             continue
         for f in (1 - 0.2 * widen, 1 + 0.2 * widen):
             cand = {**best_cfg, k: round(v * f, 4)}
-            m = run_replay(ds, cand, warm, split)
+            m = run_replay(ds, cand, warm, t_end)
             o = objective(m)
             history.append({"round": f"refine {k}x{f:.2f}", "obj": round(o, 4)})
             if o > best_obj + 1e-4:
-                oos_old = run_replay(ds, best_cfg, split, n)
-                oos_new = run_replay(ds, cand, split, n)
+                oos_old = run_replay(ds, best_cfg, t_end, h_end)
+                oos_new = run_replay(ds, cand, t_end, h_end)
                 if objective(oos_new) >= objective(oos_old) - 0.01:
                     best_cfg, best_obj = cand, o
                     log(f"  refine: {k} -> {cand[k]} (obj {o:.3f}, holdout ok)")
@@ -557,32 +723,37 @@ def train_forever() -> None:
         with hist_path.open("a") as fh:
             fh.write(json.dumps({"cycle": cycle,
                                  "ts": datetime.now(timezone.utc).isoformat(),
-                                 "cfg": result["best_cfg"], "full": result["full"],
+                                 "cfg": result["best_cfg"], "dev": result["dev"],
                                  "target_hit": result["target_hit"]}) + "\n")
         if all(result["target_hit"].values()):
-            log(f"🎯 TARGETS HIT in cycle {cycle} — stopping. Verify before trusting.")
+            log(f"🎯 TARGETS HIT in cycle {cycle} — stopping. Verify before "
+                "trusting; when freezing for deployment, run --lockbox ONCE.")
             return
         improved = (incumbent is None
                     or json.dumps(result["best_cfg"], sort_keys=True)
                     != json.dumps(incumbent, sort_keys=True))
         stuck = 0 if improved else stuck + 1
         incumbent = result["best_cfg"]
-        s, c = result["full"]["stock"], result["full"]["crypto"]
+        s, c = result["dev"]["stock"], result["dev"]["crypto"]
         log(f"cycle {cycle} best: stock {s['cagr']:+.1%}/dd {s['maxdd']:.0%} | "
             f"crypto {c['cagr']:+.1%}/dd {c['maxdd']:.0%} — continuing")
         if stuck >= 5:
             log("search converged at this function structure — the remaining gap "
                 "needs NEW factor families (structural work, not more tuning). "
-                "Pausing to avoid burning cycles on a exhausted search space.")
+                "Pausing to avoid burning cycles on a exhausted search space. "
+                "When freezing this strategy for deployment, run --lockbox ONCE.")
             return
 
 
 def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
     ds = load_dataset()
     n = len(ds["close"])
-    warm, split = 30, int(n * 0.66)
+    warm = 30
+    t_end = int(n * 0.55)     # tuning sees ONLY [warm, t_end)
+    h_end = int(n * 0.80)     # adoption gate judges on [t_end, h_end)
+    # [h_end, n) is the LOCKBOX: never evaluated here — see evaluate_lockbox()
     history, best_cfg = [], dict(seed_cfg or BASE)
-    best_train = run_replay(ds, best_cfg, warm, split)
+    best_train = run_replay(ds, best_cfg, warm, t_end)
     best_obj = objective(best_train)
     log(f"baseline train obj={best_obj:.3f} {best_train['stock']} {best_train['crypto']}")
 
@@ -593,7 +764,7 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
         round_best, round_best_obj, round_best_m = None, best_obj, None
         for vals in combos:
             cfg = {**best_cfg, **dict(zip(keys, vals))}
-            m = run_replay(ds, cfg, warm, split)
+            m = run_replay(ds, cfg, warm, t_end)
             o = objective(m)
             history.append({"round": round_name, "cfg": {k: cfg[k] for k in keys},
                             "train": m, "obj": round(o, 4)})
@@ -604,8 +775,8 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
             continue
         # anti-cheat: the winner must also help OUT-OF-SAMPLE, unseen by tuning
         refresh_news(ds)          # include any news digested while we trained
-        oos_old = run_replay(ds, best_cfg, split, n)
-        oos_new = run_replay(ds, round_best, split, n)
+        oos_old = run_replay(ds, best_cfg, t_end, h_end)
+        oos_new = run_replay(ds, round_best, t_end, h_end)
         if objective(oos_new) >= objective(oos_old) - 0.01:
             best_cfg, best_obj = round_best, round_best_obj
             log(f"{round_name}: ADOPTED (train obj {round_best_obj:.3f}; "
@@ -618,44 +789,93 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
 
     # local finetuning around the staged winner (holdout-checked per step)
     log("--- refinement pass (±20% around incumbent, holdout-checked) ---")
-    best_cfg, best_obj = refine(ds, best_cfg, best_obj, warm, split, n, history, widen)
+    best_cfg, best_obj = refine(ds, best_cfg, best_obj, warm, t_end, h_end, history, widen)
 
     refresh_news(ds)
-    final_train = run_replay(ds, best_cfg, warm, split)
-    final_oos = run_replay(ds, best_cfg, split, n)
-    final_full = run_replay(ds, best_cfg, warm, n)
+    final_train = run_replay(ds, best_cfg, warm, t_end)
+    final_oos = run_replay(ds, best_cfg, t_end, h_end)
+    final_dev = run_replay(ds, best_cfg, warm, h_end)
+    bench = {"train": bench_metrics(ds, warm, t_end),
+             "holdout": bench_metrics(ds, t_end, h_end),
+             "train+holdout": bench_metrics(ds, warm, h_end)}
+    idx = ds["close"].index
+    windows = {"train": [str(idx[warm].date()), str(idx[t_end - 1].date())],
+               "holdout": [str(idx[t_end].date()), str(idx[h_end - 1].date())],
+               "lockbox": [str(idx[h_end].date()), str(idx[n - 1].date())]}
     result = {"ts": datetime.now(timezone.utc).isoformat(), "best_cfg": best_cfg,
-              "train": final_train, "holdout": final_oos, "full": final_full,
+              "train": final_train, "holdout": final_oos, "dev": final_dev,
+              "benchmarks": bench, "windows": windows,
               "targets": {"stock_cagr": TARGET_STOCK_CAGR, "crypto_cagr": TARGET_CRYPTO_CAGR,
                           "maxdd_limit": MAX_DD_LIMIT},
               "target_hit": {
-                  "stock": final_full["stock"]["cagr"] >= TARGET_STOCK_CAGR,
-                  "crypto": final_full["crypto"]["cagr"] >= TARGET_CRYPTO_CAGR,
-                  "preservation": (abs(final_full["stock"]["maxdd"]) <= MAX_DD_LIMIT
-                                   and abs(final_full["crypto"]["maxdd"]) <= MAX_DD_LIMIT)},
+                  "stock": final_dev["stock"]["cagr"] >= TARGET_STOCK_CAGR,
+                  "crypto": final_dev["crypto"]["cagr"] >= TARGET_CRYPTO_CAGR,
+                  "preservation": (abs(final_dev["stock"]["maxdd"]) <= MAX_DD_LIMIT
+                                   and abs(final_dev["crypto"]["maxdd"]) <= MAX_DD_LIMIT)},
               "history": history[-200:]}
     OUT_JSON.write_text(json.dumps(result, indent=1))
 
     lines = ["# Web training report", f"generated {result['ts']}", "",
+             "evidence protocol v2: real per-market frictions, next-open fills, "
+             "gap-aware resting stops; benchmark-anchored; lockbox "
+             f"({windows['lockbox'][0]} → {windows['lockbox'][1]}) untouched.", "",
              f"adopted config: `{json.dumps(best_cfg)}`", "",
              "| window | book | CAGR | Sharpe | maxDD |", "|---|---|---|---|---|"]
-    for wname, m in (("train", final_train), ("holdout", final_oos), ("full 3y", final_full)):
+    for wname, m in (("train", final_train), ("holdout", final_oos),
+                     ("train+holdout", final_dev)):
         for bname in ("stock", "crypto"):
             b = m[bname]
             lines.append(f"| {wname} | {bname} | {b['cagr']:+.1%} | {b['sharpe']} | {b['maxdd']:.1%} |")
-    lines += ["", f"trades {final_full['trades']}, win rate {final_full['win_rate']:.0%}, "
-                  f"5-day precision {final_full['precision5d']:.0%}",
-              "", f"targets hit: {result['target_hit']}"]
+    lines += ["", "## benchmarks (buy & hold, same windows) — beat these or it isn't alpha",
+              "", "| window | benchmark | CAGR | Sharpe | maxDD |", "|---|---|---|---|---|"]
+    for wname, bm in bench.items():
+        for name, b in bm.items():
+            lines.append(f"| {wname} | {name} | {b['cagr']:+.1%} | {b['sharpe']} | {b['maxdd']:.1%} |")
+    lines += ["", f"trades {final_dev['trades']}, win rate {final_dev['win_rate']:.0%}, "
+                  f"5-day precision {final_dev['precision5d']:.0%}",
+              "", f"targets hit (train+holdout): {result['target_hit']}",
+              "", "lockbox: run `train_web --lockbox` ONCE when freezing a strategy "
+                  "for deployment — every look burns it."]
     OUT_MD.write_text("\n".join(lines))
     log(f"TRAINING CYCLE COMPLETE — targets hit: {result['target_hit']}")
-    log(f"full-period: stock {final_full['stock']} crypto {final_full['crypto']}")
+    log(f"train+holdout: stock {final_dev['stock']} crypto {final_dev['crypto']}")
     return result
 
 
+def evaluate_lockbox() -> dict:
+    """FINAL EXAM — run the frozen incumbent on the untouched last 20%.
+
+    Run ONCE, manually (--lockbox), when a strategy is frozen for deployment.
+    Every look burns the window: its results must NEVER feed back into tuning
+    or adoption decisions. Honesty note: rounds adopted before 2026-07-28 saw
+    this data through the old 66/34 holdout split, so the lockbox is only
+    fully clean for adoptions made after the v2 protocol landed.
+    """
+    cfg = {**dict(BASE), **json.loads(OUT_JSON.read_text())["best_cfg"]}
+    ds = load_dataset()
+    n = len(ds["close"])
+    h_end = int(n * 0.80)
+    idx = ds["close"].index
+    m = run_replay(ds, cfg, h_end, n)
+    b = bench_metrics(ds, h_end, n)
+    out = {"ts": datetime.now(timezone.utc).isoformat(),
+           "window": [str(idx[h_end].date()), str(idx[n - 1].date())],
+           "cfg": cfg, "metrics": m, "benchmarks": b}
+    (DATA_DIR / "web_training_lockbox.json").write_text(json.dumps(out, indent=1))
+    log(f"LOCKBOX {out['window'][0]} → {out['window'][1]}: "
+        f"stock {m['stock']} | crypto {m['crypto']}")
+    log(f"benchmarks over the same window: {b}")
+    log("this window is now BURNED — do not tune against it")
+    return out
+
+
 if __name__ == "__main__":
-    if "--no-wait" not in sys.argv:
-        wait_for_pipeline()
-    if "--once" in sys.argv:
-        train()
+    if "--lockbox" in sys.argv:
+        evaluate_lockbox()
     else:
-        train_forever()
+        if "--no-wait" not in sys.argv:
+            wait_for_pipeline()
+        if "--once" in sys.argv:
+            train()
+        else:
+            train_forever()
