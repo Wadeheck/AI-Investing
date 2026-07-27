@@ -71,18 +71,23 @@ def log(msg: str) -> None:
 
 
 # ------------------------------------------------------------ wait for data --
-def wait_for_pipeline(max_hours: float = 12.0) -> None:
+def wait_for_pipeline(max_hours: float = 24.0) -> None:
+    wiki = DATA_DIR / "news_archive_wiki.jsonl"
     t0 = time.time()
     while time.time() - t0 < max_hours * 3600:
-        try:
-            arch = sum(1 for _ in ARCHIVE.open())
-            imp = sum(1 for _ in IMPULSES.open()) if IMPULSES.exists() else 0
-        except OSError:
-            arch, imp = 0, 0
-        if arch >= 780 and imp >= arch * 0.9:
-            log(f"pipeline complete: {arch} days fetched, {imp} digested")
+        days = set()
+        for p in (ARCHIVE, wiki):
+            if p.exists():
+                for line in p.open():
+                    try:
+                        days.add(json.loads(line)["date"])
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+        imp = sum(1 for _ in IMPULSES.open()) if IMPULSES.exists() else 0
+        if len(days) >= 770 and imp >= len(days) * 0.9:
+            log(f"pipeline complete: {len(days)} days covered, {imp} digested")
             return
-        log(f"waiting for pipeline… fetched {arch}/785, digested {imp}")
+        log(f"waiting for pipeline… covered {len(days)}/785 (gdelt+wiki), digested {imp}")
         time.sleep(600)
     log("WARNING: pipeline incomplete after timeout — training on what exists")
 

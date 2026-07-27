@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 ARCHIVE = DATA_DIR / "news_archive.jsonl"      # date -> headlines (GDELT)
+WIKI_ARCHIVE = DATA_DIR / "news_archive_wiki.jsonl"  # fallback: Wikipedia Current Events
 IMPULSES = DATA_DIR / "news_impulses.jsonl"    # date -> node impulses (LLM-digested)
 START, END = date(2023, 7, 24), date(2026, 7, 24)
 
@@ -136,6 +137,57 @@ def fetch() -> None:
     print("[fetch] complete — all days answered by the archive", flush=True)
 
 
+# -------------------------------------------------------------- wiki fetch --
+def fetch_wiki() -> None:
+    """Fallback source while GDELT is locked out: Wikipedia Current Events
+    day pages (free, unthrottled at polite pace). Works BACKWARD from the end
+    of the window while GDELT works forward — the two meet in the middle, and
+    this stops the moment a day is already covered (the GDELT frontier)."""
+    import re as _re
+    days = [d for d in reversed(_days())
+            if d.isoformat() not in (_done_dates(ARCHIVE) | _done_dates(WIKI_ARCHIVE))]
+    print(f"[wiki] filling backward: {len(days)} days open, starting at "
+          f"{days[0] if days else '-'}", flush=True)
+    filled = 0
+    with WIKI_ARCHIVE.open("a") as fh:
+        for d in days:
+            if d.isoformat() in _done_dates(ARCHIVE):
+                print(f"[wiki] {d} already fetched by GDELT — frontiers met, stopping", flush=True)
+                break
+            page = f"Portal:Current events/{d.year} {d.strftime('%B')} {d.day}"
+            url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
+                {"action": "parse", "page": page, "prop": "wikitext",
+                 "format": "json", "formatversion": "2"})
+            try:
+                req = urllib.request.Request(url, headers={
+                    "user-agent": "ai-investing-research/0.1 (personal research)"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    wt = json.load(resp)["parse"]["wikitext"]
+            except Exception:
+                time.sleep(15)
+                continue                            # gap stays open for a later pass
+            heads = []
+            for line in wt.splitlines():
+                t = line.strip()
+                if not t.startswith("*"):
+                    continue
+                t = t.lstrip("* ").strip()
+                t = _re.sub(r"<ref[^>]*>.*?</ref>|<ref[^>]*/>", "", t)
+                t = _re.sub(r"\{\{[^}]*\}\}", "", t)
+                t = _re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", t)
+                t = _re.sub(r"\[https?://\S+ ([^\]]+)\]", r"\1", t)
+                t = _re.sub(r"''+", "", t).strip(" .;:")
+                if 25 <= len(t) <= 260:
+                    heads.append({"title": t[:200], "source": "en.wikipedia.org"})
+            fh.write(json.dumps({"date": d.isoformat(), "headlines": heads[:25]}) + "\n")
+            fh.flush()
+            filled += 1
+            if filled % 25 == 0:
+                print(f"[wiki] {d} ({filled} filled) — {len(heads)} items", flush=True)
+            time.sleep(1.5)                          # polite to Wikipedia
+    print(f"[wiki] done — {filled} days filled from Wikipedia", flush=True)
+
+
 # ------------------------------------------------------------------ digest --
 def digest() -> None:
     from ai_investing.brain.graph import KnowledgeGraph
@@ -143,14 +195,20 @@ def digest() -> None:
     from ai_investing.config import settings
     g = KnowledgeGraph.load(str(DATA_DIR / "knowledge_graph.json"))
     done = _done_dates(IMPULSES)
-    rows = []
-    for line in ARCHIVE.open():
-        try:
-            r = json.loads(line)
-            if r["date"] not in done and r.get("headlines"):
-                rows.append(r)
-        except (json.JSONDecodeError, KeyError):
-            pass
+    rows, seen_days = [], set()
+    for path in (ARCHIVE, WIKI_ARCHIVE):
+        if not path.exists():
+            continue
+        for line in path.open():
+            try:
+                r = json.loads(line)
+                if (r["date"] not in done and r["date"] not in seen_days
+                        and r.get("headlines")):
+                    rows.append(r)
+                    seen_days.add(r["date"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+    rows.sort(key=lambda r: r["date"])
     print(f"[digest] {len(rows)} days to digest through the local LLM "
           f"({len(done)} already done)", flush=True)
     t0 = time.time()
@@ -401,6 +459,8 @@ def replay() -> None:
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if cmd == "wiki":
+        fetch_wiki()
     if cmd in ("fetch", "all"):
         fetch()
     if cmd in ("digest", "all"):
