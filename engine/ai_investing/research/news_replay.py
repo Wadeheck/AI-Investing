@@ -75,42 +75,62 @@ def _done_dates(path: Path) -> set[str]:
 
 
 # ------------------------------------------------------------------- fetch --
+def _fetch_day(d: date) -> list[dict]:
+    params = urllib.parse.urlencode({
+        "query": GDELT_QUERY, "mode": "artlist", "maxrecords": "25",
+        "format": "json", "sort": "hybridrel",
+        "startdatetime": d.strftime("%Y%m%d") + "000000",
+        "enddatetime": d.strftime("%Y%m%d") + "235959"})
+    url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
+    heads: list[dict] = []
+    try:
+        req = urllib.request.Request(url, headers={"user-agent": "ai-investing-research/0.1"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            arts = json.loads(resp.read().decode()).get("articles", [])
+        seen = set()
+        for a in arts:
+            t = (a.get("title") or "").strip()
+            if t and t.lower() not in seen:
+                seen.add(t.lower())
+                heads.append({"title": t[:200], "source": a.get("domain", "")[:60]})
+    except Exception:
+        time.sleep(45)                      # 429/hiccup: one cool-down, move on
+    return heads
+
+
 def fetch() -> None:
-    done = _done_dates(ARCHIVE)
-    days = [d for d in _days() if d.isoformat() not in done]
-    print(f"[fetch] {len(days)} days to fetch (resumable; {len(done)} already done)", flush=True)
-    with ARCHIVE.open("a") as fh:
-        for i, d in enumerate(days):
-            params = urllib.parse.urlencode({
-                "query": GDELT_QUERY, "mode": "artlist", "maxrecords": "25",
-                "format": "json", "sort": "hybridrel",
-                "startdatetime": d.strftime("%Y%m%d") + "000000",
-                "enddatetime": d.strftime("%Y%m%d") + "235959"})
-            url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
-            heads, tries = [], 0
-            while tries < 5:
-                tries += 1
+    """Fast first pass (one try per day, gaps allowed), then sweep the gaps —
+    under a hostile rate limiter this beats retrying inline every time."""
+    for sweep in range(4):
+        rows = []
+        if ARCHIVE.exists():
+            for line in ARCHIVE.open():
                 try:
-                    req = urllib.request.Request(url, headers={"user-agent": "ai-investing-research/0.1"})
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        body = resp.read().decode()
-                    arts = json.loads(body).get("articles", [])
-                    seen_titles = set()
-                    for a in arts:
-                        t = (a.get("title") or "").strip()
-                        if t and t.lower() not in seen_titles:
-                            seen_titles.add(t.lower())
-                            heads.append({"title": t[:200], "source": a.get("domain", "")[:60]})
-                    if heads:
-                        break
-                    time.sleep(30)          # empty can be silent throttling — retry
-                except Exception:
-                    time.sleep(90)          # 429 / hiccup: long backoff, retry
-            fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
-            fh.flush()
-            if i % 25 == 0:
-                print(f"[fetch] {d} ({i}/{len(days)}) — {len(heads)} headlines", flush=True)
-            time.sleep(10)                  # be a polite citizen of GDELT
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        if sweep > 0:                       # requeue empty days for the sweep
+            keep = [r for r in rows if r.get("headlines")]
+            if len(keep) == len(rows) and len(rows) >= len(_days()):
+                break
+            ARCHIVE.write_text("".join(json.dumps(r) + "\n" for r in keep))
+            rows = keep
+        done = {r["date"] for r in rows}
+        days = [d for d in _days() if d.isoformat() not in done]
+        if not days:
+            break
+        print(f"[fetch] pass {sweep}: {len(days)} days to fetch "
+              f"({len(done)} done)", flush=True)
+        with ARCHIVE.open("a") as fh:
+            for i, d in enumerate(days):
+                heads = _fetch_day(d)
+                fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
+                fh.flush()
+                if i % 25 == 0:
+                    print(f"[fetch] {d} ({i}/{len(days)}) — {len(heads)} headlines", flush=True)
+                time.sleep(7 + 6 * sweep)   # later sweeps go gentler
+    empties = sum(1 for line in ARCHIVE.open() if not json.loads(line).get("headlines"))
+    print(f"[fetch] complete — {empties} days remain empty after sweeps", flush=True)
 
 
 # ------------------------------------------------------------------ digest --
