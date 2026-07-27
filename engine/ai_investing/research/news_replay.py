@@ -75,62 +75,65 @@ def _done_dates(path: Path) -> set[str]:
 
 
 # ------------------------------------------------------------------- fetch --
-def _fetch_day(d: date) -> list[dict]:
+def _fetch_day(d: date) -> list[dict] | None:
+    """None = request FAILED (throttled/error) — caller must not record it.
+    A list (possibly empty) = a genuine answer from the archive."""
     params = urllib.parse.urlencode({
         "query": GDELT_QUERY, "mode": "artlist", "maxrecords": "25",
         "format": "json", "sort": "hybridrel",
         "startdatetime": d.strftime("%Y%m%d") + "000000",
         "enddatetime": d.strftime("%Y%m%d") + "235959"})
     url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
-    heads: list[dict] = []
     try:
         req = urllib.request.Request(url, headers={"user-agent": "ai-investing-research/0.1"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             arts = json.loads(resp.read().decode()).get("articles", [])
-        seen = set()
-        for a in arts:
-            t = (a.get("title") or "").strip()
-            if t and t.lower() not in seen:
-                seen.add(t.lower())
-                heads.append({"title": t[:200], "source": a.get("domain", "")[:60]})
     except Exception:
-        time.sleep(45)                      # 429/hiccup: one cool-down, move on
+        return None
+    heads, seen = [], set()
+    for a in arts:
+        t = (a.get("title") or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            heads.append({"title": t[:200], "source": a.get("domain", "")[:60]})
     return heads
 
 
 def fetch() -> None:
-    """Fast first pass (one try per day, gaps allowed), then sweep the gaps —
-    under a hostile rate limiter this beats retrying inline every time."""
-    for sweep in range(4):
-        rows = []
-        if ARCHIVE.exists():
-            for line in ARCHIVE.open():
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-        if sweep > 0:                       # requeue empty days for the sweep
-            keep = [r for r in rows if r.get("headlines")]
-            if len(keep) == len(rows) and len(rows) >= len(_days()):
-                break
-            ARCHIVE.write_text("".join(json.dumps(r) + "\n" for r in keep))
-            rows = keep
-        done = {r["date"] for r in rows}
-        days = [d for d in _days() if d.isoformat() not in done]
-        if not days:
-            break
-        print(f"[fetch] pass {sweep}: {len(days)} days to fetch "
-              f"({len(done)} done)", flush=True)
-        with ARCHIVE.open("a") as fh:
-            for i, d in enumerate(days):
+    """Throttle-honest fetching: a failed request is retried with an adaptive
+    cool-down (doubling to 10 min) and NEVER written as a fake empty day."""
+    rows = []
+    if ARCHIVE.exists():
+        for line in ARCHIVE.open():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    # purge fake-empties from earlier runs so they get refetched
+    keep = [r for r in rows if r.get("headlines")]
+    if len(keep) != len(rows):
+        ARCHIVE.write_text("".join(json.dumps(r) + "\n" for r in keep))
+        print(f"[fetch] purged {len(rows) - len(keep)} fake-empty days for refetch", flush=True)
+    done = {r["date"] for r in keep}
+    days = [d for d in _days() if d.isoformat() not in done]
+    print(f"[fetch] {len(days)} days to fetch ({len(done)} done)", flush=True)
+    cooldown = 8.0
+    with ARCHIVE.open("a") as fh:
+        for i, d in enumerate(days):
+            while True:
                 heads = _fetch_day(d)
-                fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
-                fh.flush()
-                if i % 25 == 0:
-                    print(f"[fetch] {d} ({i}/{len(days)}) — {len(heads)} headlines", flush=True)
-                time.sleep(7 + 6 * sweep)   # later sweeps go gentler
-    empties = sum(1 for line in ARCHIVE.open() if not json.loads(line).get("headlines"))
-    print(f"[fetch] complete — {empties} days remain empty after sweeps", flush=True)
+                if heads is not None:
+                    cooldown = max(8.0, cooldown * 0.7)     # success: relax
+                    break
+                cooldown = min(600.0, cooldown * 2)         # throttled: back off hard
+                print(f"[fetch] {d} throttled — cooling {cooldown:.0f}s", flush=True)
+                time.sleep(cooldown)
+            fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
+            fh.flush()
+            if i % 25 == 0:
+                print(f"[fetch] {d} ({i}/{len(days)}) — {len(heads)} headlines", flush=True)
+            time.sleep(cooldown)
+    print("[fetch] complete — all days answered by the archive", flush=True)
 
 
 # ------------------------------------------------------------------ digest --
