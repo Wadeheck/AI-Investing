@@ -76,7 +76,8 @@ class Brain:
         # impulses on their destination nodes and propagate onward from there.
         node_types = {nid: n.type for nid, n in self.graph.nodes.items()}
         self.field.decay(now, node_types,
-                         anchors={**self._anchors(macro), **self._valuation_anchors()})
+                         anchors={**self._anchors(macro), **self._valuation_anchors(),
+                                  **self._crypto_anchors()})
         for node, contrib in self.field.mature_pending(now).items():
             impulses[node] = max(impulses.get(node, 0.0), contrib, key=abs)
 
@@ -231,6 +232,36 @@ class Brain:
             if abs(v) >= 0.05:
                 a[node.id] = round(max(-0.4, min(0.4, v)), 4)
         return a
+
+    def _crypto_anchors(self) -> dict[str, float]:
+        """Crypto-native signals as resting levels on the crypto asset nodes:
+        extreme fear/greed (contrarian) and stretched funding (crowded
+        leverage wants to unwind). Live values refreshed every ~6h, free."""
+        try:
+            from ai_investing.research.crypto_signals import refresh_live
+            cs = refresh_live()
+            a: dict[str, float] = {}
+            fng_days = sorted(cs.get("fng", {}).items())
+            fng = int(fng_days[-1][1]) if fng_days else None
+            for sym, series in (cs.get("funding") or {}).items():
+                node = self.graph.node_for_symbol(sym)
+                if node is None or not series:
+                    continue
+                vals = [v for _, v in sorted(series.items())][-90:]
+                latest = vals[-1]
+                mean = sum(vals) / len(vals)
+                sd = (sum((v - mean) ** 2 for v in vals) / max(1, len(vals) - 1)) ** 0.5
+                z = (latest - mean) / sd if sd > 1e-12 else 0.0
+                v = 0.0
+                if abs(z) > 1.0:
+                    v -= max(-1.0, min(1.0, z / 2.5)) * 0.15   # crowded longs = drag
+                if fng is not None and (fng <= 20 or fng >= 75):
+                    v += 0.12 if fng <= 20 else -0.12          # contrarian emotion
+                if abs(v) >= 0.05:
+                    a[node.id] = round(max(-0.3, min(0.3, v)), 4)
+            return a
+        except Exception:
+            return {}
 
     def _performance(self) -> dict:
         """Own-performance inputs for mood: drawdown (history.json) and portfolio

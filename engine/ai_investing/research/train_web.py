@@ -148,11 +148,29 @@ def load_dataset():
     symbols = [s for s in symbols if s in close.columns]
     spy = yf.download("SPY", period="3y", interval="1d", auto_adjust=True,
                       progress=False)["Close"].squeeze().reindex(close.index).ffill()
+    # crypto-native signals (funding z / fear-greed / on-chain trend), computed
+    # with trailing windows only — nothing from the future leaks backward
+    crypto_sig = {"fz": {}, "fng": {}, "addr": {}}
+    try:
+        cs = json.loads((DATA_DIR / "crypto_signals.json").read_text())
+        crypto_sig["fng"] = {k: int(v) for k, v in cs.get("fng", {}).items()}
+        for sym, series in cs.get("funding", {}).items():
+            s_ = pd.Series(series).sort_index()
+            z = (s_ - s_.rolling(90, min_periods=30).mean()) / (
+                s_.rolling(90, min_periods=30).std() + 1e-9)
+            crypto_sig["fz"][sym] = z.dropna().to_dict()
+        a = pd.Series(cs.get("btc_addr", {})).sort_index()
+        tr = (a.rolling(10).mean() - a.rolling(40).mean()) / (a.rolling(40).mean() + 1e-9)
+        crypto_sig["addr"] = tr.dropna().to_dict()
+    except Exception as exc:
+        log(f"crypto signals unavailable: {exc}")
     log(f"dataset: {len(symbols)} symbols, {len(close)} days, news {len(news)} days, "
-        f"factors {len(factors)} days, risk node = {risk_node}")
+        f"factors {len(factors)} days, crypto-sig days {len(crypto_sig['fng'])}, "
+        f"risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
                 rets=close.pct_change(), spy=spy, news=news, factors=factors,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
+                crypto_sig=crypto_sig,
                 HL=HALF_LIFE_BY_TYPE, HL_DEF=HALF_LIFE_HOURS,
                 cryptos=[s for s in symbols if "/" in s])
 
@@ -183,7 +201,10 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             # --- scoring-function upgrades (the math itself is searchable) ---
             w_fmom=0.0,                     # field momentum: building ripples > stale ones
             w_agree=0.0,                    # bonus when web and price action AGREE
-            crypto_trend=0)                 # BTC under its 100d average = crypto winter
+            crypto_trend=0,                 # BTC under its 100d average = crypto winter
+            w_funding=0.0,                  # contrarian leverage-crowding (funding z)
+            w_fng=0.0,                      # contrarian crypto fear/greed extremes
+            w_onchain=0.0)                  # on-chain usage trend (BTC adoption)
 COST = 0.0005
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
@@ -265,6 +286,26 @@ def run_replay(ds, cfg, i0, i1):
                 nid = node_by_sym[s]
                 impulses[nid] = max(impulses.get(nid, 0.0),
                                     max(-0.4, min(0.4, 3.0 * r)), key=abs)
+        # crypto-native signals pulse the crypto nodes (the web stays the boss)
+        cs = ds["crypto_sig"]
+        for s in cryptos:
+            nid = node_by_sym[s]
+            add = 0.0
+            if cfg["w_funding"]:
+                fz = cs["fz"].get(s, {}).get(dstr)
+                if fz is not None and abs(fz) > 1.0:      # only meaningful extremes
+                    add += -cfg["w_funding"] * max(-1.0, min(1.0, fz / 2.5)) * 0.35
+            if cfg["w_fng"]:
+                v = cs["fng"].get(dstr)
+                if v is not None and (v <= 20 or v >= 75):
+                    add += cfg["w_fng"] * (0.3 if v <= 20 else -0.3)
+            if cfg["w_onchain"] and s.startswith("BTC"):
+                tr = cs["addr"].get(dstr)
+                if tr is not None:
+                    add += cfg["w_onchain"] * max(-0.25, min(0.25, tr * 8))
+            if abs(add) > 0.03:
+                impulses[nid] = max(impulses.get(nid, 0.0),
+                                    max(-0.5, min(0.5, add)), key=abs)
         field = decay_field(field)
         if impulses:
             impacts, _, _ = g.propagate(impulses, max_hops=cfg["max_hops"],
@@ -445,11 +486,17 @@ ROUNDS = [
         "w_fmom": [0.0, 0.5, 1.0], "w_agree": [0.0, 0.4, 0.8]}),
     ("R10 crypto winter gate (BTC under its 100-day average)", {
         "crypto_trend": [1]}),
+    ("R11 funding-rate crowding (contrarian leverage signal into the web)", {
+        "w_funding": [0.4, 0.8]}),
+    ("R12 crypto fear/greed extremes (contrarian crowd emotion into the web)", {
+        "w_fng": [0.4, 0.8]}),
+    ("R13 on-chain adoption trend (BTC active addresses into the web)", {
+        "w_onchain": [0.4, 0.8]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
-           "w_fmom", "w_agree", "stop_atr", "take_atr")
+           "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain")
 
 
 def refine(ds, cfg, base_obj, warm, split, n, history, widen=1.0):
@@ -481,6 +528,12 @@ def train_forever() -> None:
     data/web_training_history.jsonl; latest state always in web_training.json."""
     hist_path = DATA_DIR / "web_training_history.jsonl"
     cycle, stuck, incumbent = 0, 0, None
+    try:                                   # resume from the best known config
+        prev = json.loads(OUT_JSON.read_text())["best_cfg"]
+        incumbent = {**dict(BASE), **prev}
+        log("resuming from incumbent config on disk")
+    except Exception:
+        pass
     while True:
         cycle += 1
         log(f"===== TRAINING CYCLE {cycle} (stuck={stuck}) =====")
