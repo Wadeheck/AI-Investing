@@ -179,7 +179,11 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             regime_gate=0, gate_level=-0.35, gate_frac=0.3,
             crypto_hodl=0.6, crypto_gain=0.5,
             crypto_gate=0,                  # deep risk-off also trims the HODL core
-            short_bias=0.0)                 # lower entry bar for SHORTS in risk-off
+            short_bias=0.0,                 # lower entry bar for SHORTS in risk-off
+            # --- scoring-function upgrades (the math itself is searchable) ---
+            w_fmom=0.0,                     # field momentum: building ripples > stale ones
+            w_agree=0.0,                    # bonus when web and price action AGREE
+            crypto_trend=0)                 # BTC under its 100d average = crypto winter
 COST = 0.0005
 
 
@@ -191,6 +195,8 @@ def run_replay(ds, cfg, i0, i1):
     symbols, cryptos = ds["symbols"], ds["cryptos"]
     stocks = [s for s in symbols if s not in cryptos]
     field: dict[str, float] = {}
+    prev_imp: dict[str, float] = {}
+    btc = next((s for s in cryptos if s.startswith("BTC")), None)
     book = {"cash": 100_000.0, "pos": {}}
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
     curve, ccurve = [], []
@@ -283,8 +289,12 @@ def run_replay(ds, cfg, i0, i1):
             z = (h.iloc[-1] - h.mean()) / (h.std() + 1e-9)
             formula = math.tanh(20 * (0.02 * max(-1, min(1, mom / 0.10))
                                       + 0.015 * max(-1, min(1, -z / 2))))
-            score = (cfg["w_field"] * asset_imp.get(s, {}).get("impact", 0.0)
-                     + cfg["w_formula"] * formula)
+            fimp = asset_imp.get(s, {}).get("impact", 0.0)
+            fmom = fimp - prev_imp.get(s, 0.0)          # ripple building vs fading
+            agree = (min(abs(fimp), abs(formula))       # web & tape in agreement
+                     * (1 if fimp * formula > 0 else -0.5))
+            score = (cfg["w_field"] * fimp + cfg["w_formula"] * formula
+                     + cfg["w_fmom"] * fmom + cfg["w_agree"] * agree)
             bar = cfg["entry"]
             if score < 0 and risk < -0.1:   # bear regime: shorts get an easier bar
                 bar = cfg["entry"] * (1.0 - cfg["short_bias"])
@@ -308,9 +318,15 @@ def run_replay(ds, cfg, i0, i1):
 
         # ---- crypto book: HODL core + web-driven tactical sleeve ----
         # preservation reflex for crypto too: deep risk-off halves the HODL
-        # core (sold to cash); it is rebought when the field recovers
-        if cfg["crypto_gate"]:
-            deep = risk < cfg["gate_level"]
+        # core (sold to cash); it is rebought when the field recovers.
+        # crypto_trend adds a second winter signal: BTC under its 100d average.
+        prev_imp = {s: asset_imp.get(s, {}).get("impact", 0.0) for s in symbols}
+        winter = False
+        if cfg["crypto_trend"] and btc and i >= 100:
+            ma = close[btc].iloc[i - 100:i].mean()
+            winter = not np.isnan(px[btc]) and px[btc] < ma
+        if cfg["crypto_gate"] or winter:
+            deep = winter or (cfg["crypto_gate"] and risk < cfg["gate_level"])
             for s in cryptos:
                 if np.isnan(px[s]):
                     continue
@@ -334,7 +350,7 @@ def run_replay(ds, cfg, i0, i1):
             if tact and (fimp < -0.05 or px[s] <= tact["entry"] * 0.85):
                 cbook["cash"] += tact["qty"] * px[s] * (1 - COST)
                 del cbook["tact"][s]
-            elif not tact and fimp > 0.10 and gate == 1.0:
+            elif not tact and fimp > 0.10 and gate == 1.0 and not winter:
                 notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4, cbook["cash"] * 0.9)
                 if notional > 1000:
                     cbook["cash"] -= notional * (1 + COST)
@@ -389,14 +405,78 @@ ROUNDS = [
         "crypto_gate": [1], "gate_level": [-0.2, -0.3]}),
     ("R8 bear-market shorting (risk-off lowers the entry bar for shorts)", {
         "short_bias": [0.3, 0.5]}),
+    ("R9 scoring-function upgrade (field momentum + web/tape agreement)", {
+        "w_fmom": [0.0, 0.5, 1.0], "w_agree": [0.0, 0.4, 0.8]}),
+    ("R10 crypto winter gate (BTC under its 100-day average)", {
+        "crypto_trend": [1]}),
 ]
 
+NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
+           "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
+           "w_fmom", "w_agree", "stop_atr", "take_atr")
 
-def train() -> None:
+
+def refine(ds, cfg, base_obj, warm, split, n, history, widen=1.0):
+    """Local finetuning: perturb each numeric parameter ±20%·widen around the
+    incumbent; keep a perturbation only if it helps train AND holdout."""
+    best_cfg, best_obj = dict(cfg), base_obj
+    for k in NUMERIC:
+        v = best_cfg.get(k, 0.0)
+        if not isinstance(v, (int, float)) or v == 0:
+            continue
+        for f in (1 - 0.2 * widen, 1 + 0.2 * widen):
+            cand = {**best_cfg, k: round(v * f, 4)}
+            m = run_replay(ds, cand, warm, split)
+            o = objective(m)
+            history.append({"round": f"refine {k}x{f:.2f}", "obj": round(o, 4)})
+            if o > best_obj + 1e-4:
+                oos_old = run_replay(ds, best_cfg, split, n)
+                oos_new = run_replay(ds, cand, split, n)
+                if objective(oos_new) >= objective(oos_old) - 0.01:
+                    best_cfg, best_obj = cand, o
+                    log(f"  refine: {k} -> {cand[k]} (obj {o:.3f}, holdout ok)")
+    return best_cfg, best_obj
+
+
+def train_forever() -> None:
+    """Cycle until the targets are hit on the FULL period with holdout-honest
+    upgrades. Each cycle: staged rounds -> local refinement; stuck cycles widen
+    the refinement radius (explore). Every cycle appended to
+    data/web_training_history.jsonl; latest state always in web_training.json."""
+    hist_path = DATA_DIR / "web_training_history.jsonl"
+    cycle, stuck, incumbent = 0, 0, None
+    while True:
+        cycle += 1
+        log(f"===== TRAINING CYCLE {cycle} (stuck={stuck}) =====")
+        result = train(seed_cfg=incumbent, widen=1.0 + 0.5 * stuck)
+        with hist_path.open("a") as fh:
+            fh.write(json.dumps({"cycle": cycle,
+                                 "ts": datetime.now(timezone.utc).isoformat(),
+                                 "cfg": result["best_cfg"], "full": result["full"],
+                                 "target_hit": result["target_hit"]}) + "\n")
+        if all(result["target_hit"].values()):
+            log(f"🎯 TARGETS HIT in cycle {cycle} — stopping. Verify before trusting.")
+            return
+        improved = (incumbent is None
+                    or json.dumps(result["best_cfg"], sort_keys=True)
+                    != json.dumps(incumbent, sort_keys=True))
+        stuck = 0 if improved else stuck + 1
+        incumbent = result["best_cfg"]
+        s, c = result["full"]["stock"], result["full"]["crypto"]
+        log(f"cycle {cycle} best: stock {s['cagr']:+.1%}/dd {s['maxdd']:.0%} | "
+            f"crypto {c['cagr']:+.1%}/dd {c['maxdd']:.0%} — continuing")
+        if stuck >= 5:
+            log("search converged at this function structure — the remaining gap "
+                "needs NEW factor families (structural work, not more tuning). "
+                "Pausing to avoid burning cycles on a exhausted search space.")
+            return
+
+
+def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
     ds = load_dataset()
     n = len(ds["close"])
     warm, split = 30, int(n * 0.66)
-    history, best_cfg = [], dict(BASE)
+    history, best_cfg = [], dict(seed_cfg or BASE)
     best_train = run_replay(ds, best_cfg, warm, split)
     best_obj = objective(best_train)
     log(f"baseline train obj={best_obj:.3f} {best_train['stock']} {best_train['crypto']}")
@@ -431,6 +511,10 @@ def train() -> None:
         history.append({"round": round_name, "holdout_old": oos_old, "holdout_new": oos_new,
                         "adopted": best_cfg == round_best})
 
+    # local finetuning around the staged winner (holdout-checked per step)
+    log("--- refinement pass (±20% around incumbent, holdout-checked) ---")
+    best_cfg, best_obj = refine(ds, best_cfg, best_obj, warm, split, n, history, widen)
+
     refresh_news(ds)
     final_train = run_replay(ds, best_cfg, warm, split)
     final_oos = run_replay(ds, best_cfg, split, n)
@@ -458,11 +542,15 @@ def train() -> None:
                   f"5-day precision {final_full['precision5d']:.0%}",
               "", f"targets hit: {result['target_hit']}"]
     OUT_MD.write_text("\n".join(lines))
-    log(f"TRAINING COMPLETE — targets hit: {result['target_hit']}")
+    log(f"TRAINING CYCLE COMPLETE — targets hit: {result['target_hit']}")
     log(f"full-period: stock {final_full['stock']} crypto {final_full['crypto']}")
+    return result
 
 
 if __name__ == "__main__":
     if "--no-wait" not in sys.argv:
         wait_for_pipeline()
-    train()
+    if "--once" in sys.argv:
+        train()
+    else:
+        train_forever()
