@@ -326,6 +326,27 @@ def run_replay(ds, cfg, i0, i1):
         if cfg["crypto_trend"] and btc and i >= 100:
             ma = close[btc].iloc[i - 100:i].mean()
             winter = not np.isnan(px[btc]) and px[btc] < ma
+        # HARD RULE applies to the HODL core too: -10% from entry stops it
+        # out to cash; it re-enters when price recovers above its 100d average
+        if i % 5 == 0:
+            for s in cryptos:
+                if np.isnan(px[s]):
+                    continue
+                h_ = cbook["hodl"].get(s)
+                if h_ and h_["qty"] > 0 and px[s] <= h_["entry"] * (1 - HARD_STOP):
+                    cbook["cash"] += h_["qty"] * px[s] * (1 - COST)
+                    h_["qty"] = 0.0
+                    h_["stopped"] = True
+                elif h_ and h_.get("stopped") and i >= 100:
+                    ma = close[s].iloc[i - 100:i].mean()
+                    if px[s] > ma:
+                        share = cfg["crypto_hodl"] * eq_of(cbook, px) / max(1, len(cryptos))
+                        buy = min(share, cbook["cash"] * 0.9)
+                        if buy > 500:
+                            h_["qty"] = buy / px[s]
+                            h_["entry"] = px[s]
+                            h_["stopped"] = False
+                            cbook["cash"] -= buy * (1 + COST)
         if cfg["crypto_gate"] or winter:
             deep = winter or (cfg["crypto_gate"] and risk < cfg["gate_level"])
             for s in cryptos:
