@@ -210,6 +210,7 @@ def load_dataset():
     crypto_syms = [s for s in symbols if "/" in s]
     c_open = data["Open"].rename(columns=ren)[crypto_syms]
     c_low = data["Low"].rename(columns=ren)[crypto_syms]
+    c_high = data["High"].rename(columns=ren)[crypto_syms]
     c_close = close_raw[crypto_syms]
     rets = close.pct_change()
     vol20 = rets.rolling(20, min_periods=10).std()
@@ -249,7 +250,7 @@ def load_dataset():
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 crypto_sig=crypto_sig,
                 vix_dlog=vix_dlog, dxy_dlog=dxy_dlog, jpy_dlog=jpy_dlog,
-                c_open=c_open, c_low=c_low, c_close=c_close,
+                c_open=c_open, c_low=c_low, c_high=c_high, c_close=c_close,
                 HL=HALF_LIFE_BY_TYPE, HL_DEF=HALF_LIFE_HOURS,
                 cryptos=[s for s in symbols if "/" in s])
 
@@ -274,7 +275,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             stop_atr=3.0, take_atr=6.0, use_emotion=0, emotion_gain=0.0,
             use_manip=0, use_figures=0, figure_gain=0.0,
             regime_gate=0, gate_level=-0.35, gate_frac=0.3,
-            crypto_hodl=0.6, crypto_gain=0.5,
+            crypto_hodl=0.2, crypto_gain=0.5,
+            tact_take=0.08,                 # fast tactical: bank quick profits
+            tact_hold=5,                    # fast tactical: max holding days
             crypto_gate=0,                  # deep risk-off also trims the HODL core
             short_bias=0.0,                 # lower entry bar for SHORTS in risk-off
             # --- scoring-function upgrades (the math itself is searchable) ---
@@ -343,6 +346,13 @@ def cost_frac(ds, s: str, qty: float, price: float, i: int) -> float:
 
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
+# USER CRYPTO MANDATE (2026-07-28): skeptical stance — 20% HODL core,
+# fast tactical sleeve capped at 70% of the crypto book (buy/sell churn,
+# quick take-profits, time-boxed holds), remainder cash buffer. The HODL
+# fraction is PINNED (not searchable); the search may not drift it.
+CRYPTO_MANDATE = {"crypto_hodl": 0.20}
+CRYPTO_TACT_CAP = 0.70
+
 # Conservative flat borrow fees for SHORT stock positions (no free historical
 # per-name data exists; these are deliberately pessimistic). Accrued daily.
 SHORT_BORROW_APR = {"us": 0.02, "eu": 0.02, "jp": 0.02,
@@ -401,8 +411,25 @@ def run_replay(ds, cfg, i0, i1):
                     e += p["qty"] * px[s]
         return e
 
-    c_open, c_low, c_close = ds["c_open"], ds["c_low"], ds["c_close"]
+    c_open, c_low, c_high, c_close = (ds["c_open"], ds["c_low"],
+                                      ds["c_high"], ds["c_close"])
     cal_idx = c_low.index
+
+    def crypto_take_fill(s, take_px, prev_td, cur_td):
+        """Weekend-aware resting take-profit: first calendar day whose high
+        reaches the target; a gap above it fills at the open (better)."""
+        a = (cal_idx.searchsorted(prev_td, side="right") if prev_td is not None
+             else cal_idx.searchsorted(cur_td, side="left"))
+        b = cal_idx.searchsorted(cur_td, side="right")
+        highs = c_high[s].iloc[a:b]
+        hit = highs[highs >= take_px]
+        if hit.empty:
+            return None
+        d0 = hit.index[0]
+        o = c_open[s].loc[d0]
+        if np.isnan(o):
+            o = c_close[s].loc[d0]
+        return max(o, take_px) if not np.isnan(o) else take_px
 
     def crypto_stop_fill(s, stop_px, prev_td, cur_td):
         """Weekend-aware resting stop: first CALENDAR day in (prev_td, cur_td]
@@ -673,6 +700,8 @@ def run_replay(ds, cfg, i0, i1):
                     h_["qty"] += buy
                     h_["trimmed"] = False
         ceq = eq_of(cbook, px)
+        tact_val = sum(p["qty"] * px[s2] for s2, p in cbook["tact"].items()
+                       if not np.isnan(px[s2]))
         for s in cryptos:
             if np.isnan(px[s]):
                 continue
@@ -682,21 +711,35 @@ def run_replay(ds, cfg, i0, i1):
             if tact:
                 stop_px = tact["entry"] * (1 - HARD_STOP)
                 fill = crypto_stop_fill(s, stop_px, prev_td, cur_td)
-                if fill is not None:    # resting hard stop, weekend/gap-aware
+                tfill = (crypto_take_fill(s, tact["entry"] * (1 + cfg["tact_take"]),
+                                          prev_td, cur_td)
+                         if cfg["tact_take"] > 0 else None)
+                if fill is not None:    # worst case first: the stop, gap-aware
                     cbook["cash"] += tact["qty"] * fill * (1 - cost_frac(ds, s, tact["qty"], fill, i))
                     del cbook["tact"][s]
                     tact, exited = None, True
-                elif fimp < -0.05:      # signal exit at the close
+                elif tfill is not None:  # bank the quick profit (fast mandate)
+                    cbook["cash"] += tact["qty"] * tfill * (1 - cost_frac(ds, s, tact["qty"], tfill, i))
+                    del cbook["tact"][s]
+                    tact, exited = None, True
+                elif (fimp < -0.05      # signal gone, or held past the clock
+                      or i - tact.get("ei", i) >= int(cfg["tact_hold"])):
                     cbook["cash"] += tact["qty"] * px[s] * (1 - cost_frac(ds, s, tact["qty"], px[s], i))
                     del cbook["tact"][s]
                     tact, exited = None, True
+                if exited:
+                    tact_val = sum(p["qty"] * px[s2] for s2, p in cbook["tact"].items()
+                                   if not np.isnan(px[s2]))
             if (not tact and not exited and fimp > 0.10 and gate == 1.0
                     and not winter and not blocked["cb"]):
-                notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4, cbook["cash"] * 0.9)
+                room = CRYPTO_TACT_CAP * ceq - tact_val   # mandate: tactical <=70%
+                notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4,
+                               cbook["cash"] * 0.9, room)
                 if notional > 1000:
                     qty = notional / px[s]
                     cbook["cash"] -= notional * (1 + cost_frac(ds, s, qty, px[s], i))
-                    cbook["tact"][s] = {"qty": qty, "entry": px[s]}
+                    cbook["tact"][s] = {"qty": qty, "entry": px[s], "ei": i}
+                    tact_val += notional
         # ---- long-term value core: hold through dips, exit on thesis break
         if core_frac > 0:
             for s in list(kbook["pos"]):    # disaster stop only (gap-aware)
@@ -805,8 +848,8 @@ ROUNDS = [
         "use_figures": [1], "figure_gain": [0.2, 0.4]}),
     ("R5 + regime gate (deep risk-off cuts gross — preservation reflex)", {
         "regime_gate": [1], "gate_level": [-0.25, -0.4], "gate_frac": [0.2, 0.4]}),
-    ("R6 crypto mix tuning (HODL share + tactical aggressiveness)", {
-        "crypto_hodl": [0.4, 0.6, 0.8], "crypto_gain": [0.5, 1.0]}),
+    ("R6 crypto tactical aggressiveness (HODL share pinned by mandate)", {
+        "crypto_gain": [0.5, 1.0]}),
     ("R7 crypto preservation (deep risk-off trims the HODL core)", {
         "crypto_gate": [1], "gate_level": [-0.2, -0.3]}),
     ("R8 bear-market shorting (risk-off lowers the entry bar for shorts)", {
@@ -831,12 +874,14 @@ ROUNDS = [
         "w_fx": [0.3, 0.6]}),
     ("R18 two-sleeve stock book (long-term value core beside tactical)", {
         "stock_core": [0.3, 0.5, 0.7]}),
+    ("R19 fast-crypto rhythm (take-profit level x max holding days)", {
+        "tact_take": [0.05, 0.08, 0.12], "tact_hold": [3, 5, 10]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
-           "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
+           "gate_level", "gate_frac", "crypto_gain", "short_bias",
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
-           "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop")
+           "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take")
 
 
 def preservation_ok(dev_new, dev_old):
@@ -932,7 +977,7 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
     t_end = int(n * 0.55)     # tuning sees ONLY [warm, t_end)
     h_end = int(n * 0.80)     # adoption gate judges on [t_end, h_end)
     # [h_end, n) is the LOCKBOX: never evaluated here — see evaluate_lockbox()
-    history, best_cfg = [], dict(seed_cfg or BASE)
+    history, best_cfg = [], {**dict(seed_cfg or BASE), **CRYPTO_MANDATE}
     best_train = run_replay(ds, best_cfg, warm, t_end)
     best_obj = objective(best_train)
     best_dev = run_replay(ds, best_cfg, warm, h_end)
