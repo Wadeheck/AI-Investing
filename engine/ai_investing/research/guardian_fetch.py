@@ -65,7 +65,7 @@ def fetch_day(key: str, d: str, page: int = 1) -> tuple[dict | None, int]:
     qs = urllib.parse.urlencode({
         "api-key": key, "from-date": d, "to-date": d, "section": SECTIONS,
         "page-size": 200, "page": page, "order-by": "newest",
-        "show-fields": "trailText",
+        "show-fields": "trailText,bodyText",
     })
     req = urllib.request.Request(f"{API}?{qs}", headers={"User-Agent": "ai-investing/1.0"})
     try:
@@ -124,6 +124,10 @@ def run() -> int:
                 "source": "theguardian.com",
                 "section": x.get("sectionId", ""),
                 "summary": (x.get("fields") or {}).get("trailText", ""),
+                # first ~3000 chars: expectations context + disambiguation live
+                # in the opening paragraphs; digester escalates to this only
+                # for low-confidence or high-magnitude events
+                "body": (x.get("fields") or {}).get("bodyText", "")[:3000],
             } for x in results if x.get("webTitle")]
             fh.write(json.dumps({"date": ds, "headlines": heads}) + "\n")
             fh.flush()
