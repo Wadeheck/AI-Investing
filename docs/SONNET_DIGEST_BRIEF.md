@@ -168,6 +168,17 @@ behavior changes at the boundary — that seamlessness is the point: the
 strategy the brain forms from history must be the same strategy it keeps
 forming from today's news.
 
+**3.6 Cold start (the archive's first ~2 weeks).** Long-running situations
+that PREDATE the archive (an ongoing war, standing trade tensions, an
+established policy stance) enter the ledger on first appearance with
+novelty 1.0 **once** — but their magnitude must reflect only that day's
+MARGINAL news, not the situation's existence. The Ukraine war is not news
+to markets on 2023-07-01: score its day-one coverage as continuation-grade
+(0.2–0.3) unless the specific development is itself significant. The
+escalation-saturation rule (§8) applies from day one. Weekend days also
+run honestly thin — 3–6 events on a Saturday is true data; never loosen
+skip criteria to reach the weekday 5–15 norm.
+
 ## 4. Which headlines become events
 
 **Digest** anything that moves, or plausibly moves, macro/market/industry
