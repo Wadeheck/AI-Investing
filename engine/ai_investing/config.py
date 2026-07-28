@@ -147,6 +147,9 @@ class BrainConfig:
     macro_cache_path: str = field(default_factory=lambda: _get("BRAIN_MACRO_CACHE_PATH", str(PROJECT_ROOT / "data" / "macro_cache.json")))
     field_path: str = field(default_factory=lambda: _get("BRAIN_FIELD_PATH", str(PROJECT_ROOT / "data" / "field_state.json")))
     fred_api_key: str = field(default_factory=lambda: _get("FRED_API_KEY", ""))
+    # historical news archives (free registration) — fill the wiki-thin days
+    guardian_api_key: str = field(default_factory=lambda: _get("GUARDIAN_API_KEY", ""))
+    nyt_api_key: str = field(default_factory=lambda: _get("NYT_API_KEY", ""))
     db_path: str = field(default_factory=lambda: _get("BRAIN_DB_PATH", str(PROJECT_ROOT / "data" / "brain.db")))
     feed_cache_path: str = field(default_factory=lambda: _get("BRAIN_FEED_CACHE_PATH", str(PROJECT_ROOT / "data" / "feed_cache.json")))
     advice_path: str = field(default_factory=lambda: _get("BRAIN_ADVICE_PATH", str(PROJECT_ROOT / "data" / "advice.json")))

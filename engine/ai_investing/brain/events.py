@@ -35,7 +35,8 @@ SOURCE_TRUST = {
     # official / central banks: primary sources, near-total trust
     "federalreserve": 0.95, "boj.or.jp": 0.95, "ecb.europa.eu": 0.95,
     "reuters": 0.95, "wsj": 0.9, "dowjones": 0.9, "dj.com": 0.9, "bloomberg": 0.9,
-    "ft.com": 0.9, "bbc": 0.85, "cnbc": 0.75, "nikkei": 0.85, "scmp": 0.75,
+    "ft.com": 0.9, "theguardian": 0.85, "bbc": 0.85, "cnbc": 0.75, "nikkei": 0.85,
+    "scmp": 0.75,
     "caixin": 0.8, "straitstimes": 0.8, "businesstimes": 0.8,
     "japantimes": 0.8, "koreaherald": 0.75, "channelnewsasia": 0.8,
     "economictimes": 0.65, "mining.com": 0.6,
