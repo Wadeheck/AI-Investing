@@ -123,6 +123,10 @@ def run() -> int:
                 "title": x.get("webTitle", ""),
                 "source": "theguardian.com",
                 "section": x.get("sectionId", ""),
+                # full publication timestamp (UTC): needed so cross-timezone
+                # replays know whether news landed before or after each
+                # market's close on its date
+                "ts": x.get("webPublicationDate", ""),
                 "summary": (x.get("fields") or {}).get("trailText", ""),
                 # first ~3000 chars: expectations context + disambiguation live
                 # in the opening paragraphs; digester escalates to this only
