@@ -287,7 +287,16 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             trail_atr=0.0,                  # >0: trailing exits — let winners RUN
             use_rel=0,                      # per-symbol reliability reweighting
             w_vix=0.0,                      # real vol regime (VIX) pulses the risk node
-            w_fx=0.0)                       # DXY -> usd_strength, USDJPY -> yen_carry
+            w_fx=0.0,                       # DXY -> usd_strength, USDJPY -> yen_carry
+            # --- two-sleeve stock book (USER MANDATE 2026-07-28): a long-term
+            # value/conviction CORE that holds through dips (NO 10% cap, NO HWM
+            # lockout — the long game), beside the tactical sleeve where the
+            # 10% rule and ratchet still rule. Preservation (25% continuous dd)
+            # still screens the COMBINED book.
+            stock_core=0.0,                 # fraction of stock capital in the core
+            core_n=12,                      # core holdings, equal weight
+            core_reb=21,                    # rebalance cadence (trading days)
+            core_dstop=0.30)                # disaster stop: thesis assumed broken
 # -------------------------------------------------------------- frictions --
 # Real per-market frictions, charged on EVERY fill (per side):
 #   commission_bps : commissions + transaction taxes (HK stamp duty 0.1%;
@@ -360,11 +369,15 @@ def run_replay(ds, cfg, i0, i1):
     field: dict[str, float] = {}
     prev_imp: dict[str, float] = {}
     btc = next((s for s in cryptos if s.startswith("BTC")), None)
-    book = {"cash": 100_000.0, "pos": {}}
+    core_frac = min(max(cfg["stock_core"], 0.0), 0.9)
+    book = {"cash": 100_000.0 * (1.0 - core_frac), "pos": {}}   # tactical sleeve
+    kbook = {"cash": 100_000.0 * core_frac, "pos": {}}          # long-term core
+    slow_imp: dict[str, float] = {}         # ~30d EMA of field impact (core signal)
+    ktrades = 0
     pending: list[dict] = []                # stock orders awaiting next open
     rel: dict[str, float] = {}              # learned per-symbol trust (trailing)
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
-    curve, ccurve = [], []
+    curve, ccurve, tcurve = [], [], []      # combined stock / crypto / tactical-only
     hwm = {"tb": None, "cb": None}         # monthly high-water marks (user ratchet)
     mclose = {"tb": None, "cb": None}
     cur_month = None
@@ -430,8 +443,10 @@ def run_replay(ds, cfg, i0, i1):
                     hwm[k] = mclose[k]
             cur_month = m
         if curve:
-            mclose["tb"], mclose["cb"] = curve[-1], ccurve[-1]
-            for k, v in (("tb", curve[-1]), ("cb", ccurve[-1])):
+            # HWM ratchet protects FAST capital only: tactical sleeve + crypto.
+            # The long-term core rides through (user mandate 2026-07-28).
+            mclose["tb"], mclose["cb"] = tcurve[-1], ccurve[-1]
+            for k, v in (("tb", tcurve[-1]), ("cb", ccurve[-1])):
                 blocked[k] = bool(hwm[k]) and v < hwm[k] * (1 - HARD_STOP)
         po, phi, plo = opn.iloc[i], high.iloc[i], low.iloc[i]
 
@@ -513,6 +528,9 @@ def run_replay(ds, cfg, i0, i1):
             for k, v in impacts.items():
                 field[k] = max(-1.0, min(1.0, field.get(k, 0.0) + v))
         asset_imp = g.asset_impacts(field)
+        for s in stocks:    # slow conviction: the persistent narrative, not the ripple
+            slow_imp[s] = (0.97 * slow_imp.get(s, 0.0)
+                           + 0.03 * asset_imp.get(s, {}).get("impact", 0.0))
         risk = field.get(ds["risk_node"], 0.0) if ds["risk_node"] else 0.0
         gate = cfg["gate_frac"] if (cfg["regime_gate"] and risk < cfg["gate_level"]) else 1.0
 
@@ -679,7 +697,55 @@ def run_replay(ds, cfg, i0, i1):
                     qty = notional / px[s]
                     cbook["cash"] -= notional * (1 + cost_frac(ds, s, qty, px[s], i))
                     cbook["tact"][s] = {"qty": qty, "entry": px[s]}
-        curve.append(eq)
+        # ---- long-term value core: hold through dips, exit on thesis break
+        if core_frac > 0:
+            for s in list(kbook["pos"]):    # disaster stop only (gap-aware)
+                p, v = kbook["pos"][s], px[s]
+                if np.isnan(v):
+                    continue
+                o, lo_ = po[s], plo[s]
+                if np.isnan(o):
+                    o = v
+                if np.isnan(lo_):
+                    lo_ = min(o, v)
+                dstop = p["entry"] * (1 - cfg["core_dstop"])
+                if lo_ <= dstop:
+                    fill = min(o, dstop)
+                    kbook["cash"] += p["qty"] * fill * (1 - cost_frac(ds, s, p["qty"], fill, i))
+                    ktrades += 1
+                    del kbook["pos"][s]
+            if i - i0 >= 60 and (i - i0) % int(cfg["core_reb"]) == 0:
+                scores = {}
+                for s in stocks:
+                    if np.isnan(px[s]):
+                        continue
+                    h = close[s].iloc[max(0, i - 200):i].dropna()
+                    if len(h) < 60:
+                        continue
+                    trend = px[s] / h.mean() - 1.0
+                    scores[s] = slow_imp.get(s, 0.0) + 0.5 * math.tanh(3.0 * trend)
+                ranked = sorted(scores, key=scores.get, reverse=True)
+                top = ranked[:int(cfg["core_n"])]
+                keep = set(ranked[:2 * int(cfg["core_n"])])
+                for s in list(kbook["pos"]):    # thesis break: out of the top 2N
+                    if s not in keep and not np.isnan(px[s]):
+                        p = kbook["pos"][s]
+                        kbook["cash"] += p["qty"] * px[s] * (1 - cost_frac(ds, s, p["qty"], px[s], i))
+                        ktrades += 1
+                        del kbook["pos"][s]
+                per_slot = 0.95 * eq_of(kbook, px) / max(1, int(cfg["core_n"]))
+                for s in top:
+                    if s in kbook["pos"] or per_slot < 500:
+                        continue
+                    if kbook["cash"] < per_slot * 1.02:
+                        break
+                    qty = per_slot / px[s]
+                    kbook["cash"] -= qty * px[s] * (1 + cost_frac(ds, s, qty, px[s], i))
+                    kbook["pos"][s] = {"qty": qty, "entry": px[s]}
+                    ktrades += 1
+        keq = eq_of(kbook, px) if core_frac > 0 else 0.0
+        tcurve.append(eq)
+        curve.append(eq + keq)
         ccurve.append(eq_of(cbook, px))
 
     import pandas as pd
@@ -696,6 +762,7 @@ def run_replay(ds, cfg, i0, i1):
     out["trades"] = total
     out["win_rate"] = round(wins / max(1, total), 3)
     out["precision5d"] = round(graded / max(1, total), 3)
+    out["core_trades"] = ktrades
     return out
 
 
@@ -762,12 +829,14 @@ ROUNDS = [
         "w_vix": [0.3, 0.6]}),
     ("R17 FX anchors (DXY into usd_strength, USDJPY into yen_carry)", {
         "w_fx": [0.3, 0.6]}),
+    ("R18 two-sleeve stock book (long-term value core beside tactical)", {
+        "stock_core": [0.3, 0.5, 0.7]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
-           "trail_atr", "w_vix", "w_fx")
+           "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop")
 
 
 def preservation_ok(dev_new, dev_old):
