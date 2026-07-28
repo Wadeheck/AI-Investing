@@ -203,6 +203,25 @@ was execution-assumption artifact, not alpha. The incumbent was tuned under
 v1 physics; the next training run re-tunes under v2 — treat everything
 before then as unproven.
 
+**v2 retraining (2026-07-28, 21 cycles, converged).** The search abandoned
+the v1 parameters within one cycle, then in cycle 15 adopted the structural
+family v1 physics had wrongly rejected: **R14 trailing exits** (holdout obj
+−0.193 → −0.066, the run's biggest OOS gain), **R15 learned reliability**,
+and **R8 bear-market shorting** (short_bias 0.65 — adopted on tolerance,
+and the sim charges shorts NO borrow costs: re-verify before trusting).
+Also newly in: crypto fear/greed (w_fng 0.18, rejected under v1). Converged
+config (train+holdout, continuous, v2 physics): **stock +9.6%/yr, Sharpe
+0.93, maxDD −7.1%** (SPY: +21.3%, −18.8%) and **crypto +63.7%/yr, Sharpe
+1.68, maxDD −23.9%** (BTC hodl: +68.9%, −31.8%). Honest read: the stock
+book is a drawdown-control product (⅓ of SPY's DD at ~45% of its return,
+consistent ~15%/yr in each window fresh-start — the continuous gap is HWM
+ratchet path-dependence); the crypto book ≈ hodl's return at 8pts less DD
+and beats a flat BTC year +21% vs +6% on the holdout. Crypto's holdout-
+window DD of −25.4% breaches the 25% screen within-window (the continuous
+number passes). The lockbox remains UNSPENT. Next: Guardian re-digestion
+(79,924 headlines archived, all 1,123 days) through docs/DIGESTION_SPEC.md,
+then rounds R16–R25.
+
 ## 9. Next levers (need the user)
 
 1. **NYT Archive + Guardian API keys** (free registration) — market-grade
