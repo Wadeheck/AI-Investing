@@ -53,12 +53,16 @@ headline). Up to ~100 headlines per day.
   "emotion_intensity": 0.0..1.0,
   "novelty": 1.0|0.5|0.2,
   "event_key": "<stable slug for the underlying real-world event>",
+  "ts": "<cited headline's UTC publication timestamp, verbatim>",
   "proposed_edges": []
 }]}
 ```
 
-`novelty` and `event_key` are NEW fields (formula upgrade R16 below); the rest
-is the existing contract. Unknown node ids are dropped by the validator —
+`novelty`, `event_key`, and `ts` are NEW fields (formula upgrade R16 below,
+and cross-timezone gating); the rest is the existing contract. See
+SONNET_DIGEST_BRIEF.md for the operational protocol (ledger, escalation
+pass, anchored-node rules) — that document is the digester's system prompt
+and takes precedence on any wording difference. Unknown node ids are dropped by the validator —
 wasted work. Tag ONLY ids from the list in A3.
 
 **Hard rules:**

@@ -4,8 +4,14 @@
 digester model as its system prompt. It is injected verbatim by the
 `digest_v2` runner for every day processed — historical backfill and live
 daily digestion alike. Nothing outside this document is assumed known.
-Version 1.0, 2026-07-28. If this document changes, the golden-set audit
+Version 1.1, 2026-07-28. If this document changes, the golden-set audit
 (§15) must be re-run before any output is trusted.*
+
+*v1.1 changes: article records now carry full publication timestamps and
+body text; two-pass escalation protocol added (§2.1); `ts` added to the
+output schema; anchored-node rules added (§7a) — `risk_appetite`,
+`usd_strength`, and `yen_carry` now have real market-data anchors (VIX,
+DXY, USD/JPY), which changes what you should tag to them.*
 
 ---
 
@@ -43,10 +49,16 @@ EVENT LEDGER (events already known to the web as of this date):
 - [2024-08-02] us-jobs-2024-aug-miss | other | peak_mag 0.4 | "July payrolls miss badly, unemployment 4.3%"
 - ... (up to ~60 entries covering the trailing 30 days)
 
-HEADLINES (today's, one per line):
-- [theguardian.com | business] Global stock markets plunge amid US recession fears — Nikkei suffers worst day since 1987 ...
-- [theguardian.com | world] ...
+HEADLINES (today's, one per line, with UTC publication time):
+- [07:42Z | theguardian.com | business] Global stock markets plunge amid US recession fears — Nikkei suffers worst day since 1987 ...
+- [16:05Z | theguardian.com | world] ...
 ```
+
+Each headline line is `[HH:MMZ | source | section] title — summary`. The
+publication time matters downstream (markets in different timezones close at
+different hours; code uses your `ts` output to decide which markets could
+have reacted the same day) — you do not reason about timezones yourself, you
+only copy the timestamp faithfully (§6).
 
 You return **one JSON object and nothing else** — no prose, no markdown
 fences, no commentary:
@@ -71,13 +83,35 @@ Each `<event>` has EXACTLY these fields (§6 defines each):
   "emotion": "fear",
   "emotion_intensity": 0.7,
   "novelty": 1.0,
-  "event_key": "stable-slug-for-this-real-world-event"
+  "event_key": "stable-slug-for-this-real-world-event",
+  "ts": "2024-08-05T07:42:00Z"
 }
 ```
 
-Optionally an event may carry `"proposed_edges"` (§12). Do not add any other
-field. Expected volume: **5–15 events from a typical ~70-headline day**.
-Zero events is almost always wrong (§14).
+`ts` is copied VERBATIM from the headline you cite in `headline` — never
+invented, never rounded. Optionally an event may carry `"proposed_edges"`
+(§12). Do not add any other field. Expected volume: **5–15 events from a
+typical ~70-headline day**. Zero events is almost always wrong (§14).
+
+### 2.1 The escalation pass (second look with full article text)
+
+Your first pass works from headline + summary only. For events you return
+with **confidence < 0.6 or magnitude ≥ 0.5**, the runner sends a follow-up
+call containing your event plus the FULL ARTICLE BODY (first ~3,000 chars)
+under the marker `ESCALATION:`. On that pass you re-evaluate ONLY the
+flagged event with the added context and return the single corrected event
+object (same schema). What the body is for:
+
+- **Expectations context** — "economists had forecast 185,000" turns a
+  vague surprise into a measured one; adjust magnitude accordingly (§3.4).
+- **Disambiguation** — who acted, which direction, whether the headline
+  overstates the text.
+- **Manipulation cues** — sourcing quality ("people familiar", promotional
+  quotes) sharpens `manipulation_likelihood`.
+
+Keep every field you are still confident in; change only what the body
+justifies. Do not raise magnitude merely because the article is long or
+vivid — length is not importance.
 
 ## 3. TEMPORAL INTEGRITY — the trajectory rules (read twice)
 
@@ -180,6 +214,7 @@ polarity by asking "is this bullish?", you are doing it wrong.
 | `emotion_intensity` | 0..1. Neutral wire copy ≤ 0.3. Reserve ≥ 0.7 for crash/mania coverage. This pulses the web's risk node — mislabeling moves positions. |
 | `novelty` | 1.0 / 0.5 / 0.2 per §9. |
 | `event_key` | Stable lowercase slug: `<topic>-<yyyy or yyyy-mm>[-<phase>]`, e.g. `boj-2024-hike`, `svb-collapse-2023`, `us-election-2024`. Reproducible: you'd generate the same slug seeing the story fresh. Reused exactly across all days of the same event. |
+| `ts` | The cited headline's full UTC publication timestamp, copied verbatim. When merging several headlines into one event, use the EARLIEST timestamp among them (first knowability is what matters downstream). |
 
 ## 7. THE NODE REFERENCE — all 85 nodes and what +1 means
 
@@ -268,6 +303,29 @@ if it is a bellwether AND the story frames it that way.
 Prefer the specific factor node when one exists: OPEC cutting output is
 `oil_supply` −1, adding `opec` only when the political act itself is the
 story (cartel fracture, membership change).
+
+### 7a. Hard-anchored nodes — the web already measures these directly
+
+Three nodes are now fed continuously by real market data, independent of
+news: `risk_appetite` (VIX), `usd_strength` (dollar index), `yen_carry`
+(USD/JPY). Consequence for you:
+
+- **A story that merely REPORTS the gauge's level or move is NOT an event.**
+  "VIX spikes to 30", "Dollar hits two-year high", "Yen surges past 145" —
+  the anchor has already delivered that information to the node. Tagging it
+  again double-counts. Skip these, exactly as you skip fluff.
+- **A story that names the CAUSE is an event — on the cause's node.**
+  "Dollar surges as Fed signals higher-for-longer" → `fed_rate` +0.5.
+  "Yen soars after BoJ's surprise hike" → the BoJ action (and the ledger's
+  event_key for it), not `yen_carry`.
+- The §7 rows for these three nodes therefore apply only to *policy or
+  structural* stories about them (e.g. currency-intervention announcements,
+  a carry-unwind story where the unwind itself is the news and no gauge
+  anchor captures the mechanism). When in doubt: tag the cause, skip the
+  gauge.
+
+All other nodes remain news-only — your tags are their sole input, which is
+why the rest of the map matters so much.
 
 ## 8. Magnitude rubric — anchored, with the distribution you must hit
 
@@ -401,6 +459,13 @@ elsewhere in today's headlines, tag the cause instead and skip this wrap.
 *"Premier League club sold to US consortium"*, *"Bank holiday travel chaos
 expected"*, *"How to fix your pension in five steps"* → no event, silently.
 
+**(i) Anchored gauge (§7a).**
+*"Dollar climbs to two-year high against major currencies"* with no cause
+named → SKIP (the DXY anchor already told the web). Same day:
+*"Dollar climbs as traders price out Fed cuts after hot inflation data"*
+→ `nodes: ["us_inflation"]` (or the ledgered CPI event_key), the cause —
+never `usd_strength` for the gauge move itself.
+
 ## 14. Self-check before returning (run every day)
 
 1. Valid JSON, no fences, no prose. Every field present on every event.
@@ -416,6 +481,10 @@ expected"*, *"How to fix your pension in five steps"* → no event, silently.
 8. 5–15 events from a normal day. If you produced 0–2 from 50+ headlines,
    you over-skipped: re-scan for macro data, policy, and industry news. If
    you produced 25+, you under-merged or digested fluff.
+9. Every `ts` is copied verbatim from a headline shown to you today
+   (earliest among merged headlines).
+10. No pure gauge-move stories tagged to `risk_appetite`, `usd_strength`,
+    or `yen_carry` (§7a) — causes tagged instead.
 
 ## 15. How you are graded
 
