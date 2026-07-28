@@ -408,9 +408,12 @@ def run_replay(ds, cfg, i0, i1):
             o = c_close[s].loc[d0]
         return min(o, stop_px) if not np.isnan(o) else stop_px
 
-    # crypto HODL core: buy once at window start, hold
+    # crypto HODL core: buy once at window start, hold. The allocation is
+    # HARD-CAPPED at 95% of cash: there is no free leverage in this sim —
+    # the refiner once walked crypto_hodl to 1.19 and bought crypto with
+    # cash the book didn't have.
     px0 = close.iloc[i0]
-    per = cfg["crypto_hodl"] * cbook["cash"] / max(1, len(cryptos))
+    per = min(cfg["crypto_hodl"], 0.95) * cbook["cash"] / max(1, len(cryptos))
     for s in cryptos:
         if not np.isnan(px0[s]):
             qty = per / px0[s]
