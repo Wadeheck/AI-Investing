@@ -28,6 +28,12 @@ to trust:
               window — alpha must beat doing nothing
   Numbers produced before v2 are NOT comparable to numbers after it.
 
+v2.1 (2026-07-28, same day): FX correctness — non-USD prices converted to
+USD daily (currency P&L is real); SHORT positions accrue conservative
+borrow fees daily; crypto hard stops check every CALENDAR day including
+weekends (Saturday crashes count); new hard-data anchor rounds R16 (VIX ->
+risk node) and R17 (DXY/USDJPY -> usd_strength/yen_carry).
+
 New factor families the trainer can add to the web (all computed from the
 day's own headlines — replicable live, no hindsight):
   emotion   : fear/greed keyword balance pulses the risk-appetite node
@@ -160,8 +166,8 @@ def load_dataset():
     ren = {yfs(s): s for s in symbols}
     data = yf.download([yfs(s) for s in symbols], period="3y", interval="1d",
                        auto_adjust=True, progress=False)
-    close = data["Close"].rename(columns=ren)
-    close = close[close.notna().mean(axis=1) > 0.33].ffill(limit=5)
+    close_raw = data["Close"].rename(columns=ren)
+    close = close_raw[close_raw.notna().mean(axis=1) > 0.33].ffill(limit=5)
     close = close.dropna(axis=1, thresh=int(len(close) * 0.8))
     symbols = [s for s in symbols if s in close.columns]
     close = close[symbols]
@@ -171,6 +177,40 @@ def load_dataset():
     low = data["Low"].rename(columns=ren).reindex(close.index)[symbols]
     adv = (data["Volume"].rename(columns=ren).reindex(close.index)[symbols]
            .rolling(20, min_periods=5).mean())
+    # ---- FX correctness: convert non-USD prices to USD (v2.1) ------------
+    # 'div' quotes are <CCY> per USD (divide local price); 'mul' are USD per
+    # unit (multiply). Without this, ~30 non-USD names' currency P&L is
+    # invisible and cross-currency sizing is wrong.
+    fx_map = {"hk": ("HKD=X", "div"), "sg": ("SGD=X", "div"),
+              "jp": ("JPY=X", "div"), "kr": ("KRW=X", "div"),
+              "tw": ("TWD=X", "div"), "cn": ("CNY=X", "div"),
+              "eu": ("EURUSD=X", "mul")}
+    anchor_tickers = sorted({t for t, _ in fx_map.values()} | {"^VIX", "DX-Y.NYB"})
+    ax = yf.download(anchor_tickers, period="3y", interval="1d",
+                     auto_adjust=True, progress=False)["Close"]
+    ax = ax.reindex(close.index).ffill()
+    if ax.isna().all().any():
+        missing = list(ax.columns[ax.isna().all()])
+        log(f"WARNING: anchor series entirely missing: {missing}")
+    for s in symbols:
+        mkt = market_of(s)
+        if mkt in fx_map:
+            t, mode = fx_map[mkt]
+            rate = ax[t]
+            if rate.notna().mean() < 0.5:
+                log(f"WARNING: no FX for {mkt} — {s} left in local currency")
+                continue
+            for frame in (close, opn, high, low):
+                frame[s] = frame[s] / rate if mode == "div" else frame[s] * rate
+    import numpy as _np
+    vix_dlog = _np.log(ax["^VIX"]).diff() if "^VIX" in ax else None
+    dxy_dlog = _np.log(ax["DX-Y.NYB"]).diff() if "DX-Y.NYB" in ax else None
+    jpy_dlog = _np.log(ax["JPY=X"]).diff() if "JPY=X" in ax else None
+    # ---- full-calendar crypto OHLC: weekends exist and stops must see them
+    crypto_syms = [s for s in symbols if "/" in s]
+    c_open = data["Open"].rename(columns=ren)[crypto_syms]
+    c_low = data["Low"].rename(columns=ren)[crypto_syms]
+    c_close = close_raw[crypto_syms]
     rets = close.pct_change()
     vol20 = rets.rolling(20, min_periods=10).std()
     # benchmarks: what doing nothing clever earns over the same dates
@@ -208,6 +248,8 @@ def load_dataset():
                 rets=rets, news=news, factors=factors,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 crypto_sig=crypto_sig,
+                vix_dlog=vix_dlog, dxy_dlog=dxy_dlog, jpy_dlog=jpy_dlog,
+                c_open=c_open, c_low=c_low, c_close=c_close,
                 HL=HALF_LIFE_BY_TYPE, HL_DEF=HALF_LIFE_HOURS,
                 cryptos=[s for s in symbols if "/" in s])
 
@@ -243,7 +285,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             w_fng=0.0,                      # contrarian crypto fear/greed extremes
             w_onchain=0.0,                  # on-chain usage trend (BTC adoption)
             trail_atr=0.0,                  # >0: trailing exits — let winners RUN
-            use_rel=0)                      # per-symbol reliability reweighting
+            use_rel=0,                      # per-symbol reliability reweighting
+            w_vix=0.0,                      # real vol regime (VIX) pulses the risk node
+            w_fx=0.0)                       # DXY -> usd_strength, USDJPY -> yen_carry
 # -------------------------------------------------------------- frictions --
 # Real per-market frictions, charged on EVERY fill (per side):
 #   commission_bps : commissions + transaction taxes (HK stamp duty 0.1%;
@@ -289,6 +333,11 @@ def cost_frac(ds, s: str, qty: float, price: float, i: int) -> float:
 
 
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
+
+# Conservative flat borrow fees for SHORT stock positions (no free historical
+# per-name data exists; these are deliberately pessimistic). Accrued daily.
+SHORT_BORROW_APR = {"us": 0.02, "eu": 0.02, "jp": 0.02,
+                    "hk": 0.04, "cn": 0.04, "kr": 0.04, "tw": 0.04, "sg": 0.04}
 
 
 def run_replay(ds, cfg, i0, i1):
@@ -338,6 +387,26 @@ def run_replay(ds, cfg, i0, i1):
                 if s in px and not np.isnan(px[s]):
                     e += p["qty"] * px[s]
         return e
+
+    c_open, c_low, c_close = ds["c_open"], ds["c_low"], ds["c_close"]
+    cal_idx = c_low.index
+
+    def crypto_stop_fill(s, stop_px, prev_td, cur_td):
+        """Weekend-aware resting stop: first CALENDAR day in (prev_td, cur_td]
+        whose low breaches the stop — Saturday crashes count. Returns the
+        gap-aware fill price, or None if never breached."""
+        a = (cal_idx.searchsorted(prev_td, side="right") if prev_td is not None
+             else cal_idx.searchsorted(cur_td, side="left"))
+        b = cal_idx.searchsorted(cur_td, side="right")
+        lows = c_low[s].iloc[a:b]
+        hit = lows[lows <= stop_px]
+        if hit.empty:
+            return None
+        d0 = hit.index[0]
+        o = c_open[s].loc[d0]
+        if np.isnan(o):
+            o = c_close[s].loc[d0]
+        return min(o, stop_px) if not np.isnan(o) else stop_px
 
     # crypto HODL core: buy once at window start, hold
     px0 = close.iloc[i0]
@@ -418,6 +487,22 @@ def run_replay(ds, cfg, i0, i1):
             if abs(add) > 0.03:
                 impulses[nid] = max(impulses.get(nid, 0.0),
                                     max(-0.5, min(0.5, add)), key=abs)
+        # hard-data anchors (v2.1): real series pulse their factor nodes
+        if cfg["w_vix"] and ds["vix_dlog"] is not None and ds["risk_node"]:
+            dv = ds["vix_dlog"].iloc[i]
+            if not np.isnan(dv) and abs(dv) > 0.05:      # >5% VIX move
+                add = -cfg["w_vix"] * max(-0.5, min(0.5, dv * 2.0))
+                impulses[ds["risk_node"]] = max(
+                    impulses.get(ds["risk_node"], 0.0), add, key=abs)
+        if cfg["w_fx"]:
+            for dser, node, sgn in ((ds["dxy_dlog"], "usd_strength", 1.0),
+                                    (ds["jpy_dlog"], "yen_carry", -1.0)):
+                if dser is None or node not in ds["valid_nodes"]:
+                    continue
+                dv = dser.iloc[i]
+                if not np.isnan(dv) and abs(dv) > 0.003:  # >0.3% FX move
+                    add = sgn * cfg["w_fx"] * max(-0.5, min(0.5, dv * 40.0))
+                    impulses[node] = max(impulses.get(node, 0.0), add, key=abs)
         field = decay_field(field)
         if impulses:
             impacts, _, _ = g.propagate(impulses, max_hops=cfg["max_hops"],
@@ -430,6 +515,10 @@ def run_replay(ds, cfg, i0, i1):
 
         # ---- stock book: resting stop/take orders, gap-aware intraday fills
         win = close.iloc[max(0, i - 20):i + 1]
+        for s, p in book["pos"].items():        # daily borrow fee on shorts
+            if p["qty"] < 0 and not np.isnan(px[s]):
+                apr = SHORT_BORROW_APR.get(market_of(s), 0.03)
+                book["cash"] -= abs(p["qty"]) * px[s] * apr / 252.0
         for s in list(book["pos"]):
             p, v = book["pos"][s], px[s]
             if np.isnan(v):
@@ -515,21 +604,18 @@ def run_replay(ds, cfg, i0, i1):
         if cfg["crypto_trend"] and btc and i >= 100:
             ma = close[btc].iloc[i - 100:i].mean()
             winter = not np.isnan(px[btc]) and px[btc] < ma
-        # HARD RULE applies to the HODL core too — checked DAILY as a resting
-        # stop: the intraday low triggers it, a gap through it fills at the
-        # open. Re-entry (above the 100d average) stays on the 5-day cadence.
+        # HARD RULE applies to the HODL core too — a resting stop checked over
+        # every CALENDAR day since the last trading day (weekends included;
+        # a gap through the stop fills at that day's open).
+        prev_td = close.index[i - 1] if i > i0 else None
+        cur_td = close.index[i]
         for s in cryptos:
             h_ = cbook["hodl"].get(s)
             if not h_ or h_["qty"] <= 0 or np.isnan(px[s]):
                 continue
-            o, lo_ = po[s], plo[s]
-            if np.isnan(o):
-                o = px[s]
-            if np.isnan(lo_):
-                lo_ = min(o, px[s])
             stop_px = h_["entry"] * (1 - HARD_STOP)
-            if lo_ <= stop_px:
-                fill = min(o, stop_px)
+            fill = crypto_stop_fill(s, stop_px, prev_td, cur_td)
+            if fill is not None:
                 cbook["cash"] += h_["qty"] * fill * (1 - cost_frac(ds, s, h_["qty"], fill, i))
                 h_["qty"] = 0.0
                 h_["stopped"] = True
@@ -573,14 +659,9 @@ def run_replay(ds, cfg, i0, i1):
             tact = cbook["tact"].get(s)
             exited = False
             if tact:
-                o, lo_ = po[s], plo[s]
-                if np.isnan(o):
-                    o = px[s]
-                if np.isnan(lo_):
-                    lo_ = min(o, px[s])
                 stop_px = tact["entry"] * (1 - HARD_STOP)
-                if lo_ <= stop_px:      # resting hard stop, gap-aware
-                    fill = min(o, stop_px)
+                fill = crypto_stop_fill(s, stop_px, prev_td, cur_td)
+                if fill is not None:    # resting hard stop, weekend/gap-aware
                     cbook["cash"] += tact["qty"] * fill * (1 - cost_frac(ds, s, tact["qty"], fill, i))
                     del cbook["tact"][s]
                     tact, exited = None, True
@@ -674,11 +755,16 @@ ROUNDS = [
         "trail_atr": [1.5, 2.5, 3.5]}),
     ("R15 per-symbol reliability — learned trust reweights the field", {
         "use_rel": [1]}),
+    ("R16 VIX anchor (real vol regime pulses the risk node)", {
+        "w_vix": [0.3, 0.6]}),
+    ("R17 FX anchors (DXY into usd_strength, USDJPY into yen_carry)", {
+        "w_fx": [0.3, 0.6]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_hodl", "crypto_gain", "short_bias",
-           "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain", "trail_atr")
+           "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
+           "trail_atr", "w_vix", "w_fx")
 
 
 def refine(ds, cfg, base_obj, warm, t_end, h_end, history, widen=1.0):
