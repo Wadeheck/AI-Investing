@@ -258,6 +258,31 @@ hodl 0.40 even the aggressive tactical gain stays compliant. Lockbox still
 UNSPENT. Next: Sonnet digestion (in progress) → calibration → R19–R25 →
 freeze one of the two compliant variants → lockbox once → paper-live.
 
+## 8c. v2.3 (2026-07-28 evening, converged after 28 cycles): the full-mandate strategy
+
+User mandate updates implemented: stocks = two-sleeve mix (core 30% won
+the search); crypto = **20% HODL pinned** + fast tactical sleeve ≤70%
+(take-profit + 3-day time-boxed holds, R19) + cash buffer. All three
+hard-data anchors (VIX 0.3, FX 0.72, on-chain 0.24) plus fear/greed and
+the R9 scoring upgrade (field momentum 0.6 + web/tape agreement 0.67 —
+first-ever adoption) are in the converged config.
+
+| Continuous train+holdout | Strategy | Benchmark |
+|---|---|---|
+| Stocks | **+38.2%/yr, Sharpe 1.73, −11.8% dd** | SPY +21.3%, −18.8% |
+| Crypto | +24.9%/yr, Sharpe 1.38, −16.1% dd | BTC hodl +68.9%, −31.8% |
+
+Window detail: stock train +48.2% (Sharpe 2.07) / holdout +28.7% (1.82,
+matching SPY's +28.4% in its best year at −10.7% dd). Crypto holdout year
+**−4.7%** — the fast-churn mandate pays round-trip costs in a flat tape;
+that is the accepted price of the skeptical stance. Preservation: True
+everywhere, with margin. 277 trades, 30% win rate.
+
+This is the freeze candidate for paper-live. Lockbox still UNSPENT.
+Survivorship caveat unchanged (2026-picked universe flatters the core
+sleeve most); referees remain the Sonnet-digest A/B, the lockbox, and
+the forward paper test.
+
 ## 9. Next levers (need the user)
 
 1. **NYT Archive + Guardian API keys** (free registration) — market-grade
