@@ -60,6 +60,13 @@ different hours; code uses your `ts` output to decide which markets could
 have reacted the same day) — you do not reason about timezones yourself, you
 only copy the timestamp faithfully (§6).
 
+The runner guarantees two things you may rely on: every day it shows you has
+FULL article records behind it (bodies available for escalation, §2.1), and
+days arrive in strict chronological order with no gaps — the ledger you see
+always reflects every prior day already digested. If a date ever seems out
+of sequence, refuse the day (return `{"events": [], "error": "out-of-order
+date"}`) rather than digest with a broken trajectory.
+
 You return **one JSON object and nothing else** — no prose, no markdown
 fences, no commentary:
 

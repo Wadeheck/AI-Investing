@@ -378,15 +378,30 @@ only** (`research/event_study.py` exists as a base):
 - The lockbox stays sealed through ALL of R16–R25. It is spent once, when a
   final config is frozen for paper deployment.
 
-### B6. Execution order
+### B6. Execution order and the working folder
+
+**All digestion work happens in `data/digest_v2/`** (see its README for the
+full layout: ready-day manifest, rolling ledger, per-day event files,
+aggregated impulses, validation report). Two hard rules govern it:
+
+- **Body-complete days only**: a day is eligible for digestion iff it
+  exists in `data/news_archive_guardian.jsonl` (which contains only
+  body+timestamp records; the earlier headlines-only pull is parked in a
+  `.bak` and is never digested).
+- **Contiguous chronological prefix only**: digestion proceeds in strict
+  date order and never skips a gap or overtakes the fetcher — the ledger,
+  novelty, and event chaining are only valid if every prior day was
+  digested first. Days still missing because of Guardian's daily quota are
+  simply not touched yet; the eligible prefix grows as the fetcher resumes,
+  and digestion resumes with it.
 
 ```
-1. Guardian backfill completes          (running — data/news_archive_guardian.jsonl)
-2. Digester AI re-digests 2023→today    (Sonnet, batched; new file news_impulses_v2.jsonl;
-   using THIS curriculum                 the qwen v1 file is preserved for A/B)
-3. Validation harness on the digest     (A11: schema, distributions, golden set)
+1. Guardian backfill extends the archive (chronological, quota-aware)
+2. Digester (Sonnet) ploughs the contiguous body-complete prefix, in order
+   → data/digest_v2/events/ + news_impulses_v2.jsonl (qwen v1 file untouched)
+3. Validation harness per session       (A11: schema, distributions, golden set)
 4. Event-study calibration on train     (B2 → impulse scale table)
-5. Trainer rounds R16→R25, holdout-gated, v2 physics
+5. Trainer rounds R16→R25, holdout-gated, v2.1 physics
 6. A/B report: v1-digest incumbent vs v2-digest challenger, same windows
 7. Freeze → run --lockbox ONCE → paper-live with the scorecard
 ```
