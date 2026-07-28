@@ -770,10 +770,25 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "trail_atr", "w_vix", "w_fx")
 
 
+def preservation_ok(dev_new, dev_old):
+    """USER MANDATE, structural: the CONTINUOUS train+holdout path must respect
+    the drawdown limit. A candidate passes if every book is inside the limit,
+    or at least no deeper than the incumbent's (so the search can climb OUT
+    of a breach but never deeper into one)."""
+    for b in ("stock", "crypto"):
+        dd_new = abs(dev_new[b]["maxdd"])
+        dd_old = abs(dev_old[b]["maxdd"])
+        if dd_new > MAX_DD_LIMIT and dd_new > dd_old + 0.005:
+            return False
+    return True
+
+
 def refine(ds, cfg, base_obj, warm, t_end, h_end, history, widen=1.0):
     """Local finetuning: perturb each numeric parameter ±20%·widen around the
-    incumbent; keep a perturbation only if it helps train AND holdout."""
+    incumbent; keep a perturbation only if it helps train AND holdout AND
+    does not deepen a continuous-path drawdown breach."""
     best_cfg, best_obj = dict(cfg), base_obj
+    best_dev = run_replay(ds, best_cfg, warm, h_end)
     for k in NUMERIC:
         v = best_cfg.get(k, 0.0)
         if not isinstance(v, (int, float)) or v == 0:
@@ -786,9 +801,16 @@ def refine(ds, cfg, base_obj, warm, t_end, h_end, history, widen=1.0):
             if o > best_obj + 1e-4:
                 oos_old = run_replay(ds, best_cfg, t_end, h_end)
                 oos_new = run_replay(ds, cand, t_end, h_end)
-                if objective(oos_new) >= objective(oos_old) - 0.01:
-                    best_cfg, best_obj = cand, o
-                    log(f"  refine: {k} -> {cand[k]} (obj {o:.3f}, holdout ok)")
+                if objective(oos_new) < objective(oos_old) - 0.01:
+                    continue
+                dev_new = run_replay(ds, cand, warm, h_end)
+                if not preservation_ok(dev_new, best_dev):
+                    log(f"  refine: {k} -> {cand[k]} VETOED (continuous dd "
+                        f"breach: stock {dev_new['stock']['maxdd']:.0%} "
+                        f"crypto {dev_new['crypto']['maxdd']:.0%})")
+                    continue
+                best_cfg, best_obj, best_dev = cand, o, dev_new
+                log(f"  refine: {k} -> {cand[k]} (obj {o:.3f}, holdout ok, dd ok)")
     return best_cfg, best_obj
 
 
@@ -844,7 +866,10 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
     history, best_cfg = [], dict(seed_cfg or BASE)
     best_train = run_replay(ds, best_cfg, warm, t_end)
     best_obj = objective(best_train)
+    best_dev = run_replay(ds, best_cfg, warm, h_end)
     log(f"baseline train obj={best_obj:.3f} {best_train['stock']} {best_train['crypto']}")
+    log(f"baseline continuous dd: stock {best_dev['stock']['maxdd']:.0%} "
+        f"crypto {best_dev['crypto']['maxdd']:.0%} (limit {MAX_DD_LIMIT:.0%})")
 
     for round_name, grid in ROUNDS:
         keys = sorted(grid)
@@ -866,13 +891,21 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
         refresh_news(ds)          # include any news digested while we trained
         oos_old = run_replay(ds, best_cfg, t_end, h_end)
         oos_new = run_replay(ds, round_best, t_end, h_end)
-        if objective(oos_new) >= objective(oos_old) - 0.01:
-            best_cfg, best_obj = round_best, round_best_obj
-            log(f"{round_name}: ADOPTED (train obj {round_best_obj:.3f}; "
-                f"holdout obj {objective(oos_new):.3f} vs {objective(oos_old):.3f})")
-        else:
+        if objective(oos_new) < objective(oos_old) - 0.01:
             log(f"{round_name}: REJECTED by holdout (looked good in training only "
                 f"— that would be cheating)")
+        else:
+            # user mandate: the continuous path must not breach the dd limit
+            dev_new = run_replay(ds, round_best, warm, h_end)
+            if not preservation_ok(dev_new, best_dev):
+                log(f"{round_name}: VETOED by preservation (continuous dd "
+                    f"stock {dev_new['stock']['maxdd']:.0%} / "
+                    f"crypto {dev_new['crypto']['maxdd']:.0%} "
+                    f"exceeds {MAX_DD_LIMIT:.0%})")
+            else:
+                best_cfg, best_obj, best_dev = round_best, round_best_obj, dev_new
+                log(f"{round_name}: ADOPTED (train obj {round_best_obj:.3f}; "
+                    f"holdout obj {objective(oos_new):.3f} vs {objective(oos_old):.3f})")
         history.append({"round": round_name, "holdout_old": oos_old, "holdout_new": oos_new,
                         "adopted": best_cfg == round_best})
 
