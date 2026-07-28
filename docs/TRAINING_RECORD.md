@@ -222,6 +222,42 @@ number passes). The lockbox remains UNSPENT. Next: Guardian re-digestion
 (79,924 headlines archived, all 1,123 days) through docs/DIGESTION_SPEC.md,
 then rounds R16–R25.
 
+## 8b. v2.1/v2.2 (2026-07-28 afternoon): truer physics, the leverage bug, and the two-sleeve breakthrough
+
+Physics upgrades v2.1: FX-correct USD prices for all ~30 non-USD names;
+daily borrow fees on shorts (2–4%/yr); crypto stops see weekends;
+hard-data anchors VIX/DXY/USDJPY as rounds R16/R17 (FX anchors adopted).
+Two protocol holes found AND closed mid-run: (1) the refiner walked
+`crypto_hodl` to 1.19 — free leverage via negative cash; now hard-capped at
+95% of cash; (2) the 25% dd limit was only screened per fresh-start window
+— the continuous path breached at −28%; now a structural **preservation
+veto** on every adoption (both staged rounds and refiner).
+
+**The two-sleeve stock book (user mandate update, 2026-07-28):** the 10%
+hard cap + HWM ratchet now govern FAST capital only (tactical sleeve +
+crypto). A long-term CORE sleeve (~12 names, monthly rebalance, slow-field
+30d-EMA conviction + 200d trend, 30% disaster stop, no HWM lockout) holds
+through dips. Adopted as R18 on first pass (holdout 0.243 vs 0.229) and
+transformed the stock book: **+4.8% → +37.6%/yr at −17% dd** (SPY: +21%,
+−19%). Caveat: universe survivorship (picked 2026) flatters a hold-through
+sleeve more than anything else in the system — the Sonnet-digest A/B,
+lockbox, and paper-live remain the referees.
+
+**v2.2 converged (16 cycles):** stock +37.6%/−17%; crypto +88.1%/−28%
+(breach, held from deepening by the veto). Step-down sweep of the crypto
+sizing on the continuous path (`data/stepdown_sweep.json`):
+
+| Variant | crypto_gain / hodl | Crypto | Stock |
+|---|---|---|---|
+| Unconstrained (record only) | 3.32 / 0.95 | +83.3% / −28.0% | +37.6% / −16.8% |
+| **Mandate-compliant ≤25%** | 3.32 / 0.40 | **+71.2% / −23.3%, Sharpe 1.77** | +37.6% / −16.8% |
+| **Live-margin ≤20%** (recommended) | 1.80 / 0.40 | +52.4% / −19.9%, Sharpe 1.64 | +37.6% / −16.8% |
+
+The breach lived in the oversized HODL core, not the tactical sleeve: at
+hodl 0.40 even the aggressive tactical gain stays compliant. Lockbox still
+UNSPENT. Next: Sonnet digestion (in progress) → calibration → R19–R25 →
+freeze one of the two compliant variants → lockbox once → paper-live.
+
 ## 9. Next levers (need the user)
 
 1. **NYT Archive + Guardian API keys** (free registration) — market-grade
