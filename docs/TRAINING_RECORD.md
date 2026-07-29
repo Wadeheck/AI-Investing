@@ -283,6 +283,25 @@ Survivorship caveat unchanged (2026-picked universe flatters the core
 sleeve most); referees remain the Sonnet-digest A/B, the lockbox, and
 the forward paper test.
 
+## 8d. v2.4 (2026-07-29, converged after 20 cycles): positioning data auditioned — and rejected
+
+Added and gate-tested the perp-scalper toolkit: Binance crowd-positioning
+history (open interest, top-trader long/short ratio, taker imbalance —
+`binance_metrics_fetch.py`, free) as contrarian signals (R20), and SHORT
+capability for the fast crypto sleeve incl. during winter (R21). **Both
+were rejected by the gauntlet in every cycle** — at daily granularity,
+with honest costs, the Discord-style positioning edge did not survive
+out-of-sample. The data stays on disk for future intraday work.
+
+Converged (continuous train+holdout): **stock +35.0%/−13%** (core 0.5),
+**crypto +38.6%/−18%** (crypto params identical to v2.3 — the crypto
+delta vs v2.3's +24.9% is measurement-vintage drift, not strategy: window
+slid a day, news refreshed. Lesson recorded: crypto CAGR carries ±10pt+
+vintage sensitivity; treat point estimates accordingly). Preservation
+passed. Lockbox UNSPENT. This is the resting incumbent until the Sonnet
+digestion (in progress, 40/1,123 days v1.2-clean) delivers the new signal
+and rounds R20+ of the formula plan re-run against it.
+
 ## 9. Next levers (need the user)
 
 1. **NYT Archive + Guardian API keys** (free registration) — market-grade
