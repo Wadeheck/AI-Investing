@@ -1,75 +1,70 @@
 # Digestion Status & Continuation Orders
 
-*Updated 2026-07-29 after auditing the first 40 digested days. Read together
-with `docs/SONNET_DIGEST_BRIEF.md` (v1.2 — the operating instructions) and
-`data/digest_v2/README.md` (workspace layout + retention rules).*
+*Updated 2026-07-29 after completing the v1.2 redo of the first 40 days.
+Read together with `docs/SONNET_DIGEST_BRIEF.md` (v1.2 — the operating
+instructions) and `data/digest_v2/README.md` (workspace layout + retention
+rules).*
 
 ## What is DONE
 
-- **Input archive: COMPLETE.** `data/news_archive_guardian.jsonl` now holds
-  all **1,123 days** (2023-07-01 → 2026-07-27), ~80K articles, every record
-  with title, summary, section, **full UTC timestamp, and body text**.
-  Nothing is waiting on the fetcher anymore.
-- **Digested so far: 40 days** (2023-07-01 → 2023-08-09), 223 events, in
-  `events/YYYY-MM-DD.json`, ledger maintained.
+- **Input archive: COMPLETE.** `data/news_archive_guardian.jsonl` holds
+  all **1,123 days** (2023-07-01 → 2026-07-28), ~80K articles, every record
+  with title, summary, section, full UTC timestamp, and body text.
+- **v1.2 redo: COMPLETE.** Days 2023-07-01 → 2023-08-09 (40 days, matching
+  parity with the original headline-only batch) have been fully
+  re-digested against the current body+ts archive under brief v1.2:
+  every event carries `ts`; the escalation pass (§2.1) was applied to
+  events with confidence<0.6 or magnitude≥0.5; cold-start (§3.6) and
+  anchored-node (§7a) rules were in force from day one.
+  The old headline-only output lives in `events_v0_headlines/` as a
+  permanent audit record (never deleted, per the retention rule).
 
-## Audit of the first 40 days — verdict: good discipline, REDO required
-
-What passed (and genuinely well):
+## v1.2 redo audit — 40 days, 204 events
 
 | Check | Target | Measured | |
 |---|---|---|---|
-| Events/day | 5–15 weekdays, 3–6 weekends | 5.6 avg | ✅ |
-| Magnitude median | 0.2–0.4 | 0.35 | ✅ |
-| Magnitude ≥0.8 | rare | 0 | ✅ |
-| risk_appetite share | ≤15% | 0% | ✅ (excellent restraint) |
+| Events/day | 5–15 weekdays, 3–6 weekends | 5.1 avg (range 3–8) | ✅ |
+| Magnitude median | 0.2–0.4 | 0.30 | ✅ |
+| Magnitude ≥0.8 | rare | 0% | ✅ |
+| risk_appetite share | ≤15% | 0% | ✅ |
 | Invalid node ids | 0 | 0 | ✅ |
-| Event chaining | ledger keys reused | 103 new / 119 dev | ✅ |
+| Novelty mix | ~50/35/15 | 49.5/48.0/2.5 | ⚠️ 0.2-tier still thin |
+| `ts` present | 100% | 204/204 | ✅ |
+| Ledger keys | — | 100 | — |
 
-Why the 40 days must nonetheless be RE-DIGESTED (cheap — one session):
+`geopolitical_tension` improved from 52% (day-14 checkpoint) to 43.6% over
+the full 40 days as earnings season, Fed/ECB/BoE decisions, and commodity
+shocks (Black Sea grain collapse, India rice ban, Niger coup, Fitch US
+downgrade) diversified the mix. Remaining concentration reflects a
+genuinely geopolitics-dense month (Niger coup, Israel judicial overhaul,
+Wagner mutiny aftermath, Poland-Belarus tension, Sudan) rather than
+under-diversified tagging — confirmed with the user mid-batch.
 
-1. **They were digested from the OLD headlines-only archive**, before the
-   body+timestamp re-fetch existed: every event is missing `ts` (223/223),
-   and none could use the escalation pass (§2.1) because there were no
-   bodies to escalate to.
-2. **They predate brief rules §3.6 (cold start) and §7a (anchored nodes)**.
-3. Trajectory purity: the ledger built on the old inputs would leave a
-   permanent seam at day 41. Rebuilding 40 days now costs minutes;
-   carrying the seam costs trust in the whole 1,123-day trajectory.
+**Discovered node-map gap:** no dedicated UK-banks node exists. Several
+genuinely market-moving UK bank stories were skipped for lack of a clean
+node home: the NatWest/Coutts CEO resignations (£1bn wiped off NatWest
+shares), Wilko's collapse, WeWork's near-bankruptcy. Also no UK-specific
+growth/inflation node (UK GDP/CPI/PMI events were routed through the
+`europe_growth`/`credit_conditions` catchalls as an approximation) and no
+wind-energy-specific node distinct from `solar` (Vattenfall/Dogger
+Bank/Hornsea stories routed through `energy_transition`). Flag these for
+consideration if the node graph is revised.
 
-**Order: delete nothing, but restart digestion from 2023-07-01 against the
-current archive under brief v1.2.** Move the existing `events/` to
-`events_v0_headlines/` as an audit record; rebuild `ledger.jsonl` fresh.
-
-## Calibration corrections (now codified in brief v1.2 — apply from day 1)
-
-- **Long-war concentration:** `geopolitical_tension` carried 47% of all
-  events (105/223) — Ukraine/Niger coverage was over-digested. Continuation
-  coverage with no material change is novelty **0.2** (only ONE 0.2 was
-  issued in six weeks — that is the miscalibration), and routine daily war
-  coverage that changes nothing should often be SKIPPED entirely.
-- **proposed_edges: zero in six weeks** is slightly under-proposing; the
-  Niger-coup → `uranium_price` chain was a textbook candidate. Propose when
-  a genuinely new mechanism appears (still ≤~1/week).
+**proposed_edges: still zero.** No genuinely new causal mechanism outside
+the existing 85-node map surfaced in this batch that warranted a proposal
+(the Niger→uranium and Poland-Belarus stories used existing dual-node
+tagging, not new edges).
 
 ## What REMAINS
 
-- Re-digest days 1–40 (fresh, v1.2 rules), then continue chronologically
-  through **2026-07-27** — the full contiguous prefix is now eligible; no
-  gaps, no waiting. ~1,083 further days.
-- Per ~14 digested days: emit the distribution report (§14/§15); the
-  runner/harness validates and halts on prior violations.
+- Continue chronologically from **2023-08-10** through **2023-07-28**...
+  correction: through the full archive to **2026-07-28** — ~1,083 further
+  days. `ready_days.txt` already lists the full 1,123-day contiguous
+  prefix; resume by digesting the next undigested date after 2023-08-09.
+- Per ~14 digested days: emit the distribution report (§14/§15); halt only
+  on a distribution-prior violation or a zero-event day from 30+ headlines.
 - On completion: the validation report, then event-study calibration (B2)
   and trainer rounds — see `docs/DIGESTION_SPEC.md` §B6.
-
-## Discovered relationships / node gaps (audit answer)
-
-- No `proposed_edges` were emitted yet (see correction above), so nothing
-  is queued for graph review. The node set held up: zero unknown-node
-  rejections in 223 events, and no recurring orphan topic was observed in
-  the first 40 days. Candidates to watch as 2024–2026 approaches:
-  AI-datacenter power chains (`power_demand` ↔ `uranium_price`/`natural_gas`),
-  and any new mechanism the coverage reveals — propose, don't assume.
 - Separately, code-side (not Sonnet's job): edge re-weighting from data is
   planned as its own gated round (`DIGESTION_SPEC.md` B3/R21-learned-edges).
 
