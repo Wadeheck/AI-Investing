@@ -9,20 +9,89 @@ graph) verified directly against `engine/ai_investing/brain/seed.py`,
 `graph.py`, and `data/knowledge_graph.json`; re-verify field names against
 those files before implementing, in case the schema has since evolved.*
 
+## TL;DR — what to actually do next
+
+**Nothing proposed in this document has been implemented yet.**
+`seed.py`'s `SEED_VERSION` is still `11` and none of the 16 node ids
+proposed below (or the 3 newer candidates flagged near the end of the
+Digestion Log) exist in the live graph, as of a direct grep re-run on
+2026-07-29 — this is true regardless of how much digestion evidence has
+piled up underneath each proposal since. If you read nothing else, read
+this section and the **Summary table** (search `## Summary table`).
+
+1. **Do the seed.py edit.** 12 of the 16 original proposals are marked
+   **READY** in the Summary table — full `Node`/`Edge` specs are already
+   written out in code blocks under each numbered heading in Part 2 below.
+   This is one coordinated edit (bump `SEED_VERSION`, add nodes to
+   `SEED_NODES`, edges to `SEED_EDGES`), not more analysis. The two most
+   overdue, by both evidence volume and recurrence across years of
+   digestion, are `uk_banks` (#3) and `offshore_wind` (#5).
+2. **`us_growth` and `uk_growth` are a special case — read this before
+   touching them.** Proposal #13 (`us_growth`) and #14 (`uk_growth`) were
+   *specified* as gaps to fill but never implemented. Digestion kept
+   running anyway, and at various points events got tagged with the
+   literal string `us_growth` as if the proposed node already existed —
+   it doesn't, so a 2026-07-29 corpus-wide validation pass had to
+   mechanically rewrite those tags to the closest currently-valid
+   substitute (`global_growth`) to stop them being silently dropped by the
+   validator. **This is not evidence the gap is resolved — it's the
+   opposite**: it's a live example of the workaround-instability the
+   original proposal already predicted, now actually observed happening.
+   Implementing #13/#14 for real removes the need for the `global_growth`
+   workaround.
+3. **Three newer gap-candidates were flagged during 2026 digestion but
+   never promoted into the Summary table below** — a disaster/humanitarian
+   node (no home for the Venezuela earthquake, tagged `geopolitical_tension`
+   as a stopgap), a BOJ-rate node (Japan's rate hikes proxied through
+   `japan_debt`), and an `aluminium_price` commodity (a story was dropped
+   entirely rather than force-tagged). Each has only one recurrence so
+   far — per this document's own promotion rule, they're **watching, not
+   ready** — see "New gap-candidates from 2026 digestion" right after the
+   Summary table for the citations.
+4. **Node-id hygiene, going forward**: five invalid ids (`dollar`, `chips`,
+   `us_growth`, `renewables`, `pharma`) were found live in the corpus and
+   fixed on 2026-07-29 — all five originated from treating a node's
+   *alias* as if it were the node's own id, carried forward across agent
+   handoffs without ever being re-verified against `seed.py` directly. See
+   the "Process-lesson" note inside the Digestion Log (search
+   `Process-lesson`) for the full story. **Always re-grep `seed.py` for
+   an id before trusting that it's valid** — don't trust a list handed
+   down from a prior digestion session or a prior agent's context.
+
 ## How to read this document
 
-For each proposed node I give: the exact `Node` dataclass fields (per
-`engine/ai_investing/brain/graph.py`), the digester-facing "+1 means"
-definition (the format used in `SONNET_DIGEST_BRIEF.md` §7), and proposed
-`Edge` entries in the same fields the graph actually uses (`src, dst, type,
-sign, weight, confidence, note`). **All nodes below are considered
-must-build** — none are optional or "nice to have." Each is backed by a
-recurring pattern of real stories with no clean home, not a one-off. Where
-a node's supporting evidence is currently thinner than another's, I say so
-explicitly, but thinner evidence today just means "watch this node's
-recurrence count as digestion continues" (see the Digestion Log at the
-bottom, which I'm updating as I keep going) — it does not mean deprioritize
-the design work now.
+This document has two parts, and you very likely only need the first one.
+
+**Part 1 — Proposals + Summary table** (right below, through the line
+`## Summary table` and the short "New gap-candidates" note after it).
+This is the actionable spec. For each proposed node it gives the exact
+`Node` dataclass fields (per `engine/ai_investing/brain/graph.py`), the
+digester-facing "+1 means" definition (the format used in
+`SONNET_DIGEST_BRIEF.md` §7), and proposed `Edge` entries in the same
+fields the graph actually uses (`src, dst, type, sign, weight, confidence,
+note`). **All nodes in Part 1 are considered must-build** — none are
+optional or "nice to have." Each is backed by a recurring pattern of real
+stories with no clean home, not a one-off. The Summary table at the end of
+Part 1 is the fastest way to see every proposal's status at a glance —
+read that first, then jump to the specific numbered section for any
+proposal you're about to implement.
+
+**Part 2 — Digestion Log** (`## Digestion Log`, everything after it —
+the bulk of this file's line count). This is a chronological evidence
+trail, not required reading. Each dated entry or numbered batch
+checkpoint records what was actually tagged during a real digestion run,
+and either reinforces a Part 1 proposal (bumping it toward more
+confirmed recurrence) or notes a new gap not yet promoted to Part 1. You
+do not need to read it start to finish. Use it the way you'd use a
+citation index: if a Summary-table row says "confirmed by N dated events,"
+and you want to see the actual headlines, search the log for the node id
+or event_key named in that row. If you're just deciding what to build,
+skip straight to the Summary table.
+
+Where a node's supporting evidence is currently thinner than another's,
+Part 1 says so explicitly, but thinner evidence today just means "watch
+this node's recurrence count as digestion continues" (tracked in the
+Digestion Log) — it does not mean deprioritize the design work now.
 
 **Implementation path**: per `graph.py`'s `_merge_seed()`, the *only*
 current mechanism for adding a genuinely new node is manual — bump
@@ -979,6 +1048,52 @@ digestion. `travel_leisure` (thin recent evidence) and `uk_growth` (deep
 evidence trail as of 2024-05-01, but still one spec-writing pass away
 from READY), and the Red Sea/shipping-security question (still evolving)
 genuinely benefit from one more pass before finalizing.
+
+**Status check as of 2026-07-29 (confirmed by direct grep of the live
+`seed.py`, `SEED_VERSION` still `11`): none of the above 16 proposals have
+actually been implemented**, despite years of digestion piling up further
+recurrence evidence underneath several of them since this table was last
+updated (2024-07-10). `us_growth` (#13) and `uk_growth` (#14) in
+particular kept surfacing in live digestion as if they already existed —
+events got tagged with the literal string `us_growth`, which the validator
+would silently drop since the id was never actually added to the graph.
+Those mistagged events were mechanically corrected on 2026-07-29 to the
+closest currently-valid node (`global_growth`) purely to stop signal loss
+— **that fix is a workaround, not a resolution**; it disappears the day
+someone actually implements #13/#14 for real. Whoever picks this document
+up next should treat the seed.py edit itself, not any further evidence-
+gathering, as the actual blocking task for all 12 READY proposals.
+
+### New gap-candidates from 2026 digestion (watching, not yet promoted)
+
+Three more gaps surfaced during the 2026-01-22 → 2026-07-28 parallel
+digestion push (see the Digestion Log's batch checkpoints #73–#90 for the
+full narrative context). None has the 3+ independent, non-adjacent-in-time
+recurrences this document's own promotion bar requires, so none is
+promoted to a numbered proposal above yet — flagging them here so the next
+pass knows what to watch for, per this document's stated policy of noting
+a trigger condition rather than drafting a premature spec:
+
+- **Disaster/humanitarian factor** — the Venezuela earthquake thread
+  (`venezuela-2026-earthquake-disaster`, opened 2026-06-25, batch #86) had
+  no clean economic-factor home and was tagged `geopolitical_tension` as a
+  pure stopgap, despite being a natural disaster with zero geopolitical
+  content. **Trigger to promote**: one more independent, non-geopolitical
+  disaster/humanitarian story (earthquake, famine, pandemic-scale event)
+  that also needs a market-relevant tag.
+- **`boj_rate` (Bank of Japan policy)** — Japan's rate hike to a 31-year
+  high of 1% (2026-06-16, new event_key `japan-2026-boj-rate-hike`, batch
+  #85) had to be tagged to `japan_debt` for lack of a dedicated BOJ-rate
+  node, the same shape of gap `boe_rate` (#2 above) already fixes for the
+  UK. **Trigger to promote**: one more BoJ policy-decision story that
+  needs separating from `japan_debt`'s debt-sustainability framing.
+- **`aluminium_price` (commodity)** — an Iranian-strikes-on-Middle-East-
+  smelters story (2026-03-30, during batch #79) was dropped entirely
+  rather than force-tagged, since no aluminium-price node exists at all
+  (unlike gold, oil, natural gas, and uranium, which all have dedicated
+  commodity nodes). **Trigger to promote**: one more aluminium-specific
+  supply-shock story that would otherwise be dropped rather than
+  force-tagged to a poor-fit proxy.
 
 ---
 
@@ -4672,6 +4787,1799 @@ political-fiscal events have no node-level home beyond generic
 9-15) confirming that node exists and is usable — worth noting since
 prior batches had described China-related growth events as lacking a
 home; the node was simply underused, not absent.
+
+### Batch #64 checkpoint (2025-09-18 to 2025-10-01)
+
+Ledger now at 1244 event_keys / 823 days. This batch: 14 days, 69
+events (4.93/day) — the highest events/day rate of the entire session,
+reflecting an extraordinarily dense fortnight (NATO airspace incidents
+spreading to five countries, a signed TikTok deal, a Gaza peace-plan
+proposal, an actual US government shutdown, and continued Fed-Cook
+litigation). Magnitude mean/median: 0.273/0.25, in line with the
+recent elevated range. Novelty mean: 0.641, among the highest this
+session, with 31 intermediate phase-change (44.9% — the highest
+phase-change share of any batch) and 38 material-development (55.1%),
+and for the second consecutive batch **zero events at either extreme**
+(no pure recap/color, no clean terminal) — a fortnight where literally
+everything was a meaningful step in an ongoing arc rather than either
+throwaway color or a final resolution. Node concentration:
+`geopolitical_tension` 73.9% (51/69) — a new session-high, surpassing
+even batch #60's 69.7% — `europe_growth` 11.6%, `fed_rate` 5.8%,
+`chips` 2.9%, `gold_price` 2.9%, plus two singles (`global_growth`,
+`oil_supply`). Type mix: geopolitics 52 (75.4%), markets 7 (10.1%),
+monetary_policy 5 (7.2%), macro 5 (7.2%).
+
+**The Nato-airspace-incursion thread became the single most
+geographically distributed story of the entire session**: from
+Poland's original drone shoot-down (batch #63) it spread to Romania,
+Estonia (with jets, not drones, and a formal Article 4 consultation),
+Germany's Baltic Sea intercept, and finally civilian airport closures
+in Copenhagen and Oslo — six countries in one event_key
+(`russia-2025-nato-airspace-incursion`), culminating in this batch's
+most concrete development: French forces physically boarding and
+detaining crew from a Russia-linked 'shadow fleet' tanker suspected of
+launching the drones that closed Denmark's airports (10-1). This is
+the first batch where the incursion thread produced an actual physical
+interdiction rather than only diplomatic protest, a genuine escalation
+in kind rather than just geographic spread.
+
+**Three separate long-running sagas reached genuine turning points in
+immediate succession this batch**: the TikTok ownership dispute was
+finally resolved by signed executive order (9-25, novelty 0.85) after
+more than a year of limbo; the US government actually shut down (10-1,
+novelty 0.85) after weeks of shutdown-risk build-up; and Trump unveiled
+a detailed 20-point Gaza peace plan (9-29, novelty 0.8) followed
+immediately by a concrete ultimatum-with-deadline to Hamas (9-30,
+novelty 0.75) — though Netanyahu's simultaneous admission that he
+never agreed to Palestinian statehood as part of the plan is a strong
+signal this 'resolution' may prove as fragile as the ceasefire proposal
+from batch #61 that also initially looked like a breakthrough.
+
+**The Fed-independence saga produced its cleanest institutional
+outcome of the session**: the Fed cut rates as expected (batch #63),
+Powell publicly dismissed Trump's 'political Fed' framing as a 'cheap
+shot' (9-23), Trump escalated to the supreme court (9-18), and the
+court ultimately deferred action pending full oral arguments (10-1) —
+leaving Cook in her seat through at least one more news cycle. This
+is a genuinely different resolution shape than the batch #63 court
+block: not a final ruling either way, but an explicit institutional
+choice to slow-walk the question rather than rule immediately in
+either direction.
+
+**New node-existence gaps confirmed this batch**: none beyond the
+backlog, though this batch is notable for having the *fewest* distinct
+non-`geopolitical_tension` nodes used of any batch this session (six
+total, only two of them appearing more than twice) — a further data
+point that the current 85-node graph structurally under-serves
+fast-moving multi-country security stories, which all collapse into
+the same catch-all node regardless of whether the story is a NATO
+airspace violation, a Gulf-state assassination attempt, or a Fed
+independence court case.
+
+### Batch #65 checkpoint (2025-10-02 to 2025-10-15)
+
+Ledger now at 1253 event_keys / 837 days. This batch: 14 days, 64
+events (4.57/day). Magnitude mean/median: 0.276/0.25, in line with
+the recent elevated range. Novelty mean: 0.624, with 2 terminal
+events (3.1%), 26 intermediate phase-change (40.6%), and 36 material-
+development (56.2%) — the two terminal scores are the session's most
+significant of all: the Gaza ceasefire's first-phase agreement (10-9,
+novelty 0.95) and the completed hostage-prisoner exchange (10-13,
+novelty 0.9). Node concentration: `geopolitical_tension` 67.7%
+(44/65), continuing the plateau, `europe_growth` 13.8%, `global_growth`
+7.7%, `chips` 7.7% (tied for its highest share this session),
+`japan_equities` 1.5% (first use this session), `gold_price` 1.5%.
+Type mix: geopolitics 50 (78.1%), markets 9 (14.1%), macro 5 (7.8%).
+
+**This batch contains the session's single most consequential resolved
+thread**: the Gaza war's ceasefire-collapse saga, tracked under one
+event_key since the war's earliest days, finally reached genuine
+terminal resolution — Trump's 20-point peace plan (batch #64) led to
+Hamas's conditional acceptance (10-4), formal indirect talks in Egypt
+(10-6), the first-phase agreement (10-9, novelty 0.95), and the actual
+hostage-for-prisoner exchange completing at a 20-world-leader summit in
+Sharm el-Sheikh (10-13, novelty 0.9). Critically, the very next day
+produced the first real strain (Israel limiting aid over withheld
+hostage remains, 10-14) followed by partial de-escalation (10-15) —
+confirming the batch #61 gap note's observation that Gaza ceasefire
+news needs post-agreement durability tracking, since even a genuine
+terminal event in this war has historically proven reversible within
+days.
+
+**A second major thread also reached a clean resolution**: French
+political instability, which had produced a `europe_growth`-tagged PM
+resignation in batch #64 (Bayrou), continued through Lecornu's
+own resignation after less than a month (10-6, novelty 0.8) and his
+almost-absurdist reappointment to the same job days later (10-10,
+novelty 0.7) — a genuinely unusual double-resignation-and-reappointment
+pattern within a two-week span that this session's tagging correctly
+kept under the same event_key throughout, preserving the narrative
+arc's continuity even as the cast of characters looped back on itself.
+
+**The `chips` node reached its highest-ever concentration tie (7.7%,
+5 events) on the back of an AI-market-correction warning cluster**:
+the Bank of England (10-8), Jamie Dimon (10-9), and the IMF (10-14)
+all issued distinct warnings about AI-bubble/stock-market correction
+risk within one week, a genuinely new sub-narrative (systemic-risk
+concern about AI valuations) distinct from the chip-supply-chain and
+chip-export-policy stories that have carried this node all session.
+This is a good illustration of `chips` now carrying at least three
+genuinely separable threads (export/tariff policy, AI capex mega-deals,
+and bubble-risk commentary) under one node.
+
+**New node-existence gaps confirmed this batch**: `japan_equities` was
+used for the first time this session (Takaichi's election, 10-6),
+confirming — like `china_growth` in batch #63 — that some proposed
+"missing" nodes are simply underused rather than absent from the graph.
+The US government shutdown (which began 10-1 and persisted through
+this entire batch without resolution) produced seven `geopolitical_tension`-
+tagged events with no better node home, a domestic-fiscal-policy story
+that, like the France/Bayrou thread, continues to strengthen the case
+for a dedicated US-fiscal-policy or shutdown-specific node given its
+sustained multi-week duration and real GDP-cost estimates ($7bn/week).
+
+### Batch #66 checkpoint (2025-10-16 to 2025-10-29)
+
+Ledger now at 1265 event_keys / 851 days. This batch: 14 days, 68
+events (4.86/day), among the highest events/day rates this session.
+Magnitude mean/median: 0.282/0.3 — the highest median of the entire
+session, reflecting an unusually consequential fortnight even by this
+session's elevated recent standard. Novelty mean: 0.647, with zero
+events at either extreme (no recap/color, no clean terminal) for the
+third time this session — every event was a genuine intermediate step,
+36 at phase-change level (52.9%, the highest share yet) and 32 at
+material-development (47.1%). Node concentration: `geopolitical_tension`
+77.9% (53/68) — a new session-high, again surpassing the prior record
+from batch #64 (73.9%) — `chips` 7.4%, `europe_growth` 5.9%, plus five
+singles. Type mix: geopolitics 54 (79.4%), markets 7 (10.3%), macro 6
+(8.8%), monetary_policy 1 (1.5%).
+
+**This batch tracked the sharpest reversal cascade of the session on
+Ukraine diplomacy**: Trump moved from Tomahawk-threat momentum (10-12)
+to actively downplaying supply after a Putin phone call intervened
+(10-17), then to proposing Ukraine simply cede the Donbas (10-20), then
+to shelving the Budapest summit entirely (10-21) and pivoting to hard
+sanctions on Rosneft/Lukoil (10-22) — five distinct, contradictory
+policy postures within 10 days, each faithfully captured with its own
+polarity and novelty rather than smoothed into a single trend. This is
+the clearest evidence yet that `geopolitical_tension`'s polarity swings
+are tracking real, volatile policy incoherence rather than tagging
+noise — a genuine feature of the underlying story.
+
+**Three new nation-state fronts opened in the Trump administration's
+economic-pressure playbook this batch, each escalating faster than any
+single-country track this session**: Colombia (ambassador recalled
+10-20 → president personally sanctioned by the US Treasury 10-25, an
+extremely rare action against a sitting head of state), Canada (trade
+talks 'terminated' 10-21 → 10% retaliatory tariff enacted 10-25 over a
+single TV ad), and the EU-Nexperia chip dispute (Dutch takeover fight
+threatening to halt European car production within days, 10-29). Each
+was assigned its own event_key given the distinct bilateral relationship
+and mechanism, even though all three share the common thread of Trump
+using economic leverage as a first-resort diplomatic tool.
+
+**The AI/private-credit systemic-risk warning cluster reached genuine
+market consequence this batch**: after the Bank of England (batch #65),
+Jamie Dimon and the IMF all warned separately about AI-bubble and
+private-credit risk, this batch saw an actual ~£11bn UK bank selloff
+(10-17), Bailey's '2008 echoes' warning (10-21), and gold's biggest
+one-day fall since 2020 (10-21) — before Nvidia nonetheless reached a
+first-ever $5tn valuation just eight days later (10-29), a striking
+juxtaposition of systemic-risk alarm and record-breaking valuation
+occurring within the same two-week window.
+
+**Gaza's ceasefire produced this session's clearest 'fragile truce'
+arc**: from the triumphant hostage exchange (batch #65, 10-13) to daily
+accusation-trading (10-16 through 10-19) to actual major strikes
+(10-19, 10-28) to a severe 104-death overnight bombardment that made
+the truce look 'increasingly fragile' by the batch's final day (10-29)
+— a steady, well-documented deterioration rather than a single
+collapse event, exactly the kind of gradual-erosion pattern the batch
+#58/#59 novelty-convention concern had flagged as a scoring challenge,
+here handled by assigning escalating novelty/magnitude to each new
+violation rather than treating the ceasefire as either 'holding' or
+'collapsed' in binary terms.
+
+**New node-existence gaps confirmed this batch**: none beyond the
+backlog, though the emergence of the Colombia and Canada event_keys as
+genuinely new bilateral-tension threads (rather than sub-plots of an
+existing tariff event_key) continues to stress-test whether
+`geopolitical_tension`'s now-78% concentration is sustainable without a
+`trade_policy` split — this batch is the strongest evidentiary case
+yet, given it is the fourth consecutive batch at or above 65%
+concentration.
+
+### Batch #67 checkpoint (2025-10-30 to 2025-11-12)
+
+Ledger now at 1290 event_keys / 865 days. This batch: 14 days, 79
+events (5.64/day), the highest events/day rate of the session,
+reflecting an unusually dense fortnight (Trump-Xi summit, the
+government-shutdown endgame, the AI-bubble selloff, and a wave of new
+geopolitical fronts all landing in the same window). Magnitude
+mean/median: 0.263/0.25 — a step down from batch #66's session-high
+0.282/0.3 but still solidly above the session's early-batch baseline.
+Novelty mean: 0.530, mix: 1 terminal (1.3%), 4 phase-change (5.1%), 52
+material-development (65.8%), 22 recap/color (27.8%) — the terminal
+and phase-change share is notably lower than batch #66's zero-recap
+extreme, reflecting a batch with two genuine full-arc resolutions
+(see below) surrounded by a lot of steady incremental follow-through
+rather than another unbroken chain of pure escalation. Node
+concentration: `geopolitical_tension` 72.2% (57/79) — down from batch
+#66's session-high 77.9% but still the fifth consecutive batch at or
+above 65% — `chips` 13.9% (11/79, the highest `chips` share of the
+session), `europe_growth` 7.6% (6/79), `oil_supply` 2.5% (2/79, first
+multi-event use of this node in several batches), plus `dollar`,
+`global_growth`, and `fed_rate` at one event each. Type mix:
+geopolitics 57 (72.2%), markets 13 (16.5%), macro 6 (7.6%),
+monetary_policy 3 (3.8%).
+
+**Two long-running threads reached genuine full-arc resolution within
+this single batch, both handled with escalating novelty across
+multiple sub-events rather than one oversized terminal tag**: (1) the
+US-China tariff/rare-earth saga went from the Trump-Xi summit's
+framework agreement (10-30, novelty 0.9 — tariffs cut to 47%, rare
+earths unblocked) through China ending tariffs on US farm goods
+(11-5) to China lifting its chip-export ban on European carmakers
+following the associated US deal (11-7, novelty 0.65), fully
+unwinding the Nexperia crisis that just two weeks earlier had EU
+carmakers 'days away' from halting production; (2) the US government
+shutdown went from becoming the longest in history (11-5, novelty
+0.6) through the Senate's procedural advance (11-10, novelty 0.85),
+full Senate passage (11-11, novelty 0.8), and the House vote (11-12,
+novelty 0.65) — a textbook phase-change cascade where each stage
+earned its own appropriately-scaled novelty rather than the whole
+40-day saga being smoothed into a single event.
+
+**The Snap food-aid subplot inside the shutdown story showed real
+institutional whiplash, not tagging noise**: partial-funding
+compromise (11-3) → court blocks the administration from suspending
+benefits (10-31) → judge orders full funding 'to stop needless
+suffering' (11-6/11-7) → agriculture department tells states to
+'undo' benefits after a supreme court order reverses that (11-8/11-9)
+→ the supreme court extends its pause on full payments even as the
+broader shutdown resolves (11-12) — five reversals in nine days,
+each captured as its own event with opposite-sign polarity where
+appropriate, demonstrating the dual-tag/reversal discipline holding
+up under a genuinely chaotic real-world fact pattern.
+
+**The AI-bubble-risk narrative crystallized into its own recurring
+event_key (`us-2025-ai-bubble-risk`) for the first time this session**,
+distinct from the capex-buildout thread (`us-2025-ai-capex-boom`):
+market jitters (11-4) → a broad global selloff with Asian chipmakers
+tumbling (11-5, novelty 0.65) → a Wall Street tumble tied explicitly
+to AI-driven job losses (11-6) → Nasdaq's worst week since March
+(11-7) → SoftBank exiting its entire Nvidia stake to double down on
+OpenAI instead (11-11) — five distinct beats over eight days showing
+the bubble-risk story is now a persistent, separately-trackable
+thread rather than a one-off scare, even as the capex buildout
+(OpenAI-Amazon's $38bn deal, Google's space-datacentre plan,
+Anthropic's $50bn US buildout) continued in parallel without
+interruption.
+
+**A new `fed_rate` sub-thread emerged with the Atlanta Fed president's
+resignation** (11-12) amid Trump's continued attacks on the central
+bank's independence, tagged to `fed_rate` but summarized under a new
+`us-2025-fed-independence-fight` event_key rather than the rate-path
+event_key — this is the second batch running to surface concrete
+evidence for the batch #64 suggestion that `fed_rate` may eventually
+warrant a split between rate-path signal and institutional-independence
+fight, now with an actual personnel casualty rather than just rhetoric.
+
+**Five new geopolitical fronts opened this batch, each assigned its
+own event_key given a distinct bilateral relationship or mechanism**:
+Nigeria (Trump threatening military action over alleged killings of
+Christians, 11-2), Israel-Lebanon (a parallel escalation track to the
+Gaza ceasefire strain, with Israeli strikes on southern Lebanon
+despite a truce, 11-2 and 11-6), Japan-China Taiwan tension (PM
+Takaichi's comments on possible SDF deployment triggering a
+diplomatic row, then China 'sharpening its language' on Taiwan more
+broadly, 11-11/11-12), US-Hungary sanctions exemption (a carve-out
+from Russian-oil sanctions granted at a Trump-Orbán summit, 11-8),
+and US-Syria (a historic first US-Syria presidential summit since
+1946 with a partial sanctions suspension, 11-10). The Venezuela
+buildup also escalated materially within the batch, from boat strikes
+to the Pentagon's largest warship entering the region (11-11) to the
+full carrier deployment with 'imminent' military-action framing
+(11-12).
+
+**Node concentration eased slightly from batch #66's record but the
+`trade_policy` gap case keeps strengthening**: this is the fifth
+consecutive batch at or above 65% `geopolitical_tension` concentration
+(#63 through #67), even though this batch's 72.2% is down ~5.7 points
+from #66's 77.9% — the relief came almost entirely from `chips`
+absorbing a larger share (13.9%, the session's highest) thanks to the
+Nexperia resolution and the AI-bubble/capex stories, not from any
+underlying reduction in geopolitics-flavored event volume. UK-specific
+events this batch (BoE holding at 4% then opening the door to a
+December cut, UK unemployment hitting a four-year high, record gilt
+auction demand) were again tagged to `europe_growth` as the
+closest available proxy, adding further evidence for the standing
+`boe_rate`/`uk_inflation` gap proposal.
+
+**No node-existence gaps beyond the standing backlog were newly
+confirmed this batch**, though the Nigeria, Israel-Lebanon, and
+Japan-China threads each reinforce the case for the previously
+proposed `alliance_cohesion` and `political_stability` nodes, since
+none of them are really about trade policy despite currently sharing
+`geopolitical_tension` with the tariff/trade stories that motivate the
+`trade_policy` split proposal — a reminder that `trade_policy` alone
+would not fully relieve the concentration problem; a second split
+along a military/alliance-tension axis may eventually be needed too.
+
+### Batch #68 checkpoint (2025-11-13 to 2025-11-26)
+
+Ledger now at 1305 event_keys / 879 days. This batch: 14 days, 75
+events (5.36/day). Magnitude mean/median: 0.263/0.25, essentially
+identical to batch #67. Novelty mean: 0.527, mix: 1 terminal (1.3%),
+4 phase-change (5.3%), 49 material-development (65.3%), 21
+recap/color (28%) — very close to batch #67's distribution, another
+batch dominated by steady incremental development rather than clean
+extremes. Node concentration: `geopolitical_tension` 70.7% (53/75) —
+the sixth consecutive batch at or above 65%, though the third
+straight batch of gradual easing from batch #66's 77.9% peak —
+`europe_growth` 12.0% (9/75, the highest share of this node all
+session), `chips` 8.0% (6/75), `oil_supply` 2.7%, `fed_rate` 2.7%
+(2/75), plus `china_growth`, `japan_equities`, and `global_growth` at
+one event each. Type mix: geopolitics 54 (72.0%), macro 10 (13.3%),
+markets 8 (10.7%), monetary_policy 3 (4.0%).
+
+**The US-Russia-Ukraine 'peace plan' saga was this batch's dominant
+and most volatile thread, cycling through six distinct phases in
+eight days**: a capitulation-based draft surfaced (11-19, novelty
+0.7) → details revealed Ukraine would be banned from Nato and Russia
+readmitted to the G8 (11-20, novelty 0.75) → sustained European and
+Ukrainian pushback forced a walkback to an 'updated framework' and
+Trump saying the deal was not his 'final offer' (11-23, novelty 0.65)
+→ Ukraine made substantive revisions removing Russia's maximalist
+demands (11-25, novelty 0.6) → Trump backed away from the Thursday
+deadline, calling the plan merely 'fine-tuned' (11-26, novelty 0.5) →
+the whole framework's credibility was then undermined the same day by
+revelations that envoy Witkoff had coached a Kremlin official on how
+to handle Trump (11-26, novelty 0.65). This is the clearest
+demonstration yet of the dual-tag/reversal discipline handling a
+genuinely fast-moving, multi-directional diplomatic story without
+collapsing it into a single event or losing the thread's coherence.
+
+**The AI-bubble-risk narrative (`us-2025-ai-bubble-risk`) showed that
+even a strong fundamentals beat couldn't durably calm markets**: a
+broad global selloff with crypto shedding over $1tn in six weeks and
+the FTSE's biggest drop since April (11-18, novelty 0.65) was
+followed by genuine relief when Nvidia's earnings beat expectations
+(11-19, novelty 0.7) — only for Wall Street to fall back into renewed
+bubble fears less than 24 hours later (11-20, novelty 0.6). This
+whipsaw is a notable finding for the ongoing tracking of this
+thread: fundamentals-driven relief rallies in this cycle have so far
+proven short-lived against the backdrop of persistent valuation
+anxiety.
+
+**The UK's fiscal cycle produced a full 'worse than feared, then
+better than feared' arc within the batch**: a weak Q3 growth print
+tied to the JLR cyberattack (11-13) → Reeves's income-tax-rise
+reversal triggering a government bond selloff (11-14) → inflation
+easing to 3.6% (11-19) → a growth-forecast downgrade warning
+(11-24) → the actual budget-day surprise of a much larger-than-feared
+£22bn fiscal headroom, which pushed UK borrowing costs down (11-26) —
+all captured under a single `uk-2025-budget-fiscal-gap` event_key
+with polarity swinging appropriately at each turn. This directly
+explains why `europe_growth` hit its highest share of the session
+(12.0%) this batch: a country-specific fiscal cycle with enough
+dedicated news naturally diversifies tagging away from
+`geopolitical_tension`, reinforcing that the concentration problem is
+substantially about the lack of a home for everything else (trade
+wars, military postures, alliance tension) rather than an inherent
+flaw in the tagging approach.
+
+**Five new or continuing geopolitical fronts each required their own
+event_key this batch**: the Japan-China Taiwan row escalated from
+rhetoric to real economic retaliation (coast guard deployment,
+seafood import ban, travel warnings, hundreds of thousands of
+cancelled trips), then widened into a direct US-China channel when Xi
+raised Taiwan's 'return' in a call with Trump (`china-us-2025-taiwan-
+status`, a new event_key distinct from the Japan-China track) and
+Taiwan itself announced $40bn in new defense spending
+(`taiwan-2025-defense-spending`); the Israel-Lebanon track escalated
+sharply with Hezbollah's chief of staff killed in a Beirut strike and
+the UN confirming at least 127 civilians killed since the ceasefire;
+Poland's rail-sabotage story reached a diplomatic consequence (last
+Russian consulate closed); and the Thailand-Cambodia ceasefire, which
+had collapsed in a fatal border clash, was patched back together
+under US tariff pressure within 48 hours.
+
+**The `fed_rate` split proposed in batch #67 was applied in practice
+for the first time this batch**, with two events tagged under a new
+`us-2025-fed-rate-path` event_key (the October CPI report's
+cancellation amid the Fed's rate deliberations; falling consumer
+confidence against rate-cut hopes) kept distinct from the
+`us-2025-fed-independence-fight` event_key established the prior
+batch — a working precedent for how the node's eventual formal split
+(if adopted) might be implemented in the underlying schema.
+
+**No new node-existence gaps beyond the standing backlog were
+confirmed**, though the Taiwan-China-Japan-US cluster of three
+distinct bilateral event_keys sharing `geopolitical_tension` this
+batch is a clean illustration of the two-axis-split case flagged in
+batch #67: these are military/alliance-flavored stories, structurally
+different from the trade-war stories that motivate the `trade_policy`
+proposal, and would need a separate `alliance_cohesion` or
+`political_stability` node to actually relieve concentration rather
+than just relabeling it.
+
+### Batch #69 checkpoint (2025-11-27 to 2025-12-10)
+
+Ledger now at 1318 event_keys / 893 days. This batch: 14 days, 82
+events (5.86/day) — the highest events/day rate of the entire
+session, reflecting an extraordinarily dense fortnight of simultaneous
+geopolitical fronts.
+Magnitude mean/median: 0.262/0.25, essentially flat with the prior two
+batches. Novelty mean: 0.526, mix: 0 terminal, 1 phase-change (1.2%),
+64 material-development (78.0%), 17 recap/color (20.7%) — almost
+entirely steady incremental development with only a single true
+phase-change event (the December Fed rate cut) and zero clean
+terminal resolutions, reflecting a batch defined by ongoing,
+unresolved multi-front escalation rather than any single story
+concluding. Node concentration: `geopolitical_tension` 79.3% (65/82)
+— a **new session-high**, surpassing batch #66's previous record of
+77.9% — `europe_growth` 13.4% (11/82, also a new session-high for
+this node), `fed_rate` 2.4% (2/82), `chips` 2.4% (2/82), `oil_supply`
+1.2%, `china_growth` 1.2%. Type mix: geopolitics 65 (79.3%), macro 9
+(11.0%), monetary_policy 5 (6.1%), markets 3 (3.7%).
+
+**Trump's national security strategy triggered the batch's most
+consequential single thread: a genuine trans-Atlantic rift unfolding
+in five stages over six days**: a policy paper titled 'cultivate
+resistance', signed by the president, explicitly endorsed Europe's
+far-right parties and echoed 'great replacement' theory by warning of
+Europe's 'civilisational erasure' (12-5/12-6, novelty 0.6) → the
+Kremlin approvingly noted the strategy aligned with Russia's own
+vision (12-7, novelty 0.6) → the European Council president issued a
+formal rebuke warning the US not to interfere in Europe's affairs
+(12-8, novelty 0.6) → Trump personally escalated with 'weak and
+decaying Europe' rhetoric and hints at walking away from Ukraine
+entirely (12-9, novelty 0.6) → European leaders scrambled into a
+crunch coalition call the following day (12-10). This is arguably the
+single most structurally significant thread of the session so far,
+since it directly threatens the trans-Atlantic alliance framework
+that has underpinned most de-escalatory `geopolitical_tension`
+readings all year — a genuine candidate for the graph's most
+consequential emerging narrative.
+
+**The Venezuela pressure campaign produced the clearest escalation
+ladder of any single front this session, with nine distinct rungs in
+roughly ten days**: an explicit ultimatum to Maduro (12-1) → a threat
+of direct land strikes (12-2) → Venezuela's airspace closure and
+defiant countermeasures (11-29/11-30) → video evidence of strike
+survivors clinging to wreckage for an hour before a second, deadly
+strike (12-5, novelty 0.6) → revelation that a twice-struck boat was
+reportedly moving drugs to a different South American country
+entirely, undermining the campaign's stated US-bound-narcotics
+justification (12-6, novelty 0.55) → fighter jets circling the Gulf
+of Venezuela with Trump saying Maduro's 'days are numbered' (12-10).
+Each rung was captured with its own event_key continuation and
+appropriately scaled novelty rather than smoothed into a single
+'tensions rise' event — a strong showcase of the escalation-ladder
+handling this session has developed.
+
+**The `fed_rate` split (proposed batch #67, first applied batch #68)
+reached a clean terminal event this batch**: the 'divided Fed ponders'
+deliberation (12-8, novelty 0.5) resolved into the actual December
+rate cut (12-10, novelty 0.8) — the year's final rate decision and
+this batch's only phase-change-tier event, demonstrating the
+rate-path event_key working end-to-end from deliberation to decision.
+
+**The UK's post-budget saga continued as its own mini-arc, pushing
+`europe_growth` to a new session-high 13.4% share**: the OBR chair's
+resignation over the 'worst failure' in its 15-year history (12-1),
+the ongoing Reeves-OBR credibility dispute over the tax-U-turn
+timeline (11-30), a construction-sector slowdown described as the
+sharpest since the first Covid lockdown (12-4), and finally a
+positive Bank of England endorsement that the budget would meaningfully
+cut inflation (12-9) — a country-specific fiscal saga dense enough to
+again visibly relieve `geopolitical_tension` concentration, exactly
+as batch #68 observed.
+
+**The Thailand-Cambodia ceasefire cycle repeated its own pattern from
+batches #67-68**: having been patched back together under US tariff
+pressure in batch #68, the truce fully collapsed into fatal
+cross-border clashes this batch (12-8/12-9, novelty 0.6), with Trump
+again promising to 'make a call' to fix it (12-10) — the second
+full de-escalation/re-escalation cycle on this single front within a
+month, a useful data point on how fragile Trump-brokered ceasefires
+have proven across multiple unrelated conflicts this session (Gaza,
+Thailand-Cambodia).
+
+**Node concentration reaching an all-time session-high despite three
+consecutive prior batches of gradual easing makes this the strongest
+evidentiary batch yet for the `trade_policy`/`alliance_cohesion`
+split proposal**: critically, this batch's record concentration came
+almost entirely from military/alliance-flavored stories (Venezuela,
+Ukraine, Thailand-Cambodia, Japan-China radar lock-on, the
+trans-Atlantic rift) rather than from trade-war stories specifically —
+directly confirming the batch #68 observation that `trade_policy`
+alone would not fully relieve the concentration problem, and that a
+second, alliance/military-flavored split is likely necessary in
+tandem.
+
+### Batch #70 checkpoint (2025-12-11 to 2025-12-24)
+
+Ledger now at 1332 event_keys / 907 days. This batch: 14 days, 79
+events (5.64/day). Magnitude mean/median: 0.265/0.25, in line with
+recent batches. Novelty mean: 0.536, mix: 0 terminal, 5 phase-change
+(6.3%), 55 material-development (69.6%), 19 recap/color (24.1%) — a
+slightly richer phase-change share than batch #69's near-single-event
+count, reflecting two genuine terminal-tier decisions landing this
+batch (the December BoE rate cut and the EU's €90bn Ukraine loan).
+Node concentration: `geopolitical_tension` 75.9% (60/79) — easing for
+the second consecutive batch from batch #69's record 79.3%, though
+still the seventh consecutive batch at or above 65% — `europe_growth`
+7.6% (6/79), `global_growth` 5.1% (4/79), `chips` 3.8% (3/79),
+`oil_price` 2.5% (2/79), `fed_rate` 1.3%, `oil_supply` 1.3%,
+`us_inflation` 1.3%, `gold_price` 1.3%. Type mix: geopolitics 61
+(77.2%), macro 6 (7.6%), markets 7 (8.9%), monetary_policy 5 (6.3%).
+
+**Three nodes received their first standalone use of the entire
+session this batch**: `oil_price` (distinct from `oil_supply`) tagged
+twice — once for the market reaction to Trump's Venezuela tanker
+blockade (12-17) and once for oil dropping below $60/barrel on
+Ukraine peace-talk optimism (12-16); `us_inflation` tagged once for
+the dispute over whether US prices are actually 'rapidly falling' as
+Trump claimed (12-18); and `gold_price` tagged once for the
+retrospective finding that gold rose 70% in 2025 while bitcoin fell
+6% (12-23). This is a meaningful diversification of node usage within
+a single batch — evidence that the graph does reach for
+non-geopolitical nodes whenever a genuinely market-relevant,
+non-geopolitical story arises, even in a batch this dominated by
+`geopolitical_tension`.
+
+**The Venezuela pressure campaign's escalation ladder, now spanning
+five consecutive batches (#66-#70) without resolution, added its
+most dramatic rungs yet**: an oil tanker seizure called 'an act of
+international piracy' by Caracas (12-11, novelty 0.7) → a full
+blockade order on all sanctioned tankers (12-17, novelty 0.65) → Trump's
+own chief of staff candidly admitting the real goal is toppling
+Maduro rather than drug interdiction (12-17) → a second,
+non-sanctioned vessel interception (12-20) → confirmation that
+Venezuela's oil exports had collapsed (12-13) → Russia and China
+explicitly pledging support for Venezuela (12-23, novelty 0.6) → a
+regional pattern of 'gunboat diplomacy on steroids' across Latin
+America (12-23). This is now unambiguously the single longest-running
+unresolved escalation ladder of the entire session.
+
+**The Ukraine peace process showed genuine, measurable convergence
+for the first time in three batches, a different texture from the
+reversal-heavy pattern of batches #68-#69**: Berlin talks resolved
+'90% of difficult issues' (12-16, novelty 0.6) → the EU's €90bn loan
+agreement resolved the financing crunch that had threatened Ukraine's
+drone production (12-19, novelty 0.7) → Ukraine accepted the
+demilitarised-zone principle in the war's final days (12-24, novelty
+0.6). This progress came alongside, not instead of, continued
+hardline signals (Putin calling European leaders 'little pigs',
+12-17) and a fresh assassination campaign inside Russia (a general
+killed by car bomb in Moscow, 12-22; a second Moscow car explosion,
+12-24) — genuine diplomatic progress and continued shadow warfare
+proceeding in parallel rather than one replacing the other.
+
+**The UK's monetary-fiscal arc reached its own terminal event this
+batch**: the Bank of England's December rate cut to 3.75% (12-18,
+novelty 0.75) — the year's fourth cut, following inflation data that
+made the move 'nailed on' the day before — closing out the
+`uk-2025-boe-rate-path` event_key's year-long arc in a mirror of the
+Fed's own December terminal cut reported in batch #69.
+
+**New fronts opened this batch**: US-Denmark tension over Greenland
+escalated from a Danish intelligence accusation of US economic
+coercion to a direct 'you cannot annex other countries' rebuke from
+Danish and Greenlandic leaders; a severe, unrelated terror attack hit
+Sydney's Jewish community at Bondi beach; Chile elected a
+Trump-inspired far-right president (Kast) continuing the Latin
+American hardline wave; Hong Kong's Jimmy Lai was convicted and faces
+life in prison; and a new $10bn+ US-Taiwan arms sale opened a fresh
+bilateral thread distinct from the ongoing Japan-China Taiwan row.
+
+**Node concentration easing for a second consecutive batch is a
+welcome trend, but the underlying structural case for a
+`trade_policy`/`alliance_cohesion` split is unchanged**: this batch's
+diversification into `oil_price`, `us_inflation`, and `gold_price`
+came from genuinely new one-off market stories rather than any
+reduction in the volume of military/alliance-flavored geopolitical
+news — the Venezuela, Ukraine, Greenland, and Taiwan threads alone
+still accounted for the overwhelming majority of tagged events. Seven
+consecutive batches at or above 65% concentration is now a
+substantial body of evidence that the split proposal should be
+treated as close to load-bearing for the graph's continued
+usefulness, not merely a nice-to-have refinement.
+
+### Batch #71 checkpoint (2025-12-25 to 2026-01-07)
+
+Ledger now at 1343 event_keys / 921 days. This batch: 14 days, 78
+events (5.57/day). Magnitude mean/median: 0.266/0.25, in line with
+recent batches. Novelty mean: 0.55 — the highest of the session so
+far — mix: 1 terminal (1.3%), 5 phase-change (6.4%), 60
+material-development (76.9%), 12 recap/color (15.4%), the lowest
+recap/color share of the session, reflecting a batch of unusually
+consequential, fast-moving news. Node concentration:
+`geopolitical_tension` 75.6% (59/78, essentially flat versus batch
+#70's 75.9%) — `chips` 5.1% (4/78), `europe_growth` 5.1% (4/78),
+`oil_supply` 3.8% (3/78), `gold_price` 2.6% (2/78), `fed_rate` 2.6%,
+`global_growth` 2.6%, `oil_price` 2.6%. Type mix: geopolitics 60
+(76.9%), markets 15 (19.2%), monetary_policy 2 (2.6%), macro 1
+(1.3%).
+
+**This batch contains the single most consequential terminal event of
+the entire session: the US capture of Venezuela's Maduro** (1-3,
+novelty 1.0), the actual resolution of an escalation ladder that had
+built continuously across six consecutive batches (#66-#71) — from
+early boat strikes, through tanker seizures, a full blockade, and
+Trump's own chief of staff candidly admitting the true goal was
+regime change, to this final capture. This is the clearest example
+this session of the terminal-resolution convention working exactly
+as designed: a genuinely concluding event earning the maximum
+appropriate novelty score after a long, faithfully-tracked buildup.
+The aftermath immediately spawned new fronts rather than resolving
+cleanly, however: Trump explicitly threatened Colombia next (echoing
+his 'Colombia will be next' comment from weeks earlier), the Danish
+PM said Trump was 'serious' about Greenland with the White House
+saying military force was 'always an option', and Venezuela's own
+'turning over' $2bn in oil to the US raised a fresh geopolitical-economic
+thread that could reduce Venezuelan crude reaching China.
+
+**The Thailand-Cambodia ceasefire achieved a genuine terminal
+resolution this batch** (12-27, novelty 0.7), agreeing an 'immediate'
+ceasefire that held for the remainder of the batch — the successful
+conclusion of a three-batch cycle (#67 first collapse, #68-#70
+repeated collapse/patch-up iterations) that had repeatedly tested
+the novelty-convention's handling of Trump-brokered ceasefires whose
+durability proved as fragile as Gaza's earlier in the session.
+
+**The China-Taiwan tension wave escalated sharply into its most
+serious phase yet**: live-fire drills simulating a port blockade
+(12-29, novelty 0.65) were followed by Xi's New Year's Eve vow that
+reunification is 'unstoppable' (12-31, novelty 0.6) and China's
+sanctions on US defense firms over the Taiwan arms sale (12-26,
+novelty 0.6) — a genuine military-posture escalation beyond the
+coast-guard and radar-lock incidents that characterized the thread
+in earlier batches.
+
+**Three market-relevant, non-geopolitical nodes received multiple
+uses in a single batch for the first time this session**: `oil_price`
+and `oil_supply` were each tagged multiple times (Venezuela's export
+collapse, the oil blockade's market reaction, oil's steepest annual
+fall since Covid, the $2bn Venezuela-US oil transfer) and `gold_price`
+was tagged twice (the gold-vs-crypto 2025 retrospective and the
+year-end precious-metals rally). Combined with batch #70's first-ever
+uses of these same nodes, this is now a two-batch pattern rather than
+a one-off — suggestive evidence that the graph's non-geopolitical
+nodes are being reached for reliably whenever genuinely relevant
+stories arise, even during a batch this dominated by a single
+mega-story.
+
+**A wholly new domestic-political thread emerged with no clean node
+home**: Iran's economic-crisis protests (the 'biggest since 2022')
+escalated to the point of Trump threatening to 'rescue' protesters
+and Iran's military going on standby, a serious new escalation risk
+tagged only to `geopolitical_tension` for lack of any node capturing
+domestic political unrest specifically — reinforcing the standing
+`political_stability` gap proposal with a concrete, high-stakes
+example distinct from the trade-war and alliance-tension stories that
+motivate the other proposed splits.
+
+### Batch #72 checkpoint (2026-01-08 to 2026-01-21)
+
+Ledger now at 1347 event_keys / 936 days. This batch: 14 days, 91
+events (6.5/day) — a **new session-high events/day rate**, surpassing
+even batch #71's dense 5.57/day, driven by an unusual pile-up of
+simultaneous fast-moving crises. Magnitude mean/median: 0.271/0.3 —
+the highest median of the entire session. Novelty mean: 0.555, mix: 0
+terminal, 4 phase-change (4.4%), 83 material-development (91.2%), 4
+recap/color (4.4%) — the **lowest recap/color share of the session**,
+meaning almost every single event this batch captured a genuine
+incremental development in an active thread rather than either a
+brand-new story or a trivial rehash. Node concentration:
+`geopolitical_tension` 69.2% (63/91) — easing for a third consecutive
+batch, down from 75.6% (batch #71), 75.9% (batch #70), and the 79.3%
+peak in batch #69 — `fed_rate` 7.7% (7/91, a new session-high share
+for this node), `europe_growth` 4.4%, `oil_supply` 3.3%, `dollar`
+3.3% (the first multi-event use of this node in a single batch this
+session), `oil_price` 2.2%, `us_inflation` 2.2%, `chips` 2.2%,
+`gold_price` 2.2%, `global_growth` 2.2%, `china_growth` 1.1%. Type
+mix: geopolitics 63 (69.2%), markets 13 (14.3%), monetary_policy 8
+(8.8%), macro 7 (7.7%).
+
+**Two entirely new mega-threads erupted and escalated dramatically
+within this single batch**: the Greenland/Denmark crisis went from
+simmering tension to Trump explicitly threatening 25% tariffs against
+eight Nato allies (1-17, novelty 0.75), the EU parliament blocking a
+US trade deal and weighing a 'nuclear deterrent' of retaliatory
+sanctions (1-21, novelty 0.65), before Trump partially walked back the
+threat of force at Davos (1-21, novelty 0.7) — a full escalation-to-
+partial-resolution arc in five days. In parallel, Iran's protest
+crackdown escalated to the brink of direct US military intervention:
+US and UK forces withdrew personnel from the Middle East and Iran
+closed its airspace (1-14, novelty 0.7), Iran warned that any attack
+on Khamenei would be a declaration of war (1-18, novelty 0.6), before
+Trump pulled back from strike threats following Gulf-state and
+Turkish lobbying (1-15, novelty 0.65) — though the underlying protest
+death toll (2,637+ reported by 1-16) remained the batch's grimmest
+statistic.
+
+**The Fed-independence fight reached its most serious stage of the
+entire session**: the DoJ opened an actual criminal investigation
+into Powell (1-12, novelty 0.75), thirteen former Fed chairs and
+twelve sitting global central bank governors issued unprecedented
+solidarity statements defending Powell within 24 hours of each other
+(1-12/1-13, novelty 0.6-0.65), the dollar visibly weakened as a
+market consequence, and the US supreme court heard oral arguments on
+Trump's separate bid to fire Fed governor Lisa Cook, with justices
+across the ideological spectrum appearing skeptical (1-21, novelty
+0.55) — a notable judicial check signal. This is the first batch
+where `fed_rate` reached a session-high share and the first time
+`dollar` was tagged in multiple events within one batch, directly
+evidencing the market-credibility consequences of the institutional
+fight rather than just the political drama around it.
+
+**Node concentration's third consecutive batch of easing continues to
+be substantially explained by market-relevant nodes absorbing real
+volume rather than any underlying reduction in geopolitical-flavored
+news** — the Fed fight and Greenland-tariff market reactions drove
+`fed_rate`, `dollar`, `oil_price`, and `gold_price` all into
+multi-event territory this batch, exactly the pattern first observed
+in batches #70-#71. This does not resolve the case for a
+`trade_policy`/`alliance_cohesion` split, however: both the Greenland
+and Iran mega-threads are unambiguously alliance/military-tension
+flavored rather than trade-specific, reinforcing that a second,
+non-trade split remains necessary alongside `trade_policy` to
+meaningfully relieve `geopolitical_tension`'s dominance.
+
+**Parallelization milestone**: starting with this batch, the
+digestion workflow was split across multiple concurrent background
+agents to accelerate coverage of the remaining archive. Three agents
+began work in parallel on 2026-01-22 through 2026-07-28 (the end of
+the archive) while this manually-tracked thread completed batch #72,
+later reshaped to 9 concurrent agents as work progressed (lagging
+agents' remaining ranges were split further, with the orchestrator
+narrowing scope mid-flight via message rather than restarting agents,
+to preserve in-progress work). Batches #73-#88 below are their merged
+contributions, covering 2026-01-22 through 2026-07-18 continuously
+except for two gaps — 2026-05-18 to 2026-05-25 and 2026-07-19 to
+2026-07-28 (the true end of the archive) — still in progress at
+merge time and to be inserted as #89+ once complete.
+
+**Process-lesson / corpus-wide correction (found and fixed at merge
+time)**: this multi-agent phase surfaced a systemic node-id error that
+had been silently propagating since the very start of manual
+digestion — the batch #72 text above (and the entire solo-digestion
+corpus back to 2024-10-23) used `dollar` and `chips` as if they were
+standalone node ids. They are not: `engine/ai_investing/brain/seed.py`
+only lists them as *aliases* on `usd_strength` (label "US dollar")
+and `semis` (label "Semiconductors") respectively — the real ids that
+should have been used all along. This had never been caught because
+each new digestion batch (including agent handoffs) inherited the
+prior batch's assumed-valid node list from context rather than
+re-grepping seed.py directly. It was finally caught when one
+background agent (covering 2026-02-27 to 2026-03-18) independently
+re-verified node ids against source instead of trusting the inherited
+list, and reported the mismatch back. A corpus-wide scan then found
+**34 events (33 files, 2024-10-23 to 2026-02-20) tagged `dollar`** and
+**67 events (59 files, 2025-02-14 to 2026-07-17) tagged `chips`** —
+all mechanically corrected in place (`dollar`→`usd_strength`,
+`chips`→`semis`) with zero dedup collisions, and the full 1105-file
+corpus re-validated as parseable JSON afterward with zero remaining
+occurrences of either invalid id. Separately, the inherited
+"confirmed non-existent" node list carried by every agent was itself
+wrong on one entry: `defense_spending` **does** exist (id
+`"defense_spending"`, type `factor`) — multiple agents independently
+re-discovered this via direct grep and it is now confirmed usable.
+**Lesson for future digestion work**: never trust a memory-carried
+"valid/invalid node id" list handed down across context compactions
+or agent handoffs without re-grepping `seed.py` directly at least once
+per session — inherited assumptions compound silently across a
+100+-day corpus before anyone notices.
+
+### Batch #73 checkpoint (2026-01-22 to 2026-02-04)
+
+14 days digested, 75 events (5.4/day). Magnitude mean 0.284, median
+0.30 — comfortably in the 0.2-0.4 target band, no magnitude≥0.8
+outliers. Novelty mean 0.50. Type mix: geopolitics 43 (57%), markets
+18 (24%), monetary_policy 9 (12%), macro 5 (7%). Node concentration:
+`geopolitical_tension` 48.0% (36/75) — high but justified by several
+simultaneous live threads (Greenland, Iran, Ukraine, Cuba, Colombia,
+Niger, Syria-Kurdish, US-Korea/Canada tariffs) each needing 1-2
+events; `gold_price`/`us_gov_debt` tied at 6.7%, `europe_growth`/
+`china_growth`/`risk_appetite` at 4.0% each.
+
+Major threads: **us-denmark-2025-greenland-tension** resolved from
+full tariff-threat crisis to a fragile climbdown (1-22, Trump walks
+back the 25% tariff citing a vague "framework deal," novelty 0.8,
+triggering a "Taco Thursday" rally), though Greenlandic/Danish leaders
+immediately flagged sovereignty red lines the same day (novelty
+0.35) — a partial, not terminal, de-escalation. **us-2025-fed-
+independence-fight** hit its biggest milestone yet when Trump
+nominated Kevin Warsh as Fed chair (1-29, novelty 0.8), triggering a
+same-day metals meltdown that partially reversed by 2-2. US-Iran
+military posture escalated steadily: Trump's "armada" threat (1-24) →
+military drills materializing (1-27) → EU designating the IRGC a
+terrorist organization (1-29) → a shot-down Iranian drone near USS
+Abraham Lincoln (2-4) — alongside parallel diplomatic recovery
+(Turkey/Oman talks salvaged the same day as the drone incident).
+**ukraine-kursk-incursion-2024**: genuine trilateral Abu Dhabi talks
+began (1-22, "security agreement 100% ready" by 1-25, novelty 0.6)
+but a claimed Trump-brokered energy truce was violated within days
+(2-3). Late-batch de-escalation cluster: Trump-Petro Colombia detente
+(2-3, novelty 0.6), Syria-Kurdish permanent truce (1-30, novelty
+0.65), US government shutdown resolved via a $1.2tn funding bill
+(2-3, novelty 0.7) — none scored terminal/1.0 since none is
+structurally final.
+
+Self-corrections: split the 1-26 gold-surge/Canada-tariff story into
+two events (`gold_price` +0.7 vs `geopolitical_tension` +0.45) since a
+single polarity couldn't serve both physics; same treatment applied
+to the 2-3/2-4 AI-fears-selloff-vs-gold's-best-day-since-2008 story
+and the 1-29 Brent-crude-up/gold-tumbles story. New event_keys:
+`us-canada-2026-tariff-threat`, `us-korea-2026-tariff-threat`,
+`eu-india-2026-free-trade-agreement`, `niger-2026-niamey-airport-
+attack`, `syria-kurdish-2026-permanent-truce`, `us-russia-2026-new-
+start-expiry`, `novo-nordisk-2026-revenue-warning`, `uk-2026-ai-
+automation-job-losses`, `west-2025-critical-minerals-alliance`,
+`us-india-2026-tariff-russian-oil-deal`. Skipped per standing
+convention (zero prior ICE-related keys exist): the large volume of
+Minneapolis ICE-shooting/immigration-crackdown coverage — pure
+domestic-political/human-interest with no clean macro/market node.
+
+### Batch #74 checkpoint (2026-02-05 to 2026-02-18)
+
+14 days, 78 events (5.6/day). Magnitude mean 0.285, median 0.30 —
+stable. Novelty mean 0.52. Type mix: geopolitics 45 (58%), markets 21
+(27%), macro 7 (9%), monetary_policy 5 (6%). Node concentration:
+`geopolitical_tension` still dominant at 48.7% (38/78), but
+`ai_capex_cycle` newly emerged as #2 at 14.1% (11/78) — the AI-bubble-
+risk/AI-disruption debate went from a minor side-thread to a major
+recurring one (Bitcoin crash, Nvidia-OpenAI deal collapse,
+Amazon/Alphabet earnings divergence, AI-fear selloffs spreading
+sector by sector: data companies → wealth managers → property
+services → trucking/logistics, then Anthropic's $30bn raise as a
+counter-signal). `europe_growth` rose to 11.5% (9/78) on UK macro
+data (weak GDP, unemployment to 5.2%, inflation to 3%, BoE hold-then-
+cut signal) clustering alongside the Starmer/Mandelson/McSweeney
+governance crisis.
+
+Major threads: **us-2025-ai-bubble-risk**/**us-2025-ai-capex-boom**
+became the central market narrative — Bitcoin's crypto-crunch (2-5,
+novelty 0.7) and the Nvidia-OpenAI ~$100bn deal collapse (2-5, novelty
+0.65) hit the same week Alphabet posted blowout AI-capex earnings and
+the Dow hit 50,000 (2-6, novelty 0.7); genuinely two-sided, with
+Anthropic's $30bn raise at a $380bn valuation (2-13, novelty 0.65) and
+hyperscalers' disclosed $600bn 2026 AI spend (2-10) running alongside
+the disruption fear. **iran-2025-economic-protests**: a second
+aircraft carrier deployed (2-13, novelty 0.6) → Trump saying regime
+change "would be the best thing" (2-14, novelty 0.65) — yet punctuated
+by real movement (Oman-mediated "guiding principles" agreement, 2-17,
+novelty 0.55). **navalny-death-2024** reached genuine terminal
+resolution (2-14, novelty 0.85) when UK+4 European intelligence
+agencies concluded Russia killed Navalny via frog-toxin poisoning —
+the first true 1.0-adjacent conclusion this stretch. **eu-2026-
+strategic-autonomy-push** emerged as a new cross-cutting thread from
+the Munich Security Conference (2-12 to 2-16): Pentagon urging Europe
+to boost combat capability, Draghi's "world order is dead" warning,
+Germany pressuring France on defense spending.
+
+Self-corrections: none required a hard polarity split this batch —
+the AI-fear-selloff and AI-capex-boom stories were naturally already
+separate headlines. New event_keys: `us-2026-labor-market-
+softening`, `us-2026-dow-50000-milestone`, `ev-2026-demand-shortfall`,
+`bp-2026-turnaround-pressure`, `bithumb-2026-bitcoin-mistake`,
+`china-2026-jimmy-lai-sentencing`, `us-2026-epa-endangerment-finding-
+repeal`, `uk-2026-mandelson-starmer-crisis`, `japan-2026-takaichi-
+election-landslide`, `schroders-2026-nuveen-takeover`, `us-2026-ai-
+military-integration` (Claude used in a Venezuela raid), `us-2026-
+metal-tariffs-rollback`, `rio-glencore-2026-merger-collapse`.
+Continued to skip the enormous Epstein-files/Mandelson-scandal/ICE-
+crackdown domestic coverage — largest headline-volume story of the
+fortnight but no clean market node beyond the UK gilt blip already
+captured.
+
+### Batch #75 checkpoint (2026-02-19 to 2026-02-26, final partial — scope narrowed mid-task)
+
+8 days, 49 events (6.1/day — the densest rate of this agent's three
+batches: SCOTUS tariff ruling, State of the Union, Munich-aftermath,
+and an intensifying Iran standoff all landed in the same week).
+Magnitude mean 0.303, median 0.30. Novelty mean 0.52. Type mix:
+geopolitics 25 (51%), markets 20 (41%, notably higher than prior
+batches — SCOTUS fallout plus a cluster of company earnings/M&A
+stories), macro 3 (6%), monetary_policy 1 (2%). Node concentration:
+`geopolitical_tension` 46.9% (23/49), `ai_capex_cycle` 12.2% (6/49),
+`europe_growth` 10.2% (5/49).
+
+Major threads: **us-2025-scotus-tariff-case** delivered the batch's
+biggest event — SCOTUS ruled 6-3 Trump's IEEPA-based global tariffs
+illegal (2-20, novelty 0.85, a genuine judicial resolution of a
+year-long overhang) — but the resolution proved partial: Trump
+immediately re-imposed tariffs via different authority (10%, then
+threatened 15%, novelty 0.6/0.5), businesses filed refund suits
+(FedEx, 2-24); correctly NOT scored at 1.0 despite landmark status
+since the practical regime continued essentially unchanged days
+later. **iran-2025-economic-protests** continued militarizing: Rubio
+briefing the "gang of eight" as the US deployed its largest Middle
+East force since 2003 (2-25, novelty 0.6), oil hitting seven-month
+highs pre-talks (2-24), Geneva talks ending without a deal but with
+Oman citing "significant progress" (2-26, novelty 0.5). **us-2025-ai-
+capex-boom**/**ai-bubble-risk** produced the most volatile single-day
+swings yet: an "AI doomsday" Substack report moving Uber/Mastercard/
+Amex shares (2-24, novelty 0.55) the same day Meta committed $60bn to
+AMD, followed by Nvidia's earnings beat "immune to AI bubble fears"
+(2-25) and Anthropic publicly refusing to let the Pentagon strip
+Claude's safety checks (2-26, novelty 0.6, new sub-thread `us-2026-
+ai-military-integration`). Cuba escalation reached its first lethal
+incident: Cuba reported killing armed exiles attacking from a
+US-registered speedboat (2-26, novelty 0.6). South Korea's Yoon Suk
+Yeol martial-law crisis reached terminal resolution (2-19, life
+sentence, novelty 0.75).
+
+Self-corrections: split the 2-20 SCOTUS-ruling market reaction into
+three events (`geopolitical_tension` for the ruling, `risk_appetite`
+for the stock rally, `dollar`→now `usd_strength` for the currency
+dip) since one polarity couldn't serve three distinct physics
+directions; simplified the 2-23 tariff-related reaction to a
+`gold_price`-only event to avoid over-fragmenting. New event_keys:
+`south-korea-2024-martial-law-crisis`, `mexico-2026-el-mencho-
+killing`, `germany-2026-china-trade-shift`, `aston-martin-2026-
+profit-warning`, `uk-2026-ai-datacenter-power-demand` (first use of
+`power_demand` in this run), `engie-2026-uk-power-networks-
+acquisition`, `diageo-2026-dividend-cut`, `germany-2026-renewables-
+rollback`, `rolls-royce-2026-record-profits`.
+
+**Agent 1 final status**: 36 days (2026-01-22 to 2026-02-26), 202
+events, all 36 files validated as well-formed JSON. Scope narrowed
+mid-task from the original 2026-01-22–2026-03-24 assignment so a
+separate agent could take 2026-02-27 onward in parallel.
+
+### Batch #76 checkpoint (2026-02-27 to 2026-03-12)
+
+80 events across 14 days (~5.7/day). Magnitude mean 0.443, median
+0.40. Novelty mean 0.606, median 0.60. Type mix: geopolitics 33,
+markets 33, macro 11, monetary_policy 3. Node concentration is
+extreme — `geopolitical_tension` alone carries 37.0% (30/81),
+`oil_supply` 9.9%, `oil_price` 8.6%, `natural_gas` 6.2%,
+`us_tech_regulation` 4.9%, `bond_stress` 4.9%, `europe_equities`
+3.7% — an accurate reflection of the news cycle: one mega-event
+dominated the entire fortnight.
+
+**A brand-new war broke out and dominates this and the following ~4
+months of batches**: `iran-israel-2026-war` (23 events this batch
+alone) opened 2-28 when the US and Israel launched coordinated
+strikes on Iran, killing Supreme Leader Ali Khamenei in a daylight
+assault — novelty 1.0 on day one, emerging with no warning from the
+prior `iran-2025-economic-protests` standoff thread. It escalated
+relentlessly: spread to Lebanon (reactivating `israel-lebanon-2025-
+hezbollah-tension`, novelty 0.85, 3-2), then to the Indian Ocean (US
+submarine sinks an Iranian warship off Sri Lanka, 3-4), Iran confirmed
+a hardline successor — Khamenei's son Mojtaba, IRGC-linked, Trump
+calling him "unacceptable" (3-9, novelty 0.65) — closing off any
+near-term negotiated exit; by 3-10 the US was reportedly weighing
+ground troops to secure Iran's nuclear stockpile (novelty 0.75), and
+by 3-11 US forces were destroying Iranian mine-laying vessels
+directly in the Strait of Hormuz. Not concluded within this batch —
+remains fully active at the 3-12 cutoff.
+
+Spin-off market threads, all new event_keys, all still active:
+`iran-israel-2026-oil-shock` (14 events — risk-premium 3-1, confirmed
+80% Hormuz-shipping collapse 3-3, breaching $100 on 3-9, whipsawing to
+$85-100 on contradictory Trump claims, IEA's largest-ever emergency
+release of 400m barrels 3-11 novelty 0.75, still called the "largest
+supply disruption in oil-market history" by 3-12); `iran-israel-2026-
+gas-shock` (5 events, LNG/Hormuz-driven European gas squeeze);
+`iran-israel-2026-bond-stress` and `iran-israel-2026-growth-hit` (UK
+mortgage-rate transmission — average UK mortgage rate topped 5% on
+3-11, "biggest upheaval since the 2022 mini-budget"); `iran-israel-
+2026-food-price-shock` (opened 3-5, Hormuz fertiliser-shipping
+disruption threatening food prices); `iran-israel-2026-gulf-
+datacenter-risk` (opened 3-7 after Iran drone-struck commercial
+datacentres in the UAE/Bahrain — a genuinely novel node-graph angle,
+`ai_datacenter` tagged to a kinetic-war event).
+
+Self-corrections/node-id note: **this is the batch where the dollar/
+chips alias discovery originated** — direct grep of seed.py showed
+`dollar` and `chips` are not standalone ids (correct: `usd_strength`,
+`semis`/`china_tech`/`asml`), and that `defense_spending` *does*
+exist despite being listed as non-existent in the handoff brief (used
+for France's nuclear-arsenal-expansion story and the Pentagon's
+$11.3bn Iran-war-cost disclosure). Also split the 3-1 Russia-windfall
+and India-Russia-oil-waiver stories into war-specific event_keys
+(`iran-israel-2026-russia-oil-windfall`, reused `us-india-2026-
+tariff-russian-oil-deal`) rather than forcing them onto the pre-
+existing Ukraine thread, since the causal driver was the Iran war's
+price spike. Secondary threads: `us-2026-ai-defense-ethics-dispute`
+(4 events — Trump's ban on Anthropic's Claude for federal/Pentagon
+use escalating through OpenAI amending its own Pentagon deal,
+Anthropic suing the DoD, Microsoft's amicus brief backing Anthropic
+by 3-12); `china-2026-two-sessions` (Beijing's lowest-ever GDP growth
+target, 4.5-5%); `vw-2026-restructuring-iran-tariff-hit` (50,000 VW
+job cuts, Porsche EV-strategy reversal).
+
+### Batch #77 checkpoint (2026-03-13 to 2026-03-18, final partial — scope narrowed mid-batch)
+
+36 events across 6 days (6.0/day — the highest daily density of this
+agent's assignment). Magnitude mean 0.472, median 0.45. Novelty mean
+0.599, median 0.60. Type mix: geopolitics 18, markets 15, macro 2,
+monetary_policy 1. `geopolitical_tension` now 48.6% (18/37),
+`oil_supply` 13.5%, `natural_gas` 8.1%, `energy_sector` 5.4%,
+`oil_price` 5.4%.
+
+War escalated on every axis: Iran's national-security chief Ali
+Larijani killed by Israel (3-17, novelty 0.7 — some analysts called it
+a bigger loss than Khamenei's own death), followed within 24 hours by
+intelligence minister Esmail Khatib (3-18, novelty 0.65) — a rapid
+two-strike decapitation of Tehran's remaining senior leadership.
+Israel struck Iran's Kharg Island oil-export hub (~90% of Iran's
+crude exports, 3-14, novelty 0.85) then the South Pars gasfield — the
+world's largest — on 3-18 (novelty 0.8), extending the campaign from
+oil into gas directly. European governments formally rejected Trump's
+call to send warships to the Strait of Hormuz (3-16, novelty 0.7),
+and by 3-17 Trump publicly declared the US "does not need Nato"
+(novelty 0.65) — the sharpest alliance-cohesion rhetoric of the war
+to date. Market characterizations escalated from "largest supply
+disruption in history" to outright "panic mode" by 3-18 (tagged
+`risk_appetite`, novelty 0.65) even as oil-major equities hit all-time
+highs (3-15) and a Democratic windfall-tax push against big oil
+emerged (`us-2026-oil-windfall-tax-push`, new key, 3-17). Policy
+responses accumulated fast: the US reopened a long-closed California
+pipeline (3-17, new key `us-2026-california-pipeline-reopening`,
+novelty 0.7) and waived a shipping law for oil/gas cargoes (3-18); the
+IEA flagged considering releasing more reserves beyond its 400m-barrel
+release.
+
+Self-corrections: split the 3-18 Israel-strikes-South-Pars-and-kills-
+minister headline into two events (`natural_gas`/gas-shock vs
+`geopolitical_tension`/war) since gas-market physics and personnel-
+assassination tension are distinct causal channels. Continued strict
+adherence to the verified 173-node ground truth (cross-checked
+against a shared `valid_nodes.txt` a parallel agent had staged) — no
+invented/non-existent nodes used. Secondary threads:
+`israel-lebanon-2025-hezbollah-tension` (Israel's ground push into
+southern Lebanon meeting "stiff Hezbollah resistance," 3-18, novelty
+0.6); `us-cuba-2026-pressure` resurfaced (3-17, novelty 0.75) as a
+national power blackout in Cuba coincided with Trump predicting the
+"honour of taking Cuba"; new `us-china-2026-summit-delay-hormuz` key
+(3-16) after Trump asked Xi to delay a planned Beijing summit because
+of the war.
+
+**Agent 4 final status**: 20 days (2026-02-27 to 2026-03-18), 116
+events. Scope narrowed mid-session from the original 2026-02-27–
+2026-03-24 assignment; at handoff, the war and its ~10 derived
+event_keys remained fully active with no resolution in sight.
+
+### Batch #78 checkpoint (2026-03-19 to 2026-03-24)
+
+32 events across 6 days (mean 5.3/day, range 4-7). Magnitude mean
+0.453, median 0.45. Novelty mean 0.661, median 0.65 — the highest
+novelty mean of any batch in this stretch. Type mix: markets 16
+(50%), geopolitics 8 (25%), monetary_policy 4 (12.5%), macro 4
+(12.5%) — no Fed FOMC event this window, only BoE and a bank-capital-
+rules item. Node concentration: `geopolitical_tension` 25% (8/32),
+`oil_supply`/`europe_growth` tied at 12.5% each, `oil_price`/
+`ai_capex_cycle` at 3 each — no node exceeds 25%, healthy given peak-
+intensity war coverage.
+
+Deep inside the war: Iran struck Qatar's Ras Laffan gasfield in
+retaliation for Israel hitting South Pars (3-19), Trump threatening to
+"blow up" all of South Pars if Qatar is hit again — the war's first
+direct fossil-fuel-infrastructure-attack escalation (novelty 0.85). By
+3-21 Iran fired missiles toward the joint US-UK Diego Garcia base
+(novelty 0.85, first strike on a UK-linked asset); by 3-22 Trump gave
+a 48-hour ultimatum for Iran to reopen Hormuz or have its power plants
+"obliterated" (novelty 0.85), met by Iran's own threat to destroy
+Middle East water/energy facilities — a mutual-critical-infrastructure
+threat not seen before in this thread; the same day saw ~200 injured
+near Israel's Dimona/Arad nuclear facility with Iron Dome failing to
+intercept. On 3-23 the mood swung sharply — Trump postponed the
+power-plant strikes and extended the deadline citing "very good and
+productive" talks, oil fell, the Dow had its best day since early
+February — though Iran's own negotiators denied any contact occurred
+and Polymarket flagged suspiciously well-timed ceasefire bets, so this
+event carries elevated manipulation_likelihood (0.35) rather than
+being treated as a clean resolution. On 3-24 Japan responded with its
+biggest-ever national oil-reserve release (80m barrels, ~45 days of
+demand) — the largest single supply-side government intervention of
+the war to date — while Israel simultaneously said it would seize
+southern Lebanon as a "defensive buffer."
+
+Monetary/fiscal fallout in parallel: BoE held at 3.75% (3-19) but
+signalled a hike within months on the war's inflation shock (new
+`uk-2026-boe-rate-path`); UK gilt/borrowing costs hit their highest
+since 2008 (3-20, £14.3bn February deficit surprise, three BoE hikes
+priced in); UK manufacturing PMI cost inflation hit its sharpest rise
+since Black Wednesday 1992 by 3-24. US regulators moved to loosen bank
+capital requirements for Goldman/JPMorgan (~4.8% cut, 3-19) — a
+deregulatory move running counter to the war-driven risk backdrop. New
+event_keys (all grep-verified non-colliding): `uk-2026-boe-rate-path`,
+`us-2026-fed-bank-capital-easing`, `eu-2026-ukraine-loan-hungary-veto`
+(Orbán blocking the EU's 90bn Ukraine loan), `uk-2026-steel-tariff-
+hike`, `us-2026-ai-oil-price-risk` (WTO warning oil prices could crimp
+the AI capex boom — first direct oil-shock-to-AI-capex link),
+`us-2026-dhs-shutdown-standoff`, `us-2026-ev-demand-gas-price-surge`,
+`us-2026-crypto-regulation-trump-family-benefit` (narrowed securities
+definitions flagged as benefiting the Trump family's crypto ventures,
+manipulation_likelihood 0.35), `us-2026-wind-project-buyout-oil-
+pivot`, `us-2026-ai-wealth-divide-warning`, `us-2026-meta-child-
+safety-verdict`, `openai-2026-sora-shutdown`.
+
+Node-existence note: independently re-confirmed via live grep that
+`defense_spending` exists and `dollar` is only an alias of
+`usd_strength` — avoided `defense_spending` per the (then-current)
+handoff instruction regardless, tagging `geopolitical_tension` for
+Iran-war-cost items instead; a valid substitution, not an error.
+
+### Batch #79 checkpoint (2026-03-25 to 2026-04-07)
+
+67 events across 14 days. Magnitude mean 0.44, median 0.40. Novelty
+mean 0.56, median 0.55. Type mix: geopolitics 37 (55%), markets 22
+(33%), macro 6 (9%), monetary_policy 2 (3%). Node concentration:
+`geopolitical_tension` 54% (36/67), `oil_price` 10%, `oil_supply` 6%,
+`ai_capex_cycle` 4.5%.
+
+Picking up this range, the news had moved dramatically since the
+prior confirmed state: the war escalated into a full US-Israel-Iran
+shooting war with Hormuz blockade and troop deployments, with a
+peace-plan-hope/rejection cycle repeating almost daily. Since the
+existing `iran-israel-2025-*` keys in the corpus dated to a *June
+2025* flare-up (six files, confirmed via grep), this was judged a
+materially new 2026 war and fresh keys were minted: `iran-israel-
+2026-war`, `iran-israel-2026-oil-shock`, `iran-israel-2026-growth-
+hit`, `iran-israel-2026-gold-safe-haven`, `iran-israel-2026-em-risk`,
+`iran-israel-2026-food-price-shock`, `iran-2026-cyberattack-warning`.
+Key beats: war already underway 3-25 (novelty 0.7, troop buildup vs.
+peace-plan rhetoric mismatch); oil's record monthly gain 3-29 (Brent
++51% since March start, novelty 0.7) alongside a rare gold *decline*
+the same day (novelty 0.65, flagged as counterintuitive — war didn't
+trigger classic safe-haven gold buying); UAE/Kuwaiti-tanker strikes
+widening the war regionally (3-28/3-31); a whiplash 15%-then-8% oil
+crash-then-spike across 4-1/4-2 on dueling Trump ceasefire-timeline
+claims — the clearest evidence the market is trading presidential
+rhetoric, not verified facts; first US aircraft losses (F-15E shot
+down, novelty 0.7, 4-3, crew rescued 4-5); rhetoric peak 4-7 with
+Trump's "a whole civilisation will die" threat (novelty 0.65, elevated
+manipulation_likelihood 0.3) alongside IEA calling the oil/gas crisis
+"worse than 1973, 1979 and 2022 together."
+
+Self-corrections: split the 3-29 oil-surge-vs-gold-fall headline into
+two events (`oil_price` +0.8, `gold_price` -0.55) per the mandatory
+polarity-conflict check. Distinct non-war threads kept separate:
+`us-2026-nato-withdrawal-threat` (Trump floating NATO exit, 4-1/4-2),
+`us-2026-private-credit-stress` (Blue Owl Capital gating redemptions,
+4-2 — a genuinely separate emerging risk, not Iran-war-linked). No
+`aluminium_price` node exists, so a 3-30 aluminium-price-spike detail
+(Iranian strikes on ME smelters) was dropped rather than force-tagged
+— logged as a gap, not fixed.
+
+### Batch #80 checkpoint (2026-04-08 to 2026-04-21)
+
+61 events across 14 days. Magnitude mean 0.44, median 0.40. Novelty
+mean 0.55, median 0.55. Type mix: geopolitics 29 (48%), markets 20
+(33%), macro 8 (13%), monetary_policy 4 (7%). Node concentration:
+`geopolitical_tension` 44% (27/61), `oil_supply` 16%, `oil_price` 10%,
+`fed_rate` 5%.
+
+Essentially one long ceasefire-whiplash oscillation: 40-day war →
+provisional two-week ceasefire (4-8, novelty 0.85, oil -15% in the
+single largest daily move of the whole thread) → immediately
+threatened same-day by Israel's Lebanon assault → daily reversals
+(Islamabad talks collapse 4-12 novelty 0.7, US blockade begins
+4-13/4-14, Hormuz "completely open" 4-17 novelty 0.75, re-closed by
+Iran 4-19 novelty 0.65 after IRGC fired on a tanker, US Navy fires on
+and seizes an Iranian ship 4-20, ceasefire extended indefinitely again
+4-21). Novelty was deliberately kept in the 0.5-0.75 band throughout
+rather than spiking to 0.9+ on any single "ceasefire" announcement,
+since by day 3-4 the pattern was clearly repeated brinkmanship rather
+than genuine resolution — high novelty reserved for the 4-8
+provisional truce (first actual ceasefire) and the 4-17 Hormuz
+reopening (concrete supply-side resolution, though it too reversed
+within 48 hours). IMF warning language escalated in lockstep with the
+war — "permanent scarring" (4-9) → "could trigger global recession"
+(4-14) → "rising global debt levels" (4-15, diminishing marginal
+novelty as the IMF repeated itself during its Washington spring
+meetings). Wall Street hit a fresh S&P 7000 record on war-end optimism
+(4-15, novelty 0.6). The Fed-independence thread got a second wind
+with Trump naming Kevin Warsh as his pick to replace Powell (4-16,
+4-21 confirmation-hearing). Hungary's Orbán lost power to Péter Magyar
+(4-13, novelty 0.7, new `hungary-2026-election-orban-ousted`) — a
+genuinely distinct thread with real Ukraine-funding consequences (the
+€90bn EU loan Orbán had blocked started moving toward release, 4-17/
+4-21).
+
+Self-corrections: no same-event polarity splits needed, but several
+days required deliberately opposite-signed sibling events on the same
+date to capture same-day reversals honestly (4-8's ceasefire/oil-
+crash event paired with a separate Lebanon-escalation event; 4-16's
+Lebanon "quadruple tap" killings paired with the ceasefire-
+announcement that followed 39 minutes later) — a deliberate choice to
+preserve the whiplash signal rather than smoothing it into a
+misleadingly net-neutral score. New event_keys: `iran-israel-2026-
+em-risk`, `iran-2026-cyberattack-warning`, `us-2026-private-credit-
+stress`, `us-2026-nato-withdrawal-threat`, `hungary-2026-election-
+orban-ousted`, `us-2026-march-jobs-report`/`us-2026-march-cpi`
+(dated-data-point convention), `us-2026-central-bank-lehman-wargame`,
+`us-2026-defense-budget-hike`.
+
+### Batch #81 checkpoint (2026-04-22 to 2026-04-28, final partial — scope narrowed mid-task)
+
+31 events across 7 days. Magnitude mean 0.43, median 0.40. Novelty
+mean 0.54, median 0.55. Type mix: geopolitics 11 (35%), markets 10
+(32%), macro 7 (23%), monetary_policy 3 (10%). Node concentration:
+`geopolitical_tension` 29% (9/31), `oil_supply`/`europe_growth` tied
+at 13% each, `fed_rate`/`oil_price` at 10% each.
+
+Register shift: the war itself reached "deepening deadlock" (4-26, no
+headway, Trump cancelling the Pakistan envoy trip) while attention
+moved to compounding, increasingly precise economic-damage estimates
+— UK £35bn recession risk (4-28, novelty 0.55), a first-ever $1tn
+global aggregate cost estimate paired with a windfall-tax call (4-28,
+novelty 0.6), G7 central banks coordinating a hold-not-cut stance
+(4-27), US gas hitting a four-year high of $4.18/gallon (4-28). The
+most structurally significant single event: the **UAE's exit from
+OPEC** (4-28, novelty 0.7, new `opec-2026-uae-exit`) — the first time
+a major Gulf producer has left the cartel, a genuinely new supply-side
+structural break. Fed-independence thread had a rapid reversal pair:
+DoJ dropped its Powell probe (4-24) then Democrats demanded clarity on
+a threat to reopen it one day later (4-25) — treated as two events
+with opposite-signed polarity to preserve the whiplash. BoE deputy
+governor Sarah Breeden's explicit stock-market-correction warning
+tying together private-credit and AI-valuation risk (4-24, novelty
+0.65) was the most direct systemic-risk statement of the batch. New
+non-Iran threads: NATO/EU contingency planning accelerating toward
+actual mutual-defence-pact exploration (4-25) and a Somali piracy
+resurgence explicitly linked to naval assets diverted to the Middle
+East (4-28, new `somalia-2026-piracy-resurgence`) — a second-order
+security spillover worth flagging as a distinct, non-obvious
+consequence.
+
+Self-corrections: no same-event splits needed; continued pairing
+same-day opposite-polarity events rather than blending. Deliberately
+used lower novelty (0.4-0.45) on repeat "oil hits new high"/"consumer
+confidence falls again" stories to avoid novelty inflation on
+well-established trend continuations.
+
+**Agent 2 final status**: 36 days (2026-03-25 to 2026-04-28), 159
+events. Scope narrowed mid-task from the original 2026-03-25–
+2026-05-25 assignment; range 2026-04-29 onward reassigned to a
+separate agent.
+
+### Batch #82 checkpoint (2026-04-29 to 2026-05-12)
+
+68 events across 14 days. Magnitude mean 0.432, median 0.40. Novelty
+mean 0.58, median 0.60 — a fortnight of fast-moving, high-novelty
+escalation/de-escalation swings rather than slow-burn recap. Type
+mix: geopolitics 35, markets 19, macro 11, monetary_policy 3. Node
+concentration: `geopolitical_tension` 39.7% (27/68), `europe_growth`
+10.3%, `oil_price` 7.4%, `bond_stress` 5.9%.
+
+Renamed/continued as **us-iran-2026-hormuz-war** (also continuing
+`iran-israel-2026-war`/`iran-israel-2026-oil-shock`) — the dominant
+thread. Picked up mid-crisis (4-29, oil approaching $120, gas at
+$4.23), then a rapid whipsaw sequence: oil topped $126 (4-30), UAE's
+shock Opec exit (4-30, novelty 0.85 — see #81), Trump launched
+"Project Freedom" naval operation, threatened to "blow Iran off the
+face of the earth" (5-4, novelty 0.8), a US warship reportedly hit
+within hours, oil fell below $100 on genuine peace hopes (5-7, novelty
+0.8) — only for the "pause" to be revealed as a Saudi basing refusal,
+not diplomacy (5-7, manipulation_likelihood raised to 0.5), followed
+by a "love tap" skirmish (5-8), Centcom tanker strikes (5-9), Trump
+calling Iran's reply "totally unacceptable" (5-10/5-11) and declaring
+the ceasefire "on life support" as oil climbed back up (5-11). Highest
+self-correction rate of the batch — repeated same-week reversals in
+both oil-price direction and diplomatic framing. Spillover into
+Europe/UK (`iran-israel-2026-growth-hit`): Lloyds £151m hit, NatWest
+£140m, HSBC $700m combined charges, Toyota £3bn, UK construction costs
+sharpest rise in ~30 years, UK food prices tracking +50% since the
+cost-of-living crisis began — counterpointed by windfall profits at
+Shell and Saudi Aramco (`iran-war-2026-energy-majors-windfall`), a
+redistributive not uniformly negative shock. US-Nato rift
+(`us-2026-nato-withdrawal-threat`) escalated from rhetoric to action:
+the US actually withdrew 5,000 troops from Germany (5-1, novelty
+0.75), threatened Italy/Spain too, then walked back the parallel EU
+auto-tariff rip-up under a new July-4 deadline (5-8, `us-eu-2026-
+auto-tariff-escalation`) — spawning `europe-2026-defense-sovereignty-
+buildup` (5-10) as an explicit, source-quoted European response to US
+unreliability. UK Starmer leadership crisis/gilt market
+(`uk-2026-starmer-resignation`) emerged as genuinely market-moving:
+gilt yields hit the highest since 1998 (5-5) amid political
+uncertainty layered on war-inflation fears, fell back (5-8) when
+Starmer said he'd stay, round-tripped again — up on 5-11, a 28-year
+high on 5-12 with JPMorgan's Dimon threatening to scrap a £3bn London
+HQ, before easing as cabinet allies rallied and 100+ Labour MPs backed
+the PM. Fed leadership transition (`us-2025-fed-independence-fight`):
+Powell held rates steady and stayed on the board (4-29) while Kevin
+Warsh advanced through Senate confirmation, expected by 5-11.
+
+Node-tagging note: confirmed via direct seed.py grep that `dollar`/
+`chips` are only aliases (not standalone ids) and avoided both;
+confirmed `defense_spending`/`opec`/`ecb_policy` are valid current
+nodes (contradicting an earlier stale non-existence note for
+`defense_spending`).
+
+### Batch #83 checkpoint (2026-05-13 to 2026-05-17, final partial — scope narrowed mid-task)
+
+26 events across 5 days. Magnitude mean 0.396, median 0.40. Novelty
+mean 0.577, median 0.55. Type mix: geopolitics 15, markets 6, macro 4,
+monetary_policy 1. Node concentration: `geopolitical_tension` 38.5%
+(10/26, essentially unchanged), `europe_growth` 15.4%, `bond_stress`
+11.5% — the UK gilt-market thread grew from a minor node to a clear
+third pillar.
+
+UK Starmer crisis became the dominant new thread of the window,
+escalating in clean steps: 28-year gilt-yield high with Dimon's
+JPMorgan HQ threat (5-12, novelty 0.6), Wes Streeting's actual cabinet
+resignation reviving "Liz Truss moment" fears (5-14, novelty 0.7),
+then a new extreme — 10-year yields highest since 2008, the pound's
+worst week in 18 months — as Andy Burnham formally lined up a
+leadership bid (5-15, novelty 0.7), followed by Streeting formally
+confirming his own candidacy (5-16) — now the single most
+market-material domestic-political thread of the whole assignment,
+with three distinct yield-spike episodes in one week. Hormuz war kept
+oscillating: ceasefire "on life support" and oil climbing again
+(5-11), US CPI (3.8%, novelty 0.7) and PPI (4-year high) confirming
+the shock is now embedded in hard US inflation data (5-12/5-13), Xi's
+pledge to Trump not to arm Iran as a rare de-escalatory side-channel
+(5-14), Oman caught between US and Iran over a proposed Hormuz
+transit-fee/nationality-check regime (5-15) — a new quasi-regulatory
+tactic distinct from prior military threats; the UAE fast-tracked a
+second pipeline bypassing Hormuz entirely by 2027 (5-15, novelty
+0.65) — a structural hedge against the chokepoint itself. Fed
+leadership transition concluded: Kevin Warsh's Senate confirmation as
+Fed chair (5-13, novelty 0.85). Trump-Xi Beijing summit
+(`us-china-2026-trump-visit`) arrived 5-13, delivered a Taiwan
+warning from Xi and an Iran-arms pledge in the same meeting (5-14,
+correctly split into two events given opposite-signed
+geopolitical_tension implications), then concluded as a "stalemate
+summit" — heavy pageantry, no breakthroughs on Iran/Taiwan/AI (5-15,
+novelty 0.6). European defense-sovereignty buildout continued: Europe
+racing to build low-cost drones (5-10), JLR/GM eyeing a £900m UK
+military-truck contract (5-17) — automakers diversifying directly
+into defense manufacturing.
+
+Self-corrections: split the Xi-Trump summit into two same-day events
+with opposite polarity signs on the same node per the mandatory
+dual-tag check. Flagged manipulation_likelihood 0.5 on the 5-7
+"Project Freedom pause was actually a Saudi refusal" story as the
+clearest instance of walking back an official framing.
+
+**Agent 5 final status**: 19 days (2026-04-29 to 2026-05-17), 94
+events. Scope narrowed mid-task from the original 2026-04-29–
+2026-05-25 assignment; range 2026-05-18–2026-05-25 reassigned to a
+separate agent (still in progress at merge time — see gap note
+above).
+
+### Batch #84 checkpoint (2026-05-26 to 2026-06-08)
+
+60 events across 14 days. Magnitude mean 0.49, median 0.45. Novelty
+mean 0.56, median 0.55. Type mix: geopolitics 39 (65%), markets 11
+(18%), macro 8 (13%), monetary_policy 2 (3%). Node concentration:
+`geopolitical_tension` 61% (40 tags), `ai_capex_cycle` 7, `oil_price`
+6, `global_growth`/`agri_food` 2 each.
+
+**us-iran-2026-hormuz-war** dominant: opened 5-26 with direct US
+strikes on Iranian missile/mine-laying assets (novelty 0.75) and oil
+surging above $100; whipsawed through the batch — draft peace deal
+leaked (5-27, oil down), Iran suspends talks (6-1, oil to $97), Iran
+hits Kuwait airport (6-3, 1 dead, 63 hurt, novelty 0.65), spreads to
+Kuwait+Bahrain bases (6-6), fuses with the Lebanon front when Iran
+fires missiles directly at Israel (6-7, novelty 0.75 — first direct
+Iran-Israel exchange), then a real de-escalation step (6-8) when both
+sides pull back after Trump's personal intervention and Iran declares
+an "end of military operations" (oil falls, Wall St rallies, novelty
+0.65) — not terminal, Netanyahu explicitly warned of "forceful
+response to future attacks." First institutional check: the US House
+passed a war-powers resolution 215-208 (6-4, novelty 0.75, polarity
+-0.4). **israel-lebanon-2025-hezbollah-tension** ran parallel and
+increasingly entangled: Netanyahu vows to "crush" Hezbollah (5-26),
+deepest Israeli incursion into Lebanon in 26 years/castle seizure
+(5-31, novelty 0.75), Trump's announced ceasefire rejected by
+Hezbollah within a day as "roadmap to annihilate" Lebanese people
+(6-4, novelty 0.65) — a diplomatic "resolution" headline that had to
+be tagged as an escalation once read in full context. AI capex/bubble
+threads both active and deliberately kept distinct: capex-boom
+captured the positive-money-flow side (Anthropic $965bn valuation and
+IPO filing, Alphabet's $80bn AI share sale, OpenAI's $850bn IPO
+filing), bubble-risk captured the countervailing cracks (chip stocks
+dropping on "AI rally fatigue" 6-4, Kospi -8% and broad tech selloff
+6-8) — a genuine two-sided story, not a contradiction in tagging.
+**oecd-2026-iran-war-recession-warning** (new key, 6-3): OECD
+projecting global growth falling from 3.4% to 2.1% if the war
+persists into 2027 — the first hard multilateral quantification of
+the war's macro cost. Secondary: Armenia election (new
+`armenia-2026-election-russia-pressure`, opened 6-6, resolved
+pro-Europe 6-8, novelty 0.7); Ukraine war grinding on (Chornobyl
+spent-fuel drone strike 6-7, Romania NATO drone incident, Patriot
+shortage); Colombia's far-right first-round win.
+
+Self-corrections: consistently split `geopolitical_tension` from
+`oil_price`/`oil_supply` only when direction diverged (Japan naphtha
+shortage 6-4 tagged `oil_supply` alone since geopolitical_tension
+direction wasn't the point); combined the two several times (5-26,
+5-29, 6-1, 6-8) when direction matched. Verified `defense_spending`
+now exists (contradicts the prior "confirmed non-existent" list);
+confirmed all ten other "non-existent" nodes are still genuinely
+absent via direct grep.
+
+### Batch #85 checkpoint (2026-06-09 to 2026-06-22)
+
+58 events across 14 days. Magnitude mean 0.49, median 0.45. Novelty
+mean 0.56, median 0.55. Type mix: geopolitics 38 (66%), macro 9 (16%),
+markets 6 (10%), monetary_policy 5 (9%). Node concentration:
+`geopolitical_tension` 59% (38 tags), `oil_price`/`europe_growth` 6
+each, `ai_capex_cycle` 3.
+
+This batch covers the Hormuz war's **climax and formal resolution of
+its acute phase**: ECB hiked to 2.25% (6-11, novelty 0.75) and World
+Bank cut global growth forecasts (6-11) as the war's macro cost
+peaked; a second day of Bahrain/Kuwait/Jordan strikes (6-11), then the
+breakthrough — hardliner backlash confirmed a real deal had been
+struck (6-14, novelty 0.65), the framework declared "all signed" with
+oil at a 3-month low and markets at record highs (6-15, novelty
+0.85), Brent fell below $80 as tankers resumed (6-16), Trump formally
+signed the 14-point agreement at Versailles (6-18, novelty 0.8 —
+treated as the genuine conclusion of the acute-war/signing phase per
+the terminal-resolution convention, since it's a real signed document
+ending 110 days of active conflict, even though enforcement/Lebanon-
+linkage risk clearly persists). Post-signing the thread immediately
+showed fragility: talks abruptly cancelled amid Lebanon flareups
+(6-19, novelty 0.6), partial recovery (6-20), Iran threatening to
+close Hormuz again (6-21), then a further substantive implementation
+step — UN inspectors' return, oil-export sanctions lifted (6-22,
+novelty 0.7). Net: concluded-but-fragile, each subsequent update
+earning novelty on its own merits rather than decaying to flat color.
+`israel-lebanon-2025-hezbollah-tension` repeatedly threatened to
+derail the main deal: Netanyahu declared "victory" over Iran but
+explicitly refused Lebanon withdrawal (6-15); Iran's envoy tied full
+peace to that withdrawal (6-16); deadly flareups directly caused the
+6-19 cancellation and 6-20 renewal — the clearest example of two
+threads with genuinely different resolution states (Iran deal signed;
+Lebanon unresolved) needing separate event_keys. AI capex/bubble/
+trillion-dollar milestones: Musk becomes the first trillionaire as
+SpaceX's IPO closes at $2.1tn (6-12, novelty 0.85, new
+`spacex-2026-ipo-trillion-valuation`); Seattle's AI-datacenter
+moratorium (6-10); a rare Five Eyes joint statement warning AI models
+capable of "devastating attacks" are months away (6-22, new
+`five-eyes-2026-ai-security-warning`, tagged `us_tech_regulation`
+rather than `ai_capex_cycle` since the story is about security risk,
+not capex direction). Domestic political shocks: Colombia's far-right
+runoff win (6-22) and Keir Starmer's resignation as UK PM (6-22, new
+`uk-2026-starmer-resignation` terminal event, novelty 0.7) landed on
+the same extraordinarily dense day, alongside the Iran-deal
+implementation milestone and a major Ukraine drone swarm on Moscow —
+one of the highest-density days of the whole project (5 events, all
+independently justified). Bank of Japan hiked to a 31-year-high 1%
+(6-16, new `japan-2026-boj-rate-hike`, tagged `japan_debt` for lack of
+a dedicated BOJ-rate node) even as the Fed and BoE held — a genuine
+rate-divergence point worth flagging for future carry-trade features.
+
+Self-corrections: on 6-21/6-22, deliberately re-checked oil-node
+polarity before combining with `geopolitical_tension` — for the
+Hormuz-closure threat (6-21) both moved positive so combined as one
+event; for the UN-inspectors/sanctions-relief event (6-22) initially
+considered `oil_supply` (positive) alongside `geopolitical_tension`
+(negative) — caught the sign conflict and switched to `oil_price`
+(negative) instead so both nodes shared direction, avoiding a split —
+the clearest applied example of the mandatory dual-tag check catching
+a real conflict rather than a hypothetical one.
+
+### Batch #86 checkpoint (2026-06-23 to 2026-06-30, final partial — scope narrowed mid-task)
+
+38 events across 8 days. Magnitude mean 0.49, median 0.5. Novelty mean
+0.56, median 0.55. Type mix: geopolitics 23 (61%), markets 8 (21%),
+macro 6 (16%), monetary_policy 1 (3%). Node concentration:
+`geopolitical_tension` 60% (23 tags), `ai_capex_cycle` 4, `china_growth`
+3, `us_inflation` 2.
+
+The post-signing deal proved far more fragile than the 6-18 Versailles
+signing suggested: Congress cleared both chambers on war-powers
+resolutions (Senate 6-23) only for the Senate to reverse itself under
+Trump pressure two days later (6-25); Iran rejected a UN-backed plan
+to free Hormuz-trapped ships the same day oil fully round-tripped back
+to pre-war price levels (6-25, novelty 0.75 — the cleanest "close the
+loop" market data point of the whole arc); then real re-escalation —
+US struck Iran after a cargo-ship drone attack (6-26, novelty 0.65),
+Bahrain condemned Iranian tit-for-tat drones (6-27), Trump threatened
+to "annihilate" Iran (6-28, novelty 0.65 — the harshest rhetoric of
+the entire thread) before de-escalating again with a scheduled Doha
+talks announcement (6-29) and a slow-moving restart of the $6bn
+frozen-assets talks (6-30) — a signed deal that immediately entered a
+saw-tooth threat/strike/talk-resumption pattern rather than settling,
+treated novelty-by-novelty rather than assuming decay. A genuinely
+new, unrelated exogenous thread opened: **venezuela-2026-earthquake-
+disaster** (6-25) — twin 7.2/7.5 quakes (188 dead) escalated fast to
+920 dead (6-26), 1,400+ (6-28), 1,700 with aftershocks (6-29), a
+satellite-based revision to ~58,000 buildings destroyed (6-30, novelty
+0.5, a scale revision not a fresh event) — tagged to
+`geopolitical_tension` for lack of a better-fitting node; **flagged as
+a real node-graph gap: no disaster/humanitarian node exists**, and a
+Venezuela post-Maduro-capture instability story colliding with a
+historic natural disaster has no clean economic-factor home. AI
+capex/bubble two-sided story continued: SCOTUS ruled Trump's firing of
+Fed governor Lisa Cook unconstitutional (6-29, novelty 0.8 — a genuine
+terminal legal resolution of that sub-dispute, tagged `fed_rate`);
+chipmaker shares "tripled" in H1 2026 (6-29) directly alongside a
+"rocky week... no crash yet" pullback (6-30) — both threads kept
+distinct. EU-China trade friction escalated from review to action: EU
+set up 3 months of talks over a record €360bn deficit and imposed a
+concrete €3 customs charge on Temu/Shein imports (6-29) — the clearest
+policy follow-through yet on the `eu-china-2026-import-restriction-
+review` thread. New minor threads: `north-korea-2026-nuclear-
+expansion`, `china-2026-supercomputer-milestone`, `us-2026-eu-digital-
+tax-tariff-threat`, `us-2026-stablecoin-law-bank-pushback`,
+`china-2026-middle-east-war-winner`.
+
+Self-corrections: kept re-verifying oil-node sign before combining
+with `geopolitical_tension` — 6-25's "oil at pre-war levels" event
+tagged `oil_price` alone (not combined) since the day's political news
+moved in the opposite direction from the price data.
+
+**Agent 3 final status**: 36 days (2026-05-26 to 2026-06-30), 156
+events. Range 2026-07-01 onward reassigned to a separate agent per
+mid-task orchestrator instruction.
+
+### Batch #87 checkpoint (2026-07-01 to 2026-07-14)
+
+59 events across 14 days (~4.2/day). Magnitude mean 0.444, median
+0.40. Novelty mean 0.569, median 0.60 — skewed toward material/fresh
+developments given a genuinely fast-moving war narrative rather than
+recap-heavy news. Type mix: geopolitics 36, markets 15, macro 6,
+monetary_policy 2. Node concentration: `geopolitical_tension` 33.8%
+(25/74), `oil_price` 12.2%, `oil_supply` 8.1%. 29 distinct event_keys
+used; two threads account for nearly half of all events
+(`us-iran-2026-hormuz-war`: 16 events, `ukraine-kursk-incursion-2024`:
+12 events).
+
+Entered the period with Khamenei already dead (per earlier files) and
+his six-day funeral (7-3 to 7-6). Brief de-escalation/Doha-talks mood
+(7-1, novelty 0.6) reversed hard: Iran tightened Hormuz control around
+the funeral (7-5, novelty 0.65-0.7), US resumed strikes (7-7, novelty
+0.75), the ceasefire was declared fully over by Trump at the Nato
+summit (7-8, novelty 0.8 — collapse of the brief truce, not the war
+itself), a chaotic blockade/toll announcement (7-13, novelty 0.75)
+followed by a partial toll walk-back (7-14, novelty 0.55), Iran
+threatening a total regional energy-export halt (7-15, novelty 0.75 —
+carries into next batch), civilian-infrastructure strikes (7-17), a
+seventh consecutive night of strikes by 7-18 (novelty down to 0.35 as
+the pattern normalized into routine). **Self-correction, logged as a
+process note**: three early events (7-4, 7-5, 7-7) initially
+mis-tagged `oil_supply` and `oil_price`/`geopolitical_tension` with a
+single shared polarity value before recognizing the schema's
+single-polarity-per-event field requires identical sign across all
+tagged nodes — supply-down/price-up is a legitimate opposite-sign pair
+per node convention, so these were split into separate same-headline
+event objects, with every subsequent oil_supply+oil_price or
+oil_supply+geopolitical_tension combination pre-screened before
+writing. Ukraine war (`ukraine-kursk-incursion-2024`, still the reused
+key despite the name being stale): deep-strike campaign against
+Russian refineries/ports escalated sharply (St Petersburg terminal
+7-4, Siberian refinery "within reach" 7-7, Sea of Azov shipping
+suspended after ~90 vessels hit 7-12, novelty 0.65), Russia banning
+diesel exports in response (7-9, novelty 0.7, new
+`russia-2026-diesel-export-ban`); diplomatically a Trump-Putin
+peacemaker call (7-5, novelty 0.7) and Nato-summit Trump-Zelenskyy
+meeting (7-6) suggested momentum, formalized into a "coalition of the
+willing" European anti-ballistic-missile program (7-13, novelty
+0.65) — but Moscow immediately threatened foreign troops as
+"legitimate targets" (7-15) and Zelenskyy's surprise sacking of his
+defence minister Fedorov triggered domestic protests (7-16 onward,
+new `ukraine-2026-defence-minister-sacking`). Nato/Greenland
+reciprocity friction (`us-2026-nato-summit-reciprocity-row`): Trump's
+"ridiculous" Nato-support comments (7-3) escalated into renewed
+Greenland annexation rhetoric and threats to pull US troops from
+Europe (7-7), compounded by revelations that US/allied munitions
+stockpiles are depleted from the twin wars (7-7, new
+`europe-2026-nato-munitions-shortage`). China-related friction: fresh
+China-Japan "militarism" mutual accusations (7-1, reactivating a
+dormant thread), China's record car exports/trade surplus (7-14)
+contrasted against a soft 4.3% GDP print (7-15) — a genuine internal
+tension between trade strength and domestic growth weakness. AI capex
+skepticism thread: OpenAI government-stake talks (7-2), OpenAI's
+apparent no-show at a touted UK investment site (7-4), IBM's
+quarter-value wipeout dragging the software sector (7-14).
+
+### Batch #88 checkpoint (2026-07-15 to 2026-07-18, final partial — end of assigned range)
+
+16 events across 4 days (4.0/day). Magnitude mean 0.453, median
+0.45. Novelty mean 0.544, median 0.55 — steady continuation, no
+material cooldown. Type mix: geopolitics 12, macro 2, markets 2 —
+geopolitics dominance intensified further (75%) as the war entered its
+most acute phase this stretch. Node concentration: `geopolitical_
+tension` 61.1% (11/18) — sharply higher than the prior batch's 33.8%,
+reflecting almost no clean macro-data days to dilute it (only China's
+4.3% growth miss, 7-15). 8 distinct event_keys, with
+`us-iran-2026-hormuz-war` alone covering 7 of 16 events.
+
+The Hormuz war reached its highest-novelty point of this agent's
+assignment on 7-15 (Iran threatening to halt ALL Middle East energy
+exports, novelty 0.75, correctly split into `oil_supply` -0.65 /
+`oil_price`+`geopolitical_tension` +0.7 sibling events) before the
+daily-strike cadence became routine enough that novelty mechanically
+declined to 0.35-0.4 by 7-18 even as underlying severity (civilian
+infrastructure strikes 7-17) stayed high — the novelty-scale
+convention working as intended (repetition ≠ new information). Two
+new event_keys opened: `uk-2026-british-steel-nationalization` (UK
+expropriates the Scunthorpe plant from China's Jingye, 7-16; China
+calls it a "severe blow" to investment confidence, 7-17 — a genuine
+new UK-China friction axis) and confirmation that `gaza-2025-
+ceasefire-collapse` (one of the original seed threads from the January
+baseline) is still very much alive: Israeli ministers announced new
+illegal Gaza/West Bank settlements and a commander claimed 65% control
+of the Gaza strip (7-18), a material ceasefire violation, novelty 0.6.
+
+**Agent 6 final status**: 18 days (2026-07-01 to 2026-07-18), 75
+events. Scope narrowed mid-task from the original 2026-07-01–
+2026-07-28 assignment; range 2026-07-19–2026-07-28 (the true end of
+the archive) reassigned to a separate agent, still in progress at
+merge time. All threads above — particularly `us-iran-2026-hormuz-
+war`, `ukraine-kursk-incursion-2024`/`ukraine-2026-defence-minister-
+sacking`, `uk-2026-british-steel-nationalization`, and `gaza-2025-
+ceasefire-collapse` — were left mid-arc at handoff; the final agent
+should grep these event_keys before inventing new ones.
+
+### Batch #89 checkpoint (2026-05-18 to 2026-05-25)
+
+38 events across 8 days (4.75/day, range 2-7). Magnitude mean 0.42,
+median 0.40. Novelty mean 0.56, median 0.55. Type mix: geopolitics 19,
+markets 11, macro 7, monetary_policy 1. Node concentration:
+`geopolitical_tension` 42.1% (16/38), `europe_growth`/`oil_price`/
+`ai_capex_cycle` 3-4 each, `oil_supply`/`us_tech_regulation`/`semis` 2
+each.
+
+Fills the gap between agents 5 and 3. **us-iran-2026-hormuz-war**
+remained the spine of the week, oscillating daily: Trump claims a
+planned strike postponed after a new Tehran proposal, oil rising on
+the same uncertainty (5-18, novelty 0.5/0.45); Senate advances a
+war-powers curb resolution even as Vance goes "locked and loaded" and
+Trump threatens "a big hit" — two directionally opposite events same
+day (5-19); IEA warns oil markets nearing a "red zone" with an
+August supply-crunch deadline (5-21, novelty 0.6); Trump frames the
+decision as a literal "solid 50/50" between deal and strike (5-23,
+polarity deliberately near-neutral at 0.1 to capture genuine coin-flip
+uncertainty); a two-sided day — inching toward peace despite GOP hawk
+backlash, alongside the first concrete ceasefire-framework details
+(60-day truce, Hormuz reopening, nuclear talks revived, tagged
+`oil_supply` +0.4, novelty 0.65, split from the tension node per the
+dual-tag rule) — (5-24); sharp market payoff as Brent fell below $100
+(-6%, two-week low, novelty 0.65) immediately undercut by Iran denying
+any deal is imminent, plus a new sub-thread `israel-2026-iran-deal-
+alarm` capturing Netanyahu-camp alarm that the emerging deal outline
+leaves Iran nuclear-capable (5-25). Secondary threads: UK growth-
+damage cascade (`iran-israel-2026-growth-hit`) — unemployment to 5%,
+slowing wage growth (5-19), sharpest service-sector decline in a
+decade (5-21), a new UK gilt-yield-drop event (5-22), counterbalanced
+by an IMF UK-growth-upgrade (5-18) and Reeves's "buy British"
+procurement pitch (5-25); Xi/Putin's Beijing summit condemning
+"irresponsible" US policy (5-20, novelty 0.7); a new
+`russia-2026-baltic-jamming-incident` thread — Estonia drone-jamming/
+NATO shoot-down (5-19) escalating to GPS jamming hitting an RAF jet
+carrying the UK defence secretary himself (5-24); Nvidia's earnings
+beat (5-20, novelty 0.7, node `semis`) as the cleanest AI-capex-
+positive signal of the week, bookended by AI-driven job-cut stories at
+Standard Chartered; a new `vatican-2026-ai-encyclical` thread tracking
+Pope Leo's AI-dignity intervention from announcement (5-18) to the
+actual "culture of power"/AI-"disarming" denouncement (5-25, novelty
+0.7) — a genuine phase change, not a duplicate. 18 new event_keys
+opened, all grep-verified non-colliding. Node-id discipline: no use of
+`dollar`/`chips` anywhere in this batch (flagged mid-task as
+alias-only per the coordinator's correction); `semis` used correctly
+where a chip-industry story arose.
+
+**Agent 8 final status**: 8 days (2026-05-18 to 2026-05-25), 38
+events — the gap between agents 5 and 3 is now closed.
+
+### Batch #90 checkpoint (2026-07-19 to 2026-07-28) — final batch, archive complete
+
+42 events across 10 days (3-6/day, mean 4.2). Magnitude mean 0.46,
+median 0.45. Novelty mean 0.52, median 0.50. Type mix: markets 21,
+geopolitics 14, macro 5, monetary_policy 2. Node concentration:
+`geopolitical_tension` 43% (18/42), `oil_price` 19% (8/42), remainder
+spread across `europe_growth`, `bond_stress`, `us_gov_debt`,
+`us_megacap_tech`, `healthcare`, `semis`, `oil_supply`, `natural_gas`,
+`defense_industry`, `defense_spending`, `japan_debt` (≤4 each).
+
+**Confirmed end of archive**: `_extract_day.py 2026-07-29` returned
+"NO DATA" — 2026-07-28 is the literal last day in the entire Guardian
+archive; the digest_v2 project's event coverage is now contiguous from
+day one through 2026-07-28 with no gaps. **us-iran-2026-hormuz-war**
+(~14 events) kept escalating: Israel threatened "full force"
+retaliation, first sign of Israel entering directly (7-19); the US hit
+its 10th night of strikes as Iran declared "full-scale war" (7-20);
+Houthis layered a second chokepoint threat on Saudi Red Sea ports atop
+the Hormuz blockade (7-21); oil punched through $95 then $100 twice
+(7-22, 7-23) as Iran promised "eye for an eye" infrastructure
+retaliation; the UK was pulled directly into the targeting calculus
+when IRGC named a base in south-west England a "legitimate target"
+(7-23); US strikes expanded further with Chinese-tech-assisted Iranian
+strike accuracy reported (7-24); then a genuine inflection — Iran's
+first strike-free night in two weeks (7-25), then the most significant
+de-escalation of the whole flare-up: Brent crude fell 9% to below $88
+as the US paused strikes over Hormuz, dragging UK gilt yields down
+with it (7-27) — immediately undercut by Trump's "return to strong
+military action if diplomacy fails" warning the same day, so the pause
+is explicitly tagged fragile rather than resolved; novelty kept in the
+0.4-0.65 band throughout since there is no genuine terminal resolution
+by archive's end — the last day (7-28) still shows the war's fiscal
+shadow (a UK budget "trade-offs" warning) rather than closure.
+**uk-2026-starmer-resignation resolved 7-20**: Andy Burnham was sworn
+in as PM (Healey chancellor, Miliband foreign secretary, Cooper health
+secretary), closing the ~4-week leadership vacuum opened by Starmer's
+June 22 resignation — novelty 0.85, a genuine, non-manufactured
+resolution. Follow-on threads: `uk-2026-burnham-fiscal-credibility`
+(gilt yields 7-20, a BoE-adjacent rate-hike warning from war-driven oil
+costs 7-26, a thinktank's "very difficult trade-offs" budget warning
+7-28), `uk-2026-burnham-bank-tax-pressure` (Barclays profit surge/TUC
+tax call, 7-28), `uk-2026-healey-defense-spending-hopes` (Babcock/BAE
+rally, 7-21). `ukraine-kursk-incursion-2024` (legacy key, still
+active): Russia's biggest ballistic missile barrage on Kyiv in months
+(7-19, 6 dead), Burnham's symbolic first overseas meeting with
+Zelenskyy announced (7-26); new sub-thread `ukraine-2026-army-chief-
+reshuffle` (Syrskyi's sacking flagged 7-20, executed with Fedorov
+promoted 7-21). Earnings/AI-bubble arc: Tesla Q2 miss (-3% after
+hours, 7-22) contrasted with Google's 12th straight quarter of growth
+(7-22); by 7-28 the AI-capex unwind sharpened materially — Apple
+crossed $5tn as capital rotated away from AI infrastructure names,
+Samsung/SK Hynix each fell >10%, the Kospi hit a three-month low (new
+`us-2026-ai-stock-rotation-apple` key); a same-day Kumamoto earthquake
+was tagged to `semis` at low confidence (0.35) as a speculative
+supply-chain risk overlay, not a confirmed fab disruption. Other new
+threads: `us-saudi-2026-nuclear-enrichment-deal` (novelty 0.75 given
+the stark contradiction with the stated Iran-war rationale, 7-21),
+`us-2026-trump-global-tariff-reset` (10-12.5% tariffs on 80+ countries
+replacing the SCOTUS-struck-down global levy, 7-24),
+`us-2026-hegseth-defense-budget-ask` ($1.5tn Pentagon budget, using the
+now-confirmed-valid `defense_spending` node, 7-23),
+`iran-war-2026-airline-fuel-cost-hit` (EasyJet -70% profit) and
+`iran-war-2026-energy-majors-windfall` (Equinor profit doubling) as the
+two-sided corporate-impact split of the same oil shock, and
+`gsk-2026-cambridge-restructuring`/`astrazeneca-2026-q2-earnings-beat`
+for UK pharma (tagged `healthcare`, the correct node — see the
+pharma/renewables/us_growth correction below).
+
+**Agent 9 final status**: 10 days (2026-07-19 to 2026-07-28), 42
+events. This is the final batch of the entire project — the Guardian
+archive is now fully digested from 2023-07-01 through 2026-07-28 with
+zero gaps.
+
+**Second corpus-wide node-id sweep (post-completion, found and fixed at
+final merge)**: after all 9 agents completed and the corpus reached
+its full 1124-file / 4432-event size, a fresh validation pass (checking
+every event's `nodes` array against the live 173-id set from
+`seed.py` + `knowledge_graph.json`, not just the parallel-agent date
+range) found three more legacy invalid ids surviving from the original
+solo-digestion phase, predating this session's parallel-agent work:
+**`us_growth`** (2 events, 2024-07-25 and 2024-08-29 — no dedicated
+US-growth node exists, corrected to `global_growth` per the same
+convention already used for UK-specific stories routed through
+`europe_growth`), **`renewables`** (20 events, 2024-11-06 through
+2025-07-18 — corrected to `energy_transition`, the actual node whose
+alias list includes "renewables"/"climate policy"/"green energy"/"net
+zero", except the one event specifically about solar-panel trade
+tariffs (2025-04-22), corrected to the `solar` theme node instead since
+that story is equipment/industry-specific rather than broad climate
+policy), and **`pharma`** (10 events, 2024-11-15 through 2025-07-22 —
+corrected to `healthcare`, whose label is literally "Healthcare /
+pharma" and whose alias list includes "pharma"). All 32 corrections
+applied in place with no dedup collisions; the full corpus was
+re-validated afterward with **zero remaining invalid node ids across
+all 1124 files**. Combined with the dollar/chips fix above, this
+closes out every node-id error found in the project to date — five
+distinct invalid ids (`dollar`, `chips`, `us_growth`, `renewables`,
+`pharma`) across 136 total corrected events, all originating from the
+same root cause: treating a node's alias list entry as if it were the
+node's own id, never re-verified against source until this merge
+pass.
+
+**Digestion status as of this merge: COMPLETE.** The entire Guardian
+archive (`data/news_archive_guardian.jsonl`, 2023-07-01 through
+2026-07-28) has been digested into `data/digest_v2/events/*.json` —
+1124 files, 4432 events (including one legitimate zero-event day,
+2024-06-11, which has no Guardian headlines at all in the source
+archive and was written as an explicit `{"events": []}` marker rather
+than left missing). The ledger (`ledger.jsonl`) has been rebuilt and
+holds 1563 event_keys. All events pass schema validation (required
+fields present, all numeric fields in range) and node-id validation
+(every tagged id exists in the 173-node graph). Batches #1 through #90
+in this document represent the full chronological history of this
+digestion effort, including the parallelization milestone, every
+node-naming error found and fixed, and the final completion state.
 
 **Note on methodology**: none of the proposed node ids above (`political_stability`,
 `boe_rate`, `uk_banks`, `travel_leisure`, `offshore_wind`,
