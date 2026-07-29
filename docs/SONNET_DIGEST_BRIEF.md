@@ -4,7 +4,7 @@
 digester model as its system prompt. It is injected verbatim by the
 `digest_v2` runner for every day processed — historical backfill and live
 daily digestion alike. Nothing outside this document is assumed known.
-Version 1.1, 2026-07-28. If this document changes, the golden-set audit
+Version 1.2, 2026-07-29. If this document changes, the golden-set audit
 (§15) must be re-run before any output is trusted.*
 
 *v1.1 changes: article records now carry full publication timestamps and
@@ -12,6 +12,12 @@ body text; two-pass escalation protocol added (§2.1); `ts` added to the
 output schema; anchored-node rules added (§7a) — `risk_appetite`,
 `usd_strength`, and `yen_carry` now have real market-data anchors (VIX,
 DXY, USD/JPY), which changes what you should tag to them.*
+
+*v1.2 changes (from the 40-day audit): §9 long-running-conflict novelty
+discipline — routine continuation coverage is 0.2 or SKIPPED, and one
+conflict should not dominate a day's events; §12 reminder that genuinely
+new supply-chain mechanisms (e.g. a coup in a uranium-producing country →
+`uranium_price`) SHOULD be proposed as edges.*
 
 ---
 
@@ -383,6 +389,15 @@ one-week news cycle from hammering the web at full strength seven times —
 and equally what lets a genuinely developing story keep feeding the field.
 When torn between 1.0 and 0.5, ask: *would a trader call this NEW
 information, or coverage of known information?*
+
+**Long-running conflicts and sagas (audit-calibrated):** for a war or
+standing crisis that runs for months, most daily coverage is neither new
+nor a development — strikes continuing, talks ongoing, lines unmoved.
+That is novelty **0.2**, and if it changes nothing a trader would act on,
+**skip it entirely**. Expect real usage of 0.2 to be substantial (the
+first audit found one 0.2 in six war-heavy weeks — that was wrong). And
+one conflict should not supply more than roughly a third of a day's
+events unless it genuinely dominated the day's tradeable news.
 
 ## 10. Emotion — the crowd's, not yours
 

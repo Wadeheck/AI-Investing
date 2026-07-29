@@ -34,3 +34,11 @@ plan).
    defines the resume point; `ledger.jsonl` must correspond to exactly that
    day. The runner verifies this invariant before every session and halts
    loudly on mismatch rather than digesting with a corrupted trajectory.
+4. **NOTHING IS EVER DELETED.** Raw archives (`news_archive_guardian.jsonl`,
+   the headlines-only `.bak`, GDELT/wiki files) and every generation of
+   digested output (`events*/` folders) are permanent — re-digestion from
+   scratch must always be possible. Superseded outputs are renamed
+   (e.g. `events_v0_headlines/`), never removed.
+
+**Current marching orders: see `STATUS.md`** — includes the audit of the
+first 40 days and the restart-from-day-1 instruction (v1.2 rules).
