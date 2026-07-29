@@ -227,7 +227,28 @@ def load_dataset():
         bench["BTC hodl"] = close[btc_sym]
     # crypto-native signals (funding z / fear-greed / on-chain trend), computed
     # with trailing windows only — nothing from the future leaks backward
-    crypto_sig = {"fz": {}, "fng": {}, "addr": {}}
+    crypto_sig = {"fz": {}, "fng": {}, "addr": {}, "tlsr_z": {}, "oi_z": {}}
+    try:
+        # crowd positioning (Binance futures): top-trader long/short ratio and
+        # 3d open-interest impulse, as trailing z-scores — the data perp
+        # scalpers trade on, used here as contrarian extremes
+        pos = json.loads((DATA_DIR / "crypto_positioning.json").read_text())
+        import numpy as _np
+        for bsym, series in pos.items():
+            oursym = bsym.replace("USDT", "/USD")
+            tl = pd.Series({k: v["tlsr"] for k, v in series.items()
+                            if v.get("tlsr")}).sort_index()
+            oi = pd.Series({k: v["oi"] for k, v in series.items()
+                            if v.get("oi")}).sort_index()
+            tlz = (tl - tl.rolling(90, min_periods=30).mean()) / (
+                tl.rolling(90, min_periods=30).std() + 1e-9)
+            doi = _np.log(oi).diff(3)
+            oiz = (doi - doi.rolling(90, min_periods=30).mean()) / (
+                doi.rolling(90, min_periods=30).std() + 1e-9)
+            crypto_sig["tlsr_z"][oursym] = tlz.dropna().to_dict()
+            crypto_sig["oi_z"][oursym] = oiz.dropna().to_dict()
+    except Exception as exc:
+        log(f"positioning data unavailable: {exc}")
     try:
         cs = json.loads((DATA_DIR / "crypto_signals.json").read_text())
         crypto_sig["fng"] = {k: int(v) for k, v in cs.get("fng", {}).items()}
@@ -278,6 +299,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             crypto_hodl=0.2, crypto_gain=0.5,
             tact_take=0.08,                 # fast tactical: bank quick profits
             tact_hold=5,                    # fast tactical: max holding days
+            tact_short=0,                   # fast tactical may SHORT (earn the bear)
+            w_lsr=0.0,                      # top-trader long/short extremes (contrarian)
+            w_oi=0.0,                       # open-interest impulse extremes (contrarian)
             crypto_gate=0,                  # deep risk-off also trims the HODL core
             short_bias=0.0,                 # lower entry bar for SHORTS in risk-off
             # --- scoring-function upgrades (the math itself is searchable) ---
@@ -529,6 +553,14 @@ def run_replay(ds, cfg, i0, i1):
                 tr = cs["addr"].get(dstr)
                 if tr is not None:
                     add += cfg["w_onchain"] * max(-0.25, min(0.25, tr * 8))
+            if cfg["w_lsr"]:        # crowd long -> contrarian negative
+                z = cs["tlsr_z"].get(s, {}).get(dstr)
+                if z is not None and abs(z) > 1.0:
+                    add += -cfg["w_lsr"] * max(-1.0, min(1.0, z / 2.5)) * 0.35
+            if cfg["w_oi"]:         # leverage flooding in -> crowded, contrarian
+                z = cs["oi_z"].get(s, {}).get(dstr)
+                if z is not None and abs(z) > 1.0:
+                    add += -cfg["w_oi"] * max(-1.0, min(1.0, z / 2.5)) * 0.3
             if abs(add) > 0.03:
                 impulses[nid] = max(impulses.get(nid, 0.0),
                                     max(-0.5, min(0.5, add)), key=abs)
@@ -700,7 +732,7 @@ def run_replay(ds, cfg, i0, i1):
                     h_["qty"] += buy
                     h_["trimmed"] = False
         ceq = eq_of(cbook, px)
-        tact_val = sum(p["qty"] * px[s2] for s2, p in cbook["tact"].items()
+        tact_val = sum(abs(p["qty"]) * px[s2] for s2, p in cbook["tact"].items()
                        if not np.isnan(px[s2]))
         for s in cryptos:
             if np.isnan(px[s]):
@@ -709,37 +741,50 @@ def run_replay(ds, cfg, i0, i1):
             tact = cbook["tact"].get(s)
             exited = False
             if tact:
-                stop_px = tact["entry"] * (1 - HARD_STOP)
-                fill = crypto_stop_fill(s, stop_px, prev_td, cur_td)
-                tfill = (crypto_take_fill(s, tact["entry"] * (1 + cfg["tact_take"]),
-                                          prev_td, cur_td)
-                         if cfg["tact_take"] > 0 else None)
-                if fill is not None:    # worst case first: the stop, gap-aware
-                    cbook["cash"] += tact["qty"] * fill * (1 - cost_frac(ds, s, tact["qty"], fill, i))
-                    del cbook["tact"][s]
-                    tact, exited = None, True
-                elif tfill is not None:  # bank the quick profit (fast mandate)
-                    cbook["cash"] += tact["qty"] * tfill * (1 - cost_frac(ds, s, tact["qty"], tfill, i))
-                    del cbook["tact"][s]
-                    tact, exited = None, True
-                elif (fimp < -0.05      # signal gone, or held past the clock
+                d_ = 1 if tact["qty"] > 0 else -1
+                stop_px = tact["entry"] * (1 - HARD_STOP * d_)
+                take_px = (tact["entry"] * (1 + cfg["tact_take"] * d_)
+                           if cfg["tact_take"] > 0 else None)
+                if d_ == 1:     # long: stop below (lows), take above (highs)
+                    sfill = crypto_stop_fill(s, stop_px, prev_td, cur_td)
+                    tfill = (crypto_take_fill(s, take_px, prev_td, cur_td)
+                             if take_px else None)
+                else:           # short: stop above (highs), take below (lows)
+                    sfill = crypto_take_fill(s, stop_px, prev_td, cur_td)
+                    tfill = (crypto_stop_fill(s, take_px, prev_td, cur_td)
+                             if take_px else None)
+                fill = None
+                if sfill is not None:       # worst case first: the stop
+                    fill = sfill
+                elif tfill is not None:     # bank the quick profit
+                    fill = tfill
+                elif (fimp * d_ < -0.05     # signal flipped, or clock expired
                       or i - tact.get("ei", i) >= int(cfg["tact_hold"])):
-                    cbook["cash"] += tact["qty"] * px[s] * (1 - cost_frac(ds, s, tact["qty"], px[s], i))
+                    fill = px[s]
+                if fill is not None:
+                    frac = cost_frac(ds, s, tact["qty"], fill, i)
+                    cbook["cash"] += tact["qty"] * fill * (1 - frac * d_)
                     del cbook["tact"][s]
                     tact, exited = None, True
-                if exited:
-                    tact_val = sum(p["qty"] * px[s2] for s2, p in cbook["tact"].items()
+                    tact_val = sum(abs(p["qty"]) * px[s2]
+                                   for s2, p in cbook["tact"].items()
                                    if not np.isnan(px[s2]))
-            if (not tact and not exited and fimp > 0.10 and gate == 1.0
-                    and not winter and not blocked["cb"]):
-                room = CRYPTO_TACT_CAP * ceq - tact_val   # mandate: tactical <=70%
-                notional = min(cfg["crypto_gain"] * fimp * ceq * 0.4,
-                               cbook["cash"] * 0.9, room)
-                if notional > 1000:
-                    qty = notional / px[s]
-                    cbook["cash"] -= notional * (1 + cost_frac(ds, s, qty, px[s], i))
-                    cbook["tact"][s] = {"qty": qty, "entry": px[s], "ei": i}
-                    tact_val += notional
+            if not tact and not exited and gate == 1.0 and not blocked["cb"]:
+                d_ = 0
+                if fimp > 0.10 and not winter:
+                    d_ = 1
+                elif cfg["tact_short"] and fimp < -0.10:
+                    d_ = -1     # shorts allowed in winter — that's their season
+                if d_:
+                    room = CRYPTO_TACT_CAP * ceq - tact_val   # mandate: <=70%
+                    notional = min(cfg["crypto_gain"] * abs(fimp) * ceq * 0.4,
+                                   cbook["cash"] * 0.9, room)
+                    if notional > 1000:
+                        qty = d_ * notional / px[s]
+                        cbook["cash"] -= d_ * notional
+                        cbook["cash"] -= notional * cost_frac(ds, s, qty, px[s], i)
+                        cbook["tact"][s] = {"qty": qty, "entry": px[s], "ei": i}
+                        tact_val += notional
         # ---- long-term value core: hold through dips, exit on thesis break
         if core_frac > 0:
             for s in list(kbook["pos"]):    # disaster stop only (gap-aware)
@@ -876,12 +921,17 @@ ROUNDS = [
         "stock_core": [0.3, 0.5, 0.7]}),
     ("R19 fast-crypto rhythm (take-profit level x max holding days)", {
         "tact_take": [0.05, 0.08, 0.12], "tact_hold": [3, 5, 10]}),
+    ("R20 crowd positioning (top-trader long/short + open-interest z, contrarian)", {
+        "w_lsr": [0.4, 0.8], "w_oi": [0.0, 0.4]}),
+    ("R21 tactical crypto SHORTS (earn the bear: fast sleeve trades both sides)", {
+        "tact_short": [1]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_gain", "short_bias",
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
-           "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take")
+           "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
+           "w_lsr", "w_oi")
 
 
 def preservation_ok(dev_new, dev_old):
