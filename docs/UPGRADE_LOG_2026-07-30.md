@@ -109,9 +109,15 @@ is a valid output). Feeds positive resting anchors; trend gates still time entry
 
 ## 7. Data accumulation (this machine, Guardian-independent)
 
-`research/accumulate.py` (--once/--loop): all RSS (34 feeds — 13 Asian feeds
-added: Yonhap, KED, Nikkei Asia, Mainichi, Xinhua, China Daily, Antara, VOI,
-Bangkok Post, VnExpress, Mint, Hindu BusinessLine, Straits Times) + SEC EDGAR
+`research/accumulate.py` (--once/--loop): all RSS (40 feeds — 21 Asian
+sources incl. NATIVE-language: Taiwan zh (Liberty Times, cnyes, TechNews,
+CNA) + Taipei Times en, HK (RTHK en+zh), mainland zh (36kr) alongside
+Xinhua/China Daily/Global Times en, Yonhap, KED, Nikkei Asia, Mainichi,
+Antara, VOI, Bangkok Post, VnExpress, Mint, Hindu BusinessLine, Straits
+Times). RSS 1.0/RDF parsing fixed (JP/TW sites); CJK alias matching added
+(substring, no word boundaries) with zh aliases on core nodes (seed v18) —
+a Chinese headline about Nvidia circular financing maps to
+['ai_circularity','nvda'] with no LLM. + SEC EDGAR
 8-K + StockTwits sentiment + Hacker News → dedup via brain.db → append-only
 `data/news_archive_live.jsonl`. Backfill: GDELT (BACKFILL_START/END env,
 verified to 2017) + `research/nyt_fetch.py` (needs free NYT_API_KEY).

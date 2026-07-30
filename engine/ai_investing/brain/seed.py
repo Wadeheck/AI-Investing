@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 17
+SEED_VERSION = 18
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -58,10 +58,10 @@ SEED_NODES = [
      "aliases": ["etf inflows", "stablecoin supply", "crypto flows", "bitcoin etf"],
      "equilibrium": "follows global liquidity + risk appetite; halving cycles overlay"},
     {"id": "geopolitical_tension", "type": "factor", "label": "Geopolitical tension",
-     "aliases": ["war", "conflict", "taiwan strait", "middle east", "strait of hormuz"],
+     "aliases": ["war", "conflict", "taiwan strait", "middle east", "strait of hormuz", "台海", "地缘政治"],
      "equilibrium": "baseline simmer; escalation lifts oil/gold, sinks risk appetite"},
     {"id": "us_china_tariffs", "type": "factor", "label": "US-China trade policy",
-     "aliases": ["tariff", "trade war", "trade deal", "export tariffs", "decoupling"],
+     "aliases": ["tariff", "trade war", "trade deal", "export tariffs", "decoupling", "关税", "關稅"],
      "equilibrium": "managed friction; escalation hits supply chains + China exporters"},
     {"id": "china_export_controls", "type": "factor", "label": "Chip export controls",
      "aliases": ["chip ban", "semiconductor restrictions", "entity list", "chip curbs"],
@@ -130,13 +130,13 @@ SEED_NODES = [
      "equilibrium": "regional markets linked by LNG; cold winters + outages spike it"},
     # ------------- China factor cluster -------------
     {"id": "pboc_rate", "type": "factor", "label": "PBOC policy rate",
-     "aliases": ["pboc", "lpr", "china rate cut", "rrr cut", "people's bank of china"],
+     "aliases": ["pboc", "lpr", "china rate cut", "rrr cut", "people's bank of china", "人民银行", "降准"],
      "equilibrium": "easing bias while property deleverages; cuts squeeze bank NIMs"},
     {"id": "china_stimulus", "type": "factor", "label": "China fiscal stimulus",
-     "aliases": ["china stimulus", "special bonds", "consumption vouchers", "politburo stimulus"],
+     "aliases": ["china stimulus", "special bonds", "consumption vouchers", "politburo stimulus", "刺激政策", "国债增发"],
      "equilibrium": "episodic; big packages lift consumer + property + commodities"},
     {"id": "china_property", "type": "factor", "label": "China property sector",
-     "aliases": ["evergrande", "country garden", "china real estate", "home sales china"],
+     "aliases": ["evergrande", "country garden", "china real estate", "home sales china", "房地产", "恒大"],
      "equilibrium": "still deleveraging; stabilization = major risk-on for China assets"},
     {"id": "china_consumer", "type": "factor", "label": "China consumer demand",
      "aliases": ["china retail sales", "china consumption", "singles day", "china spending"],
@@ -171,7 +171,7 @@ SEED_NODES = [
      "equilibrium": "approvals (node DOWN) unlock flows; crackdowns choke liquidity"},
     {"id": "ai_circularity", "type": "factor", "label": "AI circular financing (up = more round-tripping)",
      "aliases": ["circular deals", "vendor financing", "round-tripping", "circular revenue",
-                 "gpu-backed loans", "invest in customer"],
+                 "gpu-backed loans", "invest in customer", "循环融资", "循環融資"],
      "equilibrium": "some vendor financing is normal capex grease; when the circle IS the growth story, the revenue is partly fictitious and the unwind is violent"},
     {"id": "crypto_adoption", "type": "factor", "label": "Crypto institutional adoption",
      "aliases": ["corporate treasury bitcoin", "institutional crypto", "tokenization",
@@ -305,7 +305,7 @@ SEED_NODES = [
     {"id": "us_megacap_tech", "type": "theme", "label": "US mega-cap tech",
      "aliases": ["magnificent seven", "big tech", "nasdaq"]},
     {"id": "semis", "type": "theme", "label": "Semiconductors",
-     "aliases": ["chips", "semiconductor", "foundry", "chipmakers"]},
+     "aliases": ["chips", "semiconductor", "foundry", "chipmakers", "半导体", "半導體", "晶圆", "晶片"]},
     {"id": "ai_datacenter", "type": "theme", "label": "AI / datacenter",
      "aliases": ["artificial intelligence", "datacenter", "gpu", "accelerators"]},
     {"id": "ev_supply_chain", "type": "theme", "label": "EV supply chain",
@@ -364,7 +364,7 @@ SEED_NODES = [
     {"id": "msft", "type": "asset", "label": "Microsoft", "symbol": "MSFT", "market": "US",
      "aliases": ["azure"]},
     {"id": "nvda", "type": "asset", "label": "Nvidia", "symbol": "NVDA", "market": "US",
-     "aliases": ["h100", "blackwell"]},
+     "aliases": ["h100", "blackwell", "英伟达", "輝達"]},
     {"id": "tsla", "type": "asset", "label": "Tesla", "symbol": "TSLA", "market": "US",
      "aliases": ["elon musk"]},
     {"id": "xlk", "type": "asset", "label": "Tech sector ETF", "symbol": "XLK", "market": "US"},
@@ -432,7 +432,7 @@ SEED_NODES = [
      "market": "US", "aliases": ["microstrategy", "saylor"]},
     # ---- hardware / supply-chain nodes ----
     {"id": "tsmc", "type": "asset", "label": "TSMC", "symbol": "TSM", "market": "US",
-     "aliases": ["taiwan semiconductor", "2330.TW"]},
+     "aliases": ["taiwan semiconductor", "2330.TW", "台积电", "台積電"]},
     {"id": "asml", "type": "asset", "label": "ASML", "symbol": "ASML", "market": "US",
      "aliases": ["euv lithography"]},
     {"id": "amd", "type": "asset", "label": "AMD", "symbol": "AMD", "market": "US"},
@@ -505,7 +505,7 @@ SEED_NODES = [
      "symbol": "C38U.SI", "market": "SG", "aliases": ["capitaland", "cict"]},
     # ------------- assets: crypto -------------
     {"id": "btc", "type": "asset", "label": "Bitcoin", "symbol": "BTC/USD", "market": "CRYPTO",
-     "aliases": ["btc"]},
+     "aliases": ["btc", "比特币", "比特幣"]},
     {"id": "eth", "type": "asset", "label": "Ethereum", "symbol": "ETH/USD", "market": "CRYPTO",
      "aliases": ["eth", "ether"]},
     {"id": "sol", "type": "asset", "label": "Solana", "symbol": "SOL/USD", "market": "CRYPTO",

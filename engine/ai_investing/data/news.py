@@ -198,17 +198,26 @@ def _save_feed_cache(settings, cache: dict) -> None:
 def _parse_feed(data: bytes, source: str, limit: int) -> list[dict]:
     root = ElementTree.fromstring(data)
     items, taken = [], 0
-    # RSS <item> and Atom <entry>
+    # RSS 2.0 <item>, Atom <entry>, and RSS 1.0/RDF items (Nikkei/Mainichi
+    # and many JP/TW sites still publish RDF)
     ns_entry = "{http://www.w3.org/2005/Atom}entry"
     ns_title = "{http://www.w3.org/2005/Atom}title"
-    for item in list(root.iter("item")) + list(root.iter(ns_entry)):
-        title = (item.findtext("title") or item.findtext(ns_title) or "").strip()
+    ns_rdf_item = "{http://purl.org/rss/1.0/}item"
+    ns_rdf_title = "{http://purl.org/rss/1.0/}title"
+    ns_rdf_desc = "{http://purl.org/rss/1.0/}description"
+    ns_dc_date = "{http://purl.org/dc/elements/1.1/}date"
+    for item in (list(root.iter("item")) + list(root.iter(ns_entry))
+                 + list(root.iter(ns_rdf_item))):
+        title = (item.findtext("title") or item.findtext(ns_title)
+                 or item.findtext(ns_rdf_title) or "").strip()
         if not title:
             continue
         items.append({
             "title": title,
-            "summary": (item.findtext("description") or "").strip()[:300],
-            "published": (item.findtext("pubDate") or "").strip(),
+            "summary": (item.findtext("description") or item.findtext(ns_rdf_desc)
+                        or "").strip()[:300],
+            "published": (item.findtext("pubDate") or item.findtext(ns_dc_date)
+                          or "").strip(),
             "source": source,
         })
         taken += 1

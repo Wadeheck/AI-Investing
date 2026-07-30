@@ -194,10 +194,17 @@ class KnowledgeGraph:
         low = text.lower()
         hits = []
         for alias, nid in self.alias_index().items():
-            if len(alias) < 3:
-                continue
-            if re.search(r"(?<![\w])" + re.escape(alias) + r"(?:e?s)?(?![\w])", low):
-                if nid not in hits:
+            if alias.isascii():
+                if len(alias) < 3:
+                    continue
+                if re.search(r"(?<![\w])" + re.escape(alias) + r"(?:e?s)?(?![\w])", low):
+                    if nid not in hits:
+                        hits.append(nid)
+            else:
+                # CJK aliases: no spaces between words, so word boundaries
+                # don't exist — plain substring match (2+ chars is specific
+                # enough in Chinese/Japanese)
+                if len(alias) >= 2 and alias in low and nid not in hits:
                     hits.append(nid)
         return hits
 

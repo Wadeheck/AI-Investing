@@ -251,6 +251,16 @@ class Settings:
         "https://www.livemint.com/rss/markets",                   # Mint markets (IN)
         "https://www.thehindubusinessline.com/markets/feeder/default.rss",  # Hindu BusinessLine (IN)
         "https://www.straitstimes.com/news/business/rss.xml",     # Straits Times biz (SG)
+        # Taiwan + native-language sources (probed working 2026-07-31; zh-language
+        # headlines are matched via CJK aliases offline and read natively by the LLM)
+        "https://news.ltn.com.tw/rss/business.xml",               # Liberty Times biz (TW, zh)
+        "https://news.cnyes.com/rss/v1/news/category/tw_stock",   # cnyes TW stocks (TW, zh)
+        "https://technews.tw/feed/",                              # TechNews (TW, zh — semis)
+        "https://www.taipeitimes.com/xml/index.rss",              # Taipei Times (TW, en)
+        "https://feeds.feedburner.com/rsscna/finance",            # CNA finance (TW, zh)
+        "https://rthk.hk/rthk/news/rss/e_expressnews_efinance.xml",  # RTHK finance (HK, en)
+        "https://rthk.hk/rthk/news/rss/c_expressnews_cfinance.xml",  # RTHK finance (HK, zh)
+        "https://36kr.com/feed",                                  # 36kr (CN, zh — tech)
         # official / central banks
         "https://www.federalreserve.gov/feeds/press_all.xml",
         "https://www.boj.or.jp/en/rss/whatsnew.xml",
