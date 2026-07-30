@@ -100,7 +100,13 @@ def credibility(event: dict, all_headlines: list[dict]) -> float:
 
 
 def _prompt(headlines: list[dict], node_ids: list[str]) -> str:
-    lines = "\n".join(f"- [{h.get('source', '?')}] {h['title']}" for h in headlines[:100])
+    def _line(h: dict) -> str:
+        s = f"- [{h.get('source', '?')}] {h['title']}"
+        extra = (h.get("body") or h.get("summary") or "").strip()
+        if extra:                     # body/summary carries the WHO/HOW the
+            s += f" — {extra[:400]}"  # deals & integrity extraction feed on
+        return s
+    lines = "\n".join(_line(h) for h in headlines[:100])
     return f"""You are the macro brain of an automated trading system. Extract structured
 EVENTS from these headlines. Markets are full of engineered noise — planted stories,
 pumps, hype. Judge each event skeptically.

@@ -119,7 +119,12 @@ Times). RSS 1.0/RDF parsing fixed (JP/TW sites); CJK alias matching added
 a Chinese headline about Nvidia circular financing maps to
 ['ai_circularity','nvda'] with no LLM. + SEC EDGAR
 8-K + StockTwits sentiment + Hacker News → dedup via brain.db → append-only
-`data/news_archive_live.jsonl`. Backfill: GDELT (BACKFILL_START/END env,
+`data/news_archive_live.jsonl` **with full article BODIES** (`data/
+article_body.py`: RSS links captured, trafilatura + stdlib-fallback
+extraction, ~3k chars matching the escalation-pass window, fetched once per
+never-seen story, ~70% coverage — paywalls fall back to headline+summary).
+The live digester prompt now includes body/summary text, which is what the
+deals and integrity extraction actually feed on. Backfill: GDELT (BACKFILL_START/END env,
 verified to 2017) + `research/nyt_fetch.py` (needs free NYT_API_KEY).
 **Gotcha fixed**: `.env` NEWS_RSS override had silently clamped the engine to
 3 feeds — leave NEWS_RSS unset to get the full list.

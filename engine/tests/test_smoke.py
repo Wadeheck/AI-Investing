@@ -70,3 +70,21 @@ if __name__ == "__main__":
         t()
         print(f"  ok  {t.__name__}")
     print(f"\nAll {len(tests)} smoke tests passed.")
+
+
+def test_parse_feed_captures_links_and_bodies_attach():
+    from ai_investing.data.news import _parse_feed
+    rss = b"""<?xml version="1.0"?><rss><channel>
+      <item><title>Chip deal signed</title><link>https://x.example/a</link>
+            <description>Nvidia and Oracle agree terms</description></item>
+    </channel></rss>"""
+    items = _parse_feed(rss, "test", 5)
+    assert items[0]["url"] == "https://x.example/a"
+    from ai_investing.data.article_body import _fallback_extract
+    html = ("<html><nav>menu menu</nav><p>" + "Nvidia signed a supply deal with Oracle "
+            "covering multiple years of GPU deliveries for AI datacenters. " * 3 +
+            "</p><p>" + "The agreement includes staged investment commitments and "
+            "was announced alongside quarterly results beating expectations. " * 3 +
+            "</p></html>")
+    text = _fallback_extract(html)
+    assert "supply deal with Oracle" in text and "menu" not in text

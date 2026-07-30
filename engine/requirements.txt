@@ -18,3 +18,4 @@ moomoo-api==10.9.6908   # moomoo OpenAPI — needs the moomoo OpenD gateway runn
 anthropic==0.117.0      # nicer Claude client (engine also works via raw urllib)
 feedparser==6.0.12      # robust RSS parsing (falls back to stdlib xml)
 rich==15.0.0            # prettier console output
+trafilatura

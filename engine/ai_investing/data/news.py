@@ -212,6 +212,14 @@ def _parse_feed(data: bytes, source: str, limit: int) -> list[dict]:
                  or item.findtext(ns_rdf_title) or "").strip()
         if not title:
             continue
+        # article URL: RSS <link> text, Atom <link href>, RDF <link>
+        link = (item.findtext("link") or item.findtext("{http://purl.org/rss/1.0/}link")
+                or "").strip()
+        if not link:
+            for ln in item.iter("{http://www.w3.org/2005/Atom}link"):
+                if ln.get("href") and ln.get("rel") in (None, "alternate"):
+                    link = ln.get("href").strip()
+                    break
         items.append({
             "title": title,
             "summary": (item.findtext("description") or item.findtext(ns_rdf_desc)
@@ -219,6 +227,7 @@ def _parse_feed(data: bytes, source: str, limit: int) -> list[dict]:
             "published": (item.findtext("pubDate") or item.findtext(ns_dc_date)
                           or "").strip(),
             "source": source,
+            "url": link,
         })
         taken += 1
         if taken >= limit:

@@ -42,7 +42,16 @@ def run_once(settings: Settings, store: BrainStore) -> int:
     n_rss = len(heads)
     heads += altfeeds.fetch_all(settings)
     fresh, seen_before = store.filter_new(heads)
+    n_bodies = 0
     if fresh:
+        # full-article bodies for NEVER-SEEN stories only (crawl once, keep
+        # forever): this is what the digester's escalation pass, the deals
+        # extractor and the integrity scanner actually read
+        try:
+            from ai_investing.data.article_body import attach_bodies
+            n_bodies = attach_bodies(fresh, limit=60)
+        except Exception:
+            pass
         DATA_DIR.mkdir(exist_ok=True)
         now = datetime.now(timezone.utc)
         clean = [{k: v for k, v in h.items() if k != "_article_id"} for h in fresh]
@@ -55,7 +64,7 @@ def run_once(settings: Settings, store: BrainStore) -> int:
         # ARCHIVE, not the store, so nothing is lost by marking here.)
         store.mark_digested(fresh)
     log(f"pulled {len(heads)} ({n_rss} rss + {len(heads) - n_rss} alt) | "
-        f"new {len(fresh)} | seen-before {seen_before} | "
+        f"new {len(fresh)} | bodies {n_bodies} | seen-before {seen_before} | "
         f"store {store.stats().get('articles', '?')} articles")
     return len(fresh)
 
