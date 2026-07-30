@@ -14,7 +14,8 @@ import time
 
 FIELDS = ("trailingPE", "forwardPE", "priceToBook", "debtToEquity",
           "profitMargins", "revenueGrowth", "marketCap",
-          "returnOnEquity", "operatingMargins", "earningsGrowth")
+          "returnOnEquity", "operatingMargins", "earningsGrowth",
+          "dividendYield", "payoutRatio")
 MAX_AGE_DAYS = 7
 FETCH_BUDGET = 15          # per call, keeps a cycle from stalling
 

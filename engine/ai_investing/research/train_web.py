@@ -983,7 +983,7 @@ def train_forever() -> None:
     upgrades. Each cycle: staged rounds -> local refinement; stuck cycles widen
     the refinement radius (explore). Every cycle appended to
     data/web_training_history.jsonl; latest state always in web_training.json."""
-    hist_path = DATA_DIR / "web_training_history.jsonl"
+    hist_path = OUT_JSON.with_name(OUT_JSON.stem + "_history.jsonl")
     cycle, stuck, incumbent = 0, 0, None
     try:                                   # resume from the best known config
         prev = json.loads(OUT_JSON.read_text())["best_cfg"]
@@ -1147,7 +1147,7 @@ def evaluate_lockbox() -> dict:
     out = {"ts": datetime.now(timezone.utc).isoformat(),
            "window": [str(idx[h_end].date()), str(idx[n - 1].date())],
            "cfg": cfg, "metrics": m, "benchmarks": b}
-    (DATA_DIR / "web_training_lockbox.json").write_text(json.dumps(out, indent=1))
+    OUT_JSON.with_name(OUT_JSON.stem + "_lockbox.json").write_text(json.dumps(out, indent=1))
     log(f"LOCKBOX {out['window'][0]} → {out['window'][1]}: "
         f"stock {m['stock']} | crypto {m['crypto']}")
     log(f"benchmarks over the same window: {b}")
@@ -1155,7 +1155,41 @@ def evaluate_lockbox() -> dict:
     return out
 
 
+def use_v2_digest() -> None:
+    """--v2: train against the Sonnet-digested Guardian corpus as the
+    CHALLENGER (DIGESTION_SPEC.md B6 steps 5-6) instead of the qwen-era v1
+    files. All outputs go to *_v2 paths so the v1 incumbent's record and
+    resume state are never mixed with the challenger's — the A/B stays clean."""
+    global ARCHIVE, IMPULSES, OUT_JSON, OUT_MD
+    ARCHIVE = DATA_DIR / "news_archive_guardian.jsonl"          # same {"date","headlines"} schema
+    IMPULSES = DATA_DIR / "digest_v2" / "news_impulses_v2.jsonl"
+    OUT_JSON = DATA_DIR / "web_training_v2.json"
+    OUT_MD = DATA_DIR / "web_training_report_v2.md"
+    log("v2-digest mode: impulses from digest_v2/news_impulses_v2.jsonl, "
+        "texts from news_archive_guardian.jsonl, outputs to *_v2 files")
+
+
+def preflight_data() -> bool:
+    """The replay's edge lives in the digested news (price-only = no edge,
+    see docs/TRAINING_RECORD.md Stage 0). Refuse to train without it rather
+    than silently producing non-comparable numbers on a data-less checkout."""
+    missing = [str(p) for p in (ARCHIVE, IMPULSES) if not p.exists()]
+    if missing:
+        log("CANNOT TRAIN — required news data missing on this machine:")
+        for m in missing:
+            log(f"  missing: {m}")
+        log("these files are gitignored and live only where the news pipeline ran; "
+            "copy the data/ directory from that machine (see data/digest_v2/README.md), "
+            "then re-run")
+        return False
+    return True
+
+
 if __name__ == "__main__":
+    if "--v2" in sys.argv:
+        use_v2_digest()
+    if not preflight_data():
+        sys.exit(2)
     if "--lockbox" in sys.argv:
         evaluate_lockbox()
     else:

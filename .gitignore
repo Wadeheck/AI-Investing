@@ -32,3 +32,4 @@ dist/
 .idea/
 .vscode/
 *.tsbuildinfo
+engine/ai_investing/research/replay_data/

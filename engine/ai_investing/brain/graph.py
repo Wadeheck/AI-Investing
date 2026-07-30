@@ -196,7 +196,7 @@ class KnowledgeGraph:
         for alias, nid in self.alias_index().items():
             if len(alias) < 3:
                 continue
-            if re.search(r"(?<![\w])" + re.escape(alias) + r"(?![\w])", low):
+            if re.search(r"(?<![\w])" + re.escape(alias) + r"(?:e?s)?(?![\w])", low):
                 if nid not in hits:
                     hits.append(nid)
         return hits
@@ -295,26 +295,101 @@ class KnowledgeGraph:
         top = max(score.values()) or 1.0
         return {k: round(v / top, 4) for k, v in score.items()}
 
-    def detect_circular_financing(self) -> list[dict]:
-        """Spot vendor-financing round-trips: A OWNS a stake in B while ALSO
-        supplying B — the classic value-inflation circle (A invests in B, B
-        spends the money buying A's product, both book it as growth). Revenue
-        booked around such a loop is partly the same dollar counted twice; the
-        adviser discounts long conviction on every participant."""
-        owns = {(e.src, e.dst) for e in self.edges if e.type == "owns"}
+    def detect_circular_financing(self, max_len: int = 5) -> list[dict]:
+        """Spot round-tripped money — the value-inflation circles where the
+        same dollar is booked as growth by everyone it passes through.
+
+        Two detections:
+        1. Direct vendor financing: A OWNS a stake in B while ALSO supplying B
+           (A invests, B spends the investment on A's product).
+        2. Multi-party round-trips: cycles in the MONEY-FLOW digraph, where
+           money moves along `owns` edges as investment (owner -> holding) and
+           along `supplies` edges as payment (customer -> supplier). E.g.
+           NVDA -invests-> OpenAI -pays-> Oracle -pays-> NVDA: every leg is a
+           legitimate transaction, every financial statement looks great, and
+           part of it is still the same dollar going in a circle. Private
+           hubs (no ticker) count as participants — the loop is real even
+           when its center can't be traded.
+
+        The adviser discounts long conviction on every participant; the
+        valuation anchors apply a standing haircut (statements flattered by
+        circular revenue are structurally less trustworthy)."""
+        loops: list[dict] = []
+        owns_e = {(e.src, e.dst): e for e in self.edges if e.type == "owns"}
         supplies = {(e.src, e.dst): e for e in self.edges if e.type == "supplies"}
-        loops = []
-        for (a, b) in owns:
+
+        def _strength(e: Edge) -> float:
+            return max(0.0, min(1.0, e.weight)) * max(0.0, min(1.0, e.confidence))
+
+        for (a, b), oe in owns_e.items():
             e = supplies.get((a, b)) or supplies.get((b, a))
             if e is not None:
                 na, nb = self.nodes.get(a), self.nodes.get(b)
                 loops.append({
-                    "investor": a, "counterparty": b,
+                    "investor": a, "counterparty": b, "participants": [a, b],
                     "labels": f"{na.label if na else a} ↔ {nb.label if nb else b}",
                     "pattern": "owns + supplies (vendor financing)",
+                    "severity": round(min(_strength(oe), _strength(e)), 3),
                     "note": e.note or "capital goes out as investment, comes back as revenue",
                 })
+        # --- multi-party: cycles in the money-flow digraph ---
+        # A circle is only as fake as its THINNEST leg, so severity = min leg
+        # strength (weight x confidence) around the loop.
+        flow: dict[str, list[tuple[str, str, float]]] = {}
+        for e in self.edges:
+            if e.type == "owns":
+                flow.setdefault(e.src, []).append((e.dst, "invests in", _strength(e)))
+            elif e.type == "supplies":
+                flow.setdefault(e.dst, []).append((e.src, "pays", _strength(e)))
+        seen: set[frozenset] = {frozenset(lp["participants"]) for lp in loops}
+
+        def dfs(start: str, node: str, path: list[tuple[str, str, float]]) -> None:
+            for nxt, verb, st in flow.get(node, []):
+                if nxt == start and len(path) >= 2:
+                    members = [start] + [p[0] for p in path]
+                    key = frozenset(members)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    labels = [self.nodes[m].label if m in self.nodes else m for m in members]
+                    verbs = [p[1] for p in path] + [verb]
+                    chain = labels[0]
+                    for lab, vb in zip(labels[1:] + [labels[0]], verbs):
+                        chain += f" -{vb}-> {lab}"
+                    loops.append({
+                        "investor": start, "counterparty": members[1],
+                        "participants": members,
+                        "labels": " ↔ ".join(labels),
+                        "pattern": f"{len(members)}-party money round-trip",
+                        "severity": round(min([p[2] for p in path] + [st]), 3),
+                        "note": chain,
+                    })
+                elif nxt != start and all(nxt != p[0] for p in path) and len(path) < max_len - 1:
+                    if nxt > start:      # canonical start = smallest id, kills duplicates
+                        dfs(start, nxt, path + [(nxt, verb, st)])
+
+        for n in sorted(flow):
+            dfs(n, n, [])
         return loops
+
+    # -- growth: LLM-proposed nodes -------------------------------------------
+    def propose_node(self, node_id: str, label: str, aliases: list[str] | None = None,
+                     proposed_by: str = "", ts: str = "") -> bool:
+        """Create a PRIVATE-COMPANY hub node from digested news (no symbol —
+        never tradable, but it propagates shocks and anchors circular-financing
+        detection). This is how the graph scales to new deal hubs (the next
+        OpenAI) without a code change. Provenance is recorded in `state` since
+        Node has no provenance field; curated seeds always win on id clash."""
+        node_id = re.sub(r"[^a-z0-9_]", "", node_id.lower().replace(" ", "_").replace("-", "_"))
+        if not node_id or node_id in self.nodes:
+            return False
+        self.nodes[node_id] = Node(
+            id=node_id, type="asset", label=f"{label} (private)"[:60],
+            aliases=[a.lower() for a in (aliases or []) if a][:6],
+            state=f"llm-proposed {ts[:10]}: {proposed_by[:120]}")
+        self._adj = None
+        self._alias_index = None
+        return True
 
     # -- growth: LLM-proposed edges -------------------------------------------
     def propose_edge(self, src: str, dst: str, type_: str, sign: int, weight: float,

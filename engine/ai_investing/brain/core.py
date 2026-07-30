@@ -113,7 +113,31 @@ class Brain:
                 except (KeyError, TypeError, ValueError):
                     continue
 
+        # Deal wiring: digested deals grow the relationship graph itself —
+        # private hubs auto-created, owns/supplies legs accrued — so money
+        # circles surface structurally without per-company code (brain/deals.py).
+        try:
+            from ai_investing.brain import deals as deals_mod
+            deal_report = deals_mod.apply_deals(self.graph, events, ts=now)
+        except Exception:
+            deal_report = {}
+
+        # Integrity layer: hardcoded patterns (auditor walks, withdrawal halts…)
+        # + the digester's open-ended `integrity` judgments (novel mechanisms).
+        # Both merge into decaying per-asset flags that override good numbers.
+        try:
+            from ai_investing.brain import integrity as integ
+            integ.scan_headlines(new_heads, self.graph, self.settings)
+            integ.absorb_llm_integrity(events, self.graph, self.settings)
+            self._integrity = integ.current_flags(self.settings)
+        except Exception:
+            self._integrity = {}
+
         state = self._state(events, impulses, impacts, trace, asset_impacts, fired, macro)
+        if deal_report.get("nodes_created") or deal_report.get("edges_added") \
+                or deal_report.get("edges_corroborated"):
+            state["deal_wiring"] = {k: deal_report[k] for k in
+                                    ("nodes_created", "edges_added", "edges_corroborated")}
         state["activations"] = dict(sorted(self.field.activations.items(),
                                            key=lambda kv: -abs(kv[1])))
         state["pending_effects"] = self.field.pending
@@ -121,6 +145,12 @@ class Brain:
         state["memory"] = {**self.store.stats(), "headlines_seen_before": seen,
                            "headlines_new": len(new_heads), "backlog": backlog}
         state["circular_financing"] = self.graph.detect_circular_financing()
+        state["integrity_flags"] = getattr(self, "_integrity", {})
+        try:                    # standing stress report (risk-committee view)
+            from ai_investing.brain.stress import run_stress
+            state["stress"] = run_stress(self.graph, top_n=5)
+        except Exception:
+            pass
         self.store.record_node_history(state["ts"], self.field.activations)
 
         # the adviser reads the fresh field — every cycle, zero LLM cost
@@ -130,7 +160,9 @@ class Brain:
         except Exception:
             state["advice"] = None
 
-        self._persist(state, added_edges)
+        self._persist(state, added_edges + len(deal_report.get("nodes_created", []))
+                      + len(deal_report.get("edges_added", []))
+                      + len(deal_report.get("edges_corroborated", [])))
         return state
 
     def simulate(self, headline: str) -> dict:
@@ -218,6 +250,14 @@ class Brain:
         except (OSError, json.JSONDecodeError):
             return {}
         from ai_investing.brain.bubble import _valuation_stretch
+        # multi-year trajectory (fundamentals_history.py): the SNAPSHOT says
+        # cheap/expensive today; the trajectory says whether the business is
+        # compounding or decaying — both belong in the resting level.
+        try:
+            from ai_investing.data.fundamentals_history import health_scores
+            health = health_scores(self.settings)
+        except Exception:
+            health = {}
         a: dict[str, float] = {}
         for sym, f in fund.items():
             node = self.graph.node_for_symbol(sym)
@@ -229,8 +269,74 @@ class Brain:
                 v += 0.2                       # cheap and actually profitable
             if (de and de > 250) or (margin is not None and margin < 0):
                 v -= 0.15                      # balance-sheet / profitability stress
+            v += 0.15 * health.get(sym, 0.0)   # multi-year FCF/debt/revenue trend
             if abs(v) >= 0.05:
                 a[node.id] = round(max(-0.4, min(0.4, v)), 4)
+        # trajectory-only anchors for symbols the snapshot cache hasn't covered
+        for sym, h in health.items():
+            node = self.graph.node_for_symbol(sym)
+            if node is None or node.id in a or sym in fund or abs(h) < 0.35:
+                continue
+            a[node.id] = round(max(-0.4, min(0.4, 0.15 * h)), 4)
+        # circular-financing haircut: participants in a detected money
+        # round-trip get a STANDING discount — their statements (and therefore
+        # the snapshot/trajectory scores above) are flattered by revenue that
+        # is partly the same dollar counted at every stop of the circle.
+        try:
+            haircut: dict[str, float] = {}
+            for lp in self.graph.detect_circular_financing():
+                sev = float(lp.get("severity", 0.3))
+                for nid in lp.get("participants", []):
+                    # severity-scaled: a circle is only as fake as its thinnest leg
+                    haircut[nid] = haircut.get(nid, 0.0) + 0.05 + 0.25 * sev
+            for nid, h in haircut.items():
+                if self.graph.nodes.get(nid) is None:
+                    continue
+                a[nid] = round(max(-0.4, a.get(nid, 0.0) - min(0.25, h)), 4)
+        except Exception:
+            pass
+        # undervaluation: cheap+honest+resilient names get a positive resting
+        # pull (value_scanner vetoes traps via the integrity/accrual layers;
+        # the trend gates still decide WHEN — this only says WHAT is mispriced)
+        try:
+            from ai_investing.data.value_scanner import stock_value_scores
+            for sym, r in stock_value_scores(self.settings).items():
+                if r["score"] <= 0:
+                    continue
+                node = self.graph.node_for_symbol(sym)
+                if node is not None:
+                    a[node.id] = round(max(-0.4, min(0.4, a.get(node.id, 0.0)
+                                                     + 0.25 * r["score"])), 4)
+        except Exception:
+            pass
+        # expectations & ownership tilts (cache-only reads; refreshed by their
+        # own CLIs/cycles): revision momentum + earnings surprises, and insider
+        # cluster-buys / crowded shorts — small weights, the banker's edges
+        try:
+            from ai_investing.data.estimates import expectation_scores
+            from ai_investing.data.ownership import ownership_scores
+            for sym, sc in expectation_scores(self.settings).items():
+                node = self.graph.node_for_symbol(sym)
+                if node is not None and abs(sc) >= 0.1:
+                    a[node.id] = round(max(-0.4, min(0.4, a.get(node.id, 0.0) + 0.1 * sc)), 4)
+            for sym, sc in ownership_scores(self.settings).items():
+                node = self.graph.node_for_symbol(sym)
+                if node is not None and abs(sc) >= 0.1:
+                    a[node.id] = round(max(-0.4, min(0.4, a.get(node.id, 0.0) + 0.1 * sc)), 4)
+        except Exception:
+            pass
+        # integrity flags OVERRIDE good numbers: when the books themselves are
+        # in doubt (auditor walked, withdrawals halted, fraud probe, or a novel
+        # mechanism the digester judged), the fundamentals above are exactly
+        # what can't be trusted — force the resting level negative.
+        try:
+            from ai_investing.brain.integrity import current_flags
+            for nid, f in current_flags(self.settings).items():
+                if self.graph.nodes.get(nid) is None or f["severity"] < 0.15:
+                    continue
+                a[nid] = round(min(a.get(nid, 0.0), -0.4 * f["severity"]), 4)
+        except Exception:
+            pass
         return a
 
     def _crypto_anchors(self) -> dict[str, float]:
@@ -259,6 +365,18 @@ class Brain:
                     v += 0.12 if fng <= 20 else -0.12          # contrarian emotion
                 if abs(v) >= 0.05:
                     a[node.id] = round(max(-0.3, min(0.3, v)), 4)
+            # value-zone tilt: deep below long-run trend + usage/price
+            # divergence + extreme fear (see value_scanner) — capped small;
+            # the winter gate still times the entry
+            try:
+                from ai_investing.data.value_scanner import crypto_value_scores
+                for sym, r in crypto_value_scores(self.settings).items():
+                    node = self.graph.node_for_symbol(sym)
+                    if node is not None and r["score"] > 0:
+                        a[node.id] = round(max(-0.3, min(0.3, a.get(node.id, 0.0)
+                                                         + 0.2 * r["score"])), 4)
+            except Exception:
+                pass
             return a
         except Exception:
             return {}

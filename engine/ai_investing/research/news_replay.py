@@ -48,7 +48,11 @@ DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 ARCHIVE = DATA_DIR / "news_archive.jsonl"      # date -> headlines (GDELT)
 WIKI_ARCHIVE = DATA_DIR / "news_archive_wiki.jsonl"  # fallback: Wikipedia Current Events
 IMPULSES = DATA_DIR / "news_impulses.jsonl"    # date -> node impulses (LLM-digested)
-START, END = date(2023, 7, 24), date(2026, 7, 24)
+# Backfill window — overridable so this machine can rebuild history without
+# the Guardian archive (e.g. BACKFILL_START=2017-01-01 for the GDELT era).
+import os as _os
+START = date.fromisoformat(_os.environ.get("BACKFILL_START", "2023-07-24"))
+END = date.fromisoformat(_os.environ.get("BACKFILL_END", "2026-07-24"))
 
 GDELT_QUERY = ('("federal reserve" OR inflation OR tariff OR OPEC OR semiconductor '
                'OR china economy OR "interest rate" OR "stock market" OR crude oil '

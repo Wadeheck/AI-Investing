@@ -135,6 +135,28 @@ Return ONLY JSON:
       "proposed_edges": [  // OPTIONAL: only when headlines reveal a relationship the node list can't express
         {{"src": "<node id>", "dst": "<node id>", "type": "influences", "sign": <1|-1>,
           "weight": <0..1>, "why": "<short>"}}
+      ],
+      "integrity": [  // OPTIONAL but CRITICAL: any story casting doubt on whether an
+                      // entity's reported numbers, assets, returns, or collateral are
+                      // REAL — by ANY mechanism, including ones you've never seen named
+                      // before. History: auditors resigning, withdrawal halts,
+                      // short-seller exposés, "guaranteed returns", repackaged risk sold
+                      // as safe, self-dealing collateral. Judge the MECHANISM freshly:
+                      // if the honest version of this story requires trusting numbers
+                      // someone has an incentive and opportunity to fake, flag it.
+        {{"company": "<entity name as stated>", "severity": <0..1, how load-bearing the
+          doubt is: auditor walking ~0.9, anonymous allegation ~0.3>,
+          "mechanism": "<one line: HOW the dishonesty works, in your own words>"}}
+      ],
+      "deals": [  // OPTIONAL: any MATERIAL corporate transaction the headline states,
+                  // BOTH parties named as plain company names (not node ids — private
+                  // companies count and matter most): equity investments, multi-year
+                  // supply/compute contracts, vendor financing, acquisitions.
+        {{"party_a": "<company doing the investing/supplying/acquiring>",
+          "party_b": "<the counterparty>",
+          "kind": "invests_in|supplies|acquires",
+          "value_usd_bn": <stated deal size in $B, or null>,
+          "why": "<short>"}}
       ]
     }}
   ]
@@ -148,7 +170,14 @@ CIRCULAR-FINANCING RADAR: when a company INVESTS IN or LENDS TO its own customer
 agreements, that revenue is partly the same dollar counted twice. Tag such events
 with node "ai_circularity" (polarity +1 = more round-tripping revealed), type
 "market_flow", and set manipulation_likelihood >= 0.4 — the deal is real but the
-implied growth is inflated."""
+implied growth is inflated.
+
+DEALS: separately from event tagging, ALWAYS record material corporate
+transactions in the `deals` field — one record per investment/supply/acquisition
+with both parties' plain names and the stated size. You do NOT need to judge
+circularity there: the relationship graph accumulates every deal leg and detects
+money circles structurally, including multi-party circles no single headline
+reveals. Missing a deal record is losing a leg of a future circle."""
 
 
 def extract_events(headlines: list[dict], graph, settings) -> list[dict]:

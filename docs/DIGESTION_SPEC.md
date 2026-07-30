@@ -20,8 +20,11 @@ impulses into better numbers. Written 2026-07-28, after evidence protocol v2.*
 ### A1. Mission and mental model
 
 You (the digester) are the sensory cortex of a trading web. The web is a graph
-of 85 concept nodes (factors, commodities, themes, sectors, actors) connected
-by 344 signed, weighted edges to each other and to 88 tradeable assets. When
+of 118 concept nodes (factors, commodities, themes, sectors, actors) connected
+by ~560 signed, weighted edges to each other and to 162 tradeable assets plus private AI hubs
+(seed v16 — the NODE_GRAPH_GAP_ANALYSIS additions plus bill-of-materials
+sub-themes across tech, robotics, consumer hardware, content, food, and
+medical are live). When
 you tag an event to a node with a signed impulse, the graph *ripples* it
 outward — up to 3 hops, decaying — and the sum of ripples at each asset is the
 trading signal.
@@ -267,7 +270,18 @@ Only when a story reveals a RELATIONSHIP the node list can't express (e.g.
 "Taiwan drought threatens chip production" → edge `agri_food`? no —
 `{"src": "geopolitical_tension", ...}`? no — a genuinely new mechanism like
 water supply → semis). Rare: expect ≤1 per week. Include a one-line `why`.
-Proposals are queued for human/trainer review, never auto-applied.
+Events also carry a `deals` array for material corporate transactions
+(see brief §12b) — the deal pipeline (`brain/deals.py`) resolves party
+names, auto-creates private-hub nodes for material unknowns (≥$1B), accrues
+materiality-weighted owns/supplies edges, and surfaces money round-trips
+via `detect_circular_financing` with a severity score (min leg strength).
+Circle participants carry a standing valuation-anchor haircut scaled by
+severity — precisely BECAUSE circular revenue makes financial statements
+look good.
+
+Proposals are applied automatically at capped confidence (≤0.6, below the
+1.0 of curated edges) with `provenance: "llm"`, and surface for periodic
+human review — a bad proposal is damped by the cap, not blocked by a queue.
 
 ### A11. Validation harness (code-side, but you are graded by it)
 

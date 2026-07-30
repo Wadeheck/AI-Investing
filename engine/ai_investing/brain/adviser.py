@@ -110,8 +110,12 @@ def advise(settings, brain, log: bool = True) -> dict:
     # partly the same dollar twice — never take that growth story at face value
     in_loop: set[str] = set()
     for loop in graph.detect_circular_financing():
-        in_loop.add(loop["investor"])
-        in_loop.add(loop["counterparty"])
+        in_loop.update(loop.get("participants") or [loop["investor"], loop["counterparty"]])
+    try:
+        from ai_investing.brain.integrity import current_flags
+        integrity_flags = current_flags(settings)
+    except Exception:
+        integrity_flags = {}
 
     # learned trust: symbols where past field-driven calls kept missing get
     # listened to less (scorecard EMA, r ∈ [0.5, 1.4]); bubble froth haircuts longs
@@ -145,6 +149,11 @@ def advise(settings, brain, log: bool = True) -> dict:
         circular = node.id in in_loop
         if circular and score > 0:
             score *= 0.6    # 40% haircut on long conviction inside a financing circle
+        # integrity flags: never recommend a FRESH long on an asset whose books
+        # are in doubt — the upside case rests on numbers that may be fake
+        integ = integrity_flags.get(node.id)
+        if integ and score > 0:
+            score *= max(0.0, 1.0 - 1.5 * integ["severity"])   # sev>=0.67 zeroes the long
         b = froth.get(sym, 0.0)
         if b >= 0.4 and score > 0:
             score *= max(0.4, 1.0 - 0.6 * b)   # don't chase what already smells like a bubble

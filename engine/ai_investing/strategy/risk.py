@@ -103,6 +103,17 @@ class RiskManager:
         min_trade = 0.005 * equity
         orders: list[Order] = []
 
+        # structural cluster exposure (graph themes + supply chains): six AI-BOM
+        # tickers are one bet — cap the bet, not just each ticker
+        try:
+            from ai_investing.strategy.clusters import cluster_gross, clusters_for
+            notionals = {k: p.qty * prices.get(k, 0.0)
+                         for k, p in portfolio.positions.items() if abs(p.qty) > 1e-9}
+            cl_gross = cluster_gross(notionals)
+        except Exception:
+            clusters_for, cl_gross = (lambda s: frozenset()), {}
+        cluster_cap = cfg.max_cluster_exposure * equity * derisk
+
         for d in sorted(decisions, key=lambda x: abs(x.score) * x.confidence, reverse=True):
             key = d.asset.key
             px = prices.get(key)
@@ -139,14 +150,45 @@ class RiskManager:
             if opening_new and len(open_keys) >= cfg.max_open_positions:
                 continue
 
-            if abs(cur_notional + delta) > abs(cur_notional) and gross + abs(delta) > gross_cap:
+            # scheduled-event throttle: fresh risk shrinks into earnings/FOMC
+            # (exits and stops are never touched by this)
+            if opening_new and cfg.event_derisk:
+                try:
+                    from ai_investing.data.calendar_events import entry_risk_multiplier
+                    ev_mult, ev_why = entry_risk_multiplier(
+                        d.asset.symbol, window_days=cfg.earnings_window_days)
+                    if ev_mult < 1.0:
+                        delta *= ev_mult
+                        d.rationale = (f"[{ev_why}: sized x{ev_mult:.1f}] " + d.rationale)[:200]
+                        if abs(delta) < min_trade:
+                            continue
+                except Exception:
+                    pass
+
+            increasing = abs(cur_notional + delta) > abs(cur_notional)
+            if increasing and gross + abs(delta) > gross_cap:
                 delta = max(0.0, gross_cap - gross) * (1 if delta > 0 else -1)
                 if abs(delta) < min_trade:
                     continue
 
+            # cluster cap: adding to a bet the book is already full of gets
+            # trimmed to whatever headroom the most-constrained cluster has
+            if increasing:
+                syms_clusters = clusters_for(d.asset.symbol)
+                if syms_clusters:
+                    headroom = min((cluster_cap - cl_gross.get(c, 0.0) for c in syms_clusters),
+                                   default=float("inf"))
+                    if headroom < abs(delta):
+                        delta = max(0.0, headroom) * (1 if delta > 0 else -1)
+                        if abs(delta) < min_trade:
+                            continue
+                        d.rationale = ("[cluster cap] " + d.rationale)[:200]
+
             side = Side.BUY if delta > 0 else Side.SELL
             orders.append(Order(d.asset, side, abs(delta) / px, reason=d.rationale[:140]))
             gross += abs(delta)
+            for c in clusters_for(d.asset.symbol):
+                cl_gross[c] = cl_gross.get(c, 0.0) + abs(delta)
             if opening_new:
                 open_keys.add(key)
 

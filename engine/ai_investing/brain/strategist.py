@@ -223,7 +223,16 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None,
             # KEPT: previous wording survives verbatim — no silent rewrites
             t = dict(prev_theses[pid])
         else:
+            # tradable universe = watchlists ∪ every asset in the knowledge graph
+            # (the web can only veto/support symbols it actually knows about)
             valid = set(settings.stock_watchlist) | set(settings.crypto_watchlist)
+            try:
+                from ai_investing.brain.graph import KnowledgeGraph
+                g = KnowledgeGraph.seeded()
+                valid |= {n.symbol.upper() for n in g.nodes.values()
+                          if n.type == "asset" and n.symbol}
+            except Exception:
+                pass
             t = {"id": pid, "title": str(p.get("title", pid))[:80],
                  "stance": p.get("stance", "long"),
                  "thesis": str(p.get("thesis", ""))[:500],

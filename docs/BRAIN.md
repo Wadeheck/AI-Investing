@@ -21,7 +21,7 @@ Quick map from vision to code:
 
 | Vision | Where it lives |
 |---|---|
-| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (62 nodes, 85 curated edges; factor nodes carry an `equilibrium` note) |
+| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (283 nodes, 562 curated edges as of seed v17; factor nodes carry an `equilibrium` note) |
 | News shocks a node and ripples to the others | `KnowledgeGraph.propagate()` — impulse × sign × weight × per-hop decay, with a full traversal trace |
 | Multi-market (Longbridge, not just US) | Asset nodes across US / HK / CN / SG / crypto; `MacroLinkageSignal` bridges Longbridge symbols (700.HK) to canonical ones (0700.HK) |
 | Noise vs real information (manipulation filter) | `brain/events.py` credibility score: source trust × corroboration × manipulation-likelihood × hype-language; sub-threshold events are labeled NOISE, shown but never propagated or traded |

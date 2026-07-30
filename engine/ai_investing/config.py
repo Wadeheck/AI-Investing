@@ -79,6 +79,13 @@ class RiskConfig:
     atr_take_mult: float = field(default_factory=lambda: _get_float("RISK_ATR_TAKE_MULT", 6.0))
     # portfolio-level risk
     corr_penalty: float = field(default_factory=lambda: _get_float("RISK_CORR_PENALTY", 0.5))
+    # structural theme-cluster cap: max gross exposure to ONE graph cluster
+    # (AI-capex, china-consumer, ...) as a fraction of equity. Correlation is
+    # backward-looking; this limits the BET even when tickers look uncorrelated.
+    max_cluster_exposure: float = field(default_factory=lambda: _get_float("RISK_MAX_CLUSTER_EXPOSURE", 0.35))
+    # scheduled-event throttle for NEW entries (earnings window / FOMC days)
+    event_derisk: bool = field(default_factory=lambda: _get_bool("RISK_EVENT_DERISK", True))
+    earnings_window_days: int = field(default_factory=lambda: _get_int("RISK_EARNINGS_WINDOW_DAYS", 2))
     portfolio_vol_target: float = field(default_factory=lambda: _get_float("RISK_PORTFOLIO_VOL_TARGET", 0.02))
     dd_derisk_scale: float = field(default_factory=lambda: _get_float("RISK_DD_DERISK_SCALE", 2.0))
     dd_derisk_floor: float = field(default_factory=lambda: _get_float("RISK_DD_DERISK_FLOOR", 0.3))
@@ -230,10 +237,25 @@ class Settings:
         "https://www.koreaherald.com/rss/newsAll",
         "https://www.globaltimes.cn/rss/outbrain.xml",
         "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+        # Asia expansion (probed working 2026-07-30): KR/JP/CN/ID/TH/VN/IN/SG
+        "https://en.yna.co.kr/RSS/news.xml",                      # Yonhap (KR)
+        "https://www.kedglobal.com/rss",                          # Korea Economic Daily (KR)
+        "https://asia.nikkei.com/rss/feed/nar",                   # Nikkei Asia (JP/pan-Asia)
+        "https://mainichi.jp/rss/etc/english_latest.rss",         # Mainichi EN (JP)
+        "http://www.xinhuanet.com/english/rss/businessrss.xml",   # Xinhua business (CN)
+        "https://www.chinadaily.com.cn/rss/bizchina_rss.xml",     # China Daily biz (CN)
+        "https://en.antaranews.com/rss/news.xml",                 # Antara (ID)
+        "https://voi.id/en/rss",                                  # VOI (ID)
+        "https://www.bangkokpost.com/rss/data/business.xml",      # Bangkok Post biz (TH)
+        "https://e.vnexpress.net/rss/business.rss",               # VnExpress biz (VN)
+        "https://www.livemint.com/rss/markets",                   # Mint markets (IN)
+        "https://www.thehindubusinessline.com/markets/feeder/default.rss",  # Hindu BusinessLine (IN)
+        "https://www.straitstimes.com/news/business/rss.xml",     # Straits Times biz (SG)
         # official / central banks
         "https://www.federalreserve.gov/feeds/press_all.xml",
         "https://www.boj.or.jp/en/rss/whatsnew.xml",
         "https://www.ecb.europa.eu/rss/press.html",
+        "https://www.bankofengland.co.uk/rss/news",   # BoE — feeds the boe_rate/uk_* nodes (seed v12)
         # crypto + energy + commodities
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://oilprice.com/rss/main",

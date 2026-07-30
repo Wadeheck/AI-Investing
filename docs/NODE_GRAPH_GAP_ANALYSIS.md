@@ -11,7 +11,26 @@ those files before implementing, in case the schema has since evolved.*
 
 ## TL;DR — what to actually do next
 
-**Nothing proposed in this document has been implemented yet.**
+> **IMPLEMENTED 2026-07-29 (seed v12).** All 16 numbered proposals below —
+> including the BUILDING-status `travel_leisure` (#4) and `uk_growth` (#14),
+> per Part 1's "all must-build" rule — plus the `solar` edge strengthening
+> (#8) and 20 candidate assets (the 17 ADR names from the Asset-Coverage
+> Gap section, plus `amzn`, `boeing` (BA), `airbus` (AIR.PA)) are now live
+> in `seed.py` under `SEED_VERSION = 12`, with `member_of` wiring.
+> Ørsted/Vattenfall/Siemens Energy and the LSE-listed utilities remain
+> deliberately omitted pending the data-provider ADR check.
+> `SONNET_DIGEST_BRIEF.md` §7 now lists all 98 taggable nodes with the
+> disambiguation rules (political_stability vs geopolitical_tension,
+> boe_rate vs credit_conditions, freight_logistics vs shipping_costs,
+> eurozone_political_risk's inverted sign), and §12/§A10 now describe the
+> real capped-confidence auto-apply behavior of `proposed_edges` (docs were
+> updated to match the code, rather than building a review queue).
+> The three 2026 watch items (disaster/humanitarian, `boj_rate`,
+> `aluminium_price`) remain unimplemented by design — still below the
+> promotion bar. The paragraphs below are preserved as the pre-v12 record.
+
+**Nothing proposed in this document had been implemented as of 2026-07-29
+morning (superseded — see box above).**
 `seed.py`'s `SEED_VERSION` is still `11` and none of the 16 node ids
 proposed below (or the 3 newer candidates flagged near the end of the
 Digestion Log) exist in the live graph, as of a direct grep re-run on
@@ -1049,9 +1068,11 @@ evidence trail as of 2024-05-01, but still one spec-writing pass away
 from READY), and the Red Sea/shipping-security question (still evolving)
 genuinely benefit from one more pass before finalizing.
 
-**Status check as of 2026-07-29 (confirmed by direct grep of the live
-`seed.py`, `SEED_VERSION` still `11`): none of the above 16 proposals have
-actually been implemented**, despite years of digestion piling up further
+**Status check as of 2026-07-29 evening: ALL 16 proposals above are now
+implemented in `seed.py` as `SEED_VERSION = 12`** (see the box at the top
+of the TL;DR). The paragraph below is preserved as the pre-implementation
+record. *(Historical text: as of the 2026-07-29 morning grep, `SEED_VERSION`
+was still `11` and none of the 16 proposals had been implemented)*, despite years of digestion piling up further
 recurrence evidence underneath several of them since this table was last
 updated (2024-07-10). `us_growth` (#13) and `uk_growth` (#14) in
 particular kept surfacing in live digestion as if they already existed —
