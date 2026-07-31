@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import GraphField, { TYPE_COLOR } from "./GraphField";
-import type { Graph, TraceStep } from "./types";
+import GraphField, { TYPE_COLOR, EMO_COLOR } from "./GraphField";
+import type { Graph, TraceStep, NodeEmotion } from "./types";
 
 /* ---------- types mirroring the engine's JSON ---------- */
 type BrainEvent = {
@@ -39,6 +39,7 @@ type BrainState = {
   pending_effects?: Pending[];               // τ-queue: effects landing later
   delayed_preview?: Pending[];               // simulation: what WOULD land later
   centrality?: Record<string, number>;       // systemic importance, max=1
+  emotion_field?: Record<string, NodeEmotion>; // per-node fear/greed charges
 };
 
 /* ---------- small UI bits ---------- */
@@ -150,6 +151,10 @@ export default function BrainPage() {
     (a, b) => Math.abs(b[1].impact) - Math.abs(a[1].impact)
   );
   const pendingRows: Pending[] = sim ? sim.delayed_preview ?? [] : live?.pending_effects ?? [];
+  const emotionHotspots = Object.entries((sim?.emotion_field ?? live?.emotion_field) ?? {})
+    .filter(([, ch]) => Math.max(ch.fear ?? 0, ch.greed ?? 0) > 0.03)
+    .sort((a, b) => Math.max(b[1].fear ?? 0, b[1].greed ?? 0) - Math.max(a[1].fear ?? 0, a[1].greed ?? 0))
+    .slice(0, 6);
 
   return (
     <div className="wrap wrap-wide">
@@ -190,12 +195,21 @@ export default function BrainPage() {
             selected={selected}
             onSelect={setSelected}
             fieldTs={active?.ts}
+            impulses={active?.impulses}
+            emotions={sim?.emotion_field ?? live?.emotion_field}
+            pending={pendingRows}
           />
           <div className="legend">
             {Object.entries(TYPE_COLOR).filter(([t]) => t !== "sector").map(([t, c]) => (
               <span key={t}><i style={{ background: c }} />{t}</span>
             ))}
-            <span><i className="dash" />LLM-proposed edge</span>
+            <span><i style={{ background: "var(--pos)" }} />+charge</span>
+            <span><i style={{ background: "var(--neg)" }} />−charge</span>
+            <span><i style={{ background: EMO_COLOR.fear }} />fear</span>
+            <span><i style={{ background: EMO_COLOR.greed }} />greed</span>
+            <span><i className="dash" />LLM edge</span>
+            <span><i className="tau" />τ-lag edge</span>
+            <span><i className="gate" />regime gate</span>
           </div>
         </div>
 
@@ -226,6 +240,21 @@ export default function BrainPage() {
               <Meter label="confidence" value={reg.mood_confidence} color="var(--series-1)" />
               <Meter label="caution" value={reg.mood_caution} color="var(--warn)" />
               <div className="sub">conviction multiplier ×{(active?.conviction_multiplier ?? 1).toFixed(2)}</div>
+              {emotionHotspots.length > 0 && (
+                <>
+                  <div className="sub" style={{ marginTop: 8 }}>where the crowd feels it:</div>
+                  {emotionHotspots.map(([nid, ch]) => (
+                    <div key={nid} className="arow">
+                      <button className="linklike" onClick={() => setSelected(nid)}>{nid}</button>
+                      <span className="sub">
+                        {(ch.fear ?? 0) > 0.03 && <b style={{ color: EMO_COLOR.fear }}>fear {(ch.fear! * 100).toFixed(0)}%</b>}
+                        {(ch.fear ?? 0) > 0.03 && (ch.greed ?? 0) > 0.03 && " · "}
+                        {(ch.greed ?? 0) > 0.03 && <b style={{ color: EMO_COLOR.greed }}>greed {(ch.greed! * 100).toFixed(0)}%</b>}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
           {fired.length > 0 && (

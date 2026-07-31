@@ -3,27 +3,50 @@
 /*
  * GraphField — canvas-rendered interactive knowledge-graph.
  *
+ * Renders the engine's actual field mathematics, not just the wiring:
+ *   - fluid activation field: each charged node radiates a soft blob into a
+ *     low-res additive layer (the persistent field of the master equation
+ *     dX/dt = Σ w·X(t−τ) − damping), so charge reads as a continuous fluid
+ *     glow, breathing at the node type's half-life (factor 96h … asset 24h)
+ *   - per-node emotion field: fear (violet) / greed (amber) auras, with
+ *     assets inheriting their themes' emotion at 0.7 — matching emotion_field.py
+ *   - τ-pipeline comets: delayed effects still in flight crawl along their
+ *     via→destination path with a due-date label
+ *   - impulse epicenters: this cycle's event impulses ring outward
+ *   - edges carry weight×confidence (width/alpha), τ-lag (dot-dash), regime
+ *     gates (diamond marker), and hot trace edges flow directionally with
+ *     particle speed/size scaled by contribution and hop
+ *
  * Interactions: scroll/pinch zoom (to cursor), drag pan, shift-drag rotate,
  * drag a node to reposition it (live physics), click to focus, double-click
  * to zoom, search with fly-to, type filter chips, hover tooltips.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Graph, GNode, GEdge, TraceStep } from "./types";
+import type { Graph, GNode, GEdge, TraceStep, NodeEmotion, PendingEffect } from "./types";
 
 export const TYPE_COLOR: Record<string, string> = {
   factor: "#8a63d2", commodity: "#b8860b", actor: "#d05c8c",
   theme: "#2a78d6", sector: "#2a78d6", asset: "#1baf7a",
 };
+export const EMO_COLOR = { fear: "#8b5cf6", greed: "#e0a53c" };
 const TYPE_R: Record<string, number> = {
   factor: 11, commodity: 10, actor: 10, theme: 9, sector: 9, asset: 7,
 };
 const TYPE_RING: Record<string, number> = {
   factor: 150, commodity: 280, actor: 280, theme: 420, sector: 420, asset: 620,
 };
+// activation half-lives by node type (hours) — mirror field.py; drives the
+// breathing period of a charged node's glow (long memory = slow breath)
+const TYPE_HL: Record<string, number> = {
+  factor: 96, commodity: 72, actor: 48, theme: 48, sector: 48, asset: 24,
+};
+const THEME_INHERIT = 0.7; // asset inherits theme emotion — emotion_field.py
 
-type SimNode = GNode & { x: number; y: number; vx: number; vy: number };
+type SimNode = GNode & { x: number; y: number; vx: number; vy: number; phase: number };
 type Cam = { x: number; y: number; k: number; theta: number };
+type HotEdge = { c: number; hop: number; rev: boolean; ant: boolean };
+type PendingDraw = { via: string; node: string; contribution: number; days: number | null };
 
 type Props = {
   graph: Graph | null;
@@ -33,21 +56,37 @@ type Props = {
   selected: string | null;
   onSelect: (id: string | null) => void;
   fieldTs?: string;
+  impulses?: Record<string, number>;
+  emotions?: Record<string, NodeEmotion>;
+  pending?: PendingEffect[];
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-export default function GraphField({ graph, impacts, centrality, trace, selected, onSelect, fieldTs }: Props) {
+/** hex -> rgba with alpha; falls back to the raw color if not parseable */
+const hexA = (hex: string, a: number) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return a <= 0.01 ? "transparent" : hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+};
+
+export default function GraphField({
+  graph, impacts, centrality, trace, selected, onSelect, fieldTs,
+  impulses, emotions, pending,
+}: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
+  const fieldLayerRef = useRef<HTMLCanvasElement | null>(null);
 
   /* ----- simulation state (refs: read by the rAF loop) ----- */
   const nodesRef = useRef<SimNode[]>([]);
   const byIdRef = useRef<Map<string, SimNode>>(new Map());
   const edgesRef = useRef<GEdge[]>([]);
   const adjRef = useRef<Map<string, Set<string>>>(new Map());
+  const parentsRef = useRef<Map<string, string[]>>(new Map()); // asset -> member_of themes
   const alphaRef = useRef(0);
 
   /* ----- camera / gesture state ----- */
@@ -70,12 +109,18 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
   const liveRef = useRef<{
     impacts: Record<string, number>;
     centrality: Record<string, number>;
-    hot: Map<string, number>;
+    hot: Map<string, HotEdge>;
     selected: string | null;
     neighbors: Set<string>;
     hover: string | null;
     hidden: Set<string>;
-  }>({ impacts: {}, centrality: {}, hot: new Map(), selected: null, neighbors: new Set(), hover: null, hidden: new Set() });
+    impulses: Record<string, number>;
+    emotions: Record<string, { fear: number; greed: number }>;
+    pending: PendingDraw[];
+  }>({
+    impacts: {}, centrality: {}, hot: new Map(), selected: null, neighbors: new Set(),
+    hover: null, hidden: new Set(), impulses: {}, emotions: {}, pending: [],
+  });
 
   const themeRef = useRef<Record<string, string>>({});
 
@@ -101,6 +146,7 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
       axis: get("--axis") || "#383835",
       pos: get("--pos") || "#0ca30c",
       neg: get("--neg") || "#e66767",
+      warn: get("--warn") || "#d9a13b",
     };
   }, []);
   useEffect(() => {
@@ -117,15 +163,16 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
     const prev = byIdRef.current;
     const n = graph.nodes.length;
     const nodes: SimNode[] = graph.nodes.map((nd, i) => {
+      const phase = ((i * 2654435761) % 1000) / 1000 * Math.PI * 2;
       const old = prev.get(nd.id);
-      if (old) return { ...nd, x: old.x, y: old.y, vx: 0, vy: 0 };
+      if (old) return { ...nd, x: old.x, y: old.y, vx: 0, vy: 0, phase };
       const angle = (2 * Math.PI * i) / Math.max(1, n) + (i % 3) * 0.7;
       const ring = TYPE_RING[nd.type] ?? 420;
       return {
         ...nd,
         x: ring * Math.cos(angle) + ((i * 37) % 60) - 30,
         y: ring * Math.sin(angle) + ((i * 53) % 60) - 30,
-        vx: 0, vy: 0,
+        vx: 0, vy: 0, phase,
       };
     });
     nodesRef.current = nodes;
@@ -133,13 +180,19 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
     byIdRef.current = map;
     edgesRef.current = graph.edges.filter((e) => map.has(e.src) && map.has(e.dst));
     const adj = new Map<string, Set<string>>();
+    const parents = new Map<string, string[]>();
     for (const e of edgesRef.current) {
       if (!adj.has(e.src)) adj.set(e.src, new Set());
       if (!adj.has(e.dst)) adj.set(e.dst, new Set());
       adj.get(e.src)!.add(e.dst);
       adj.get(e.dst)!.add(e.src);
+      if (e.type === "member_of") {
+        if (!parents.has(e.src)) parents.set(e.src, []);
+        parents.get(e.src)!.push(e.dst);
+      }
     }
     adjRef.current = adj;
+    parentsRef.current = parents;
     alphaRef.current = 1;
     // fit once the layout has had a moment to breathe, again once it settles
     const t1 = setTimeout(() => { if (!interactedRef.current) fitView(true); }, 900);
@@ -150,18 +203,53 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
 
   /* ---------- keep live data in the loop's refs ---------- */
   useEffect(() => {
-    const hot = new Map<string, number>();
+    // hot trace edges keyed in both orientations; `rev` remembers true flow
+    // direction so particles run the way the shock actually travelled
+    const hot = new Map<string, HotEdge>();
     for (const t of trace) {
-      hot.set(`${t.from}|${t.to}`, t.contribution);
-      hot.set(`${t.to}|${t.from}`, t.contribution);
+      const h: HotEdge = { c: t.contribution, hop: t.hop, rev: false, ant: !!t.anticipated };
+      hot.set(`${t.from}|${t.to}`, h);
+      if (!hot.has(`${t.to}|${t.from}`))
+        hot.set(`${t.to}|${t.from}`, { ...h, rev: true });
     }
     const neighbors = new Set<string>();
     if (selected) {
       neighbors.add(selected);
       for (const nb of adjRef.current.get(selected) ?? []) neighbors.add(nb);
     }
-    liveRef.current = { impacts, centrality, hot, selected, neighbors, hover, hidden: hiddenTypes };
-  }, [impacts, centrality, trace, selected, hover, hiddenTypes, graph]);
+    // effective per-node emotion: own charge, or the theme's at 0.7
+    // (panic tagged on `china_tech` IS panic about Tencent — emotion_field.py)
+    const eff: Record<string, { fear: number; greed: number }> = {};
+    for (const [id, ch] of Object.entries(emotions ?? {})) {
+      const fear = ch.fear ?? 0, greed = ch.greed ?? 0;
+      if (fear > 0.02 || greed > 0.02) eff[id] = { fear, greed };
+    }
+    for (const [aid, ps] of parentsRef.current) {
+      for (const pid of ps) {
+        const parent = (emotions ?? {})[pid];
+        if (!parent) continue;
+        const cur = eff[aid] ?? (eff[aid] = { fear: 0, greed: 0 });
+        cur.fear = Math.max(cur.fear, THEME_INHERIT * (parent.fear ?? 0));
+        cur.greed = Math.max(cur.greed, THEME_INHERIT * (parent.greed ?? 0));
+      }
+    }
+    // τ-queue effects with a known via-path and both endpoints in the graph
+    const nowMs = Date.now();
+    const pend: PendingDraw[] = [];
+    for (const p of pending ?? []) {
+      if (!p.via || !byIdRef.current.has(p.via) || !byIdRef.current.has(p.node)) continue;
+      let days: number | null = p.delay_days ?? null;
+      if (p.due) {
+        const t = Date.parse(p.due);
+        if (!Number.isNaN(t)) days = Math.max(0, (t - nowMs) / 86400000);
+      }
+      pend.push({ via: p.via, node: p.node, contribution: p.contribution, days });
+    }
+    liveRef.current = {
+      impacts, centrality, hot, selected, neighbors, hover, hidden: hiddenTypes,
+      impulses: impulses ?? {}, emotions: eff, pending: pend.slice(0, 24),
+    };
+  }, [impacts, centrality, trace, selected, hover, hiddenTypes, graph, impulses, emotions, pending]);
 
   /* ---------- camera helpers ---------- */
   const screenFromWorld = (wx: number, wy: number) => {
@@ -270,7 +358,11 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
       const a = byIdRef.current.get(e.src)!, b = byIdRef.current.get(e.dst)!;
       const dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-      const f = 0.015 * (d - 175) * (e.weight ?? 0.5);
+      // strong, confident wiring pulls tighter — spring rest length shrinks
+      // with weight×confidence, so the layout itself encodes coupling strength
+      const wc = (e.weight ?? 0.5) * (e.confidence ?? 1);
+      const rest = 210 - 70 * wc;
+      const f = 0.015 * (d - rest) * (e.weight ?? 0.5);
       a.vx += (dx / d) * f; a.vy += (dy / d) * f;
       b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
     }
@@ -321,22 +413,108 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
       const k = cam.k;
       const focus = live.selected !== null;
 
-      // precompute screen positions
+      // precompute screen positions, with a tiny per-node shimmer on charged
+      // nodes (render-space only — the physics layout is untouched) so the
+      // field reads as fluid rather than pinned
       const nodes = nodesRef.current;
       const sp = new Map<string, [number, number]>();
-      for (const n of nodes) sp.set(n.id, screenFromWorld(n.x, n.y));
+      for (const n of nodes) {
+        const p = screenFromWorld(n.x, n.y);
+        const mag = Math.min(1, Math.abs(live.impacts[n.id] ?? 0));
+        if (mag > 0.02) {
+          const a = 1.6 * mag * Math.pow(k, 0.4);
+          p[0] += a * Math.sin(now / 900 + n.phase);
+          p[1] += a * Math.cos(now / 1100 + n.phase * 1.7);
+        }
+        sp.set(n.id, p);
+      }
+
+      /* --- fluid activation + emotion field (low-res additive layer) --- */
+      {
+        let fl = fieldLayerRef.current;
+        if (!fl) { fl = document.createElement("canvas"); fieldLayerRef.current = fl; }
+        const fw = Math.max(2, Math.round(w / 4)), fh = Math.max(2, Math.round(h / 4));
+        if (fl.width !== fw) fl.width = fw;
+        if (fl.height !== fh) fl.height = fh;
+        const f = fl.getContext("2d");
+        if (f) {
+          f.setTransform(1, 0, 0, 1, 0, 0);
+          f.clearRect(0, 0, fw, fh);
+          f.globalCompositeOperation = "lighter";
+          const kf = Math.pow(k, 0.55) / 4;
+          for (const n of nodes) {
+            if (live.hidden.has(n.type)) continue;
+            const p = sp.get(n.id)!;
+            if (p[0] < -160 || p[0] > w + 160 || p[1] < -160 || p[1] > h + 160) continue;
+            const cx = p[0] / 4, cy = p[1] / 4;
+            const imp = live.impacts[n.id] ?? 0;
+            const mag = Math.min(1, Math.abs(imp));
+            // breathing period tied to the node type's half-life: a factor
+            // shock (96h memory) swells slowly; asset news (24h) flickers
+            const hl = TYPE_HL[n.type] ?? 36;
+            const breathe = 1 + 0.14 * Math.sin(now / (450 * Math.sqrt(hl)) + n.phase);
+            if (mag > 0.02) {
+              const R = Math.max(2, (40 + 130 * mag) * kf * breathe);
+              const grad = f.createRadialGradient(cx, cy, 0, cx, cy, R);
+              const col = imp > 0 ? th.pos : th.neg;
+              grad.addColorStop(0, hexA(col, 0.55));
+              grad.addColorStop(0.55, hexA(col, 0.16));
+              grad.addColorStop(1, hexA(col, 0));
+              f.globalAlpha = Math.min(1, 0.25 + mag * 0.75);
+              f.beginPath(); f.arc(cx, cy, R, 0, Math.PI * 2); f.fillStyle = grad; f.fill();
+            }
+            const emo = live.emotions[n.id];
+            if (emo) {
+              // emotion blobs drift slightly off-center — crowd feeling hangs
+              // AROUND a name, it isn't the name itself
+              const drift = 5 * kf * 4;
+              if (emo.fear > 0.03) {
+                const ex = cx + (drift * Math.sin(now / 1700 + n.phase)) / 4;
+                const ey = cy + (drift * Math.cos(now / 1500 + n.phase)) / 4;
+                const R = Math.max(2, (30 + 95 * emo.fear) * kf * breathe);
+                const grad = f.createRadialGradient(ex, ey, 0, ex, ey, R);
+                grad.addColorStop(0, hexA(EMO_COLOR.fear, 0.4));
+                grad.addColorStop(1, hexA(EMO_COLOR.fear, 0));
+                f.globalAlpha = Math.min(1, 0.2 + emo.fear * 0.6);
+                f.beginPath(); f.arc(ex, ey, R, 0, Math.PI * 2); f.fillStyle = grad; f.fill();
+              }
+              if (emo.greed > 0.03) {
+                const ex = cx + (drift * Math.cos(now / 1900 + n.phase)) / 4;
+                const ey = cy + (drift * Math.sin(now / 2100 + n.phase)) / 4;
+                const R = Math.max(2, (30 + 95 * emo.greed) * kf * breathe);
+                const grad = f.createRadialGradient(ex, ey, 0, ex, ey, R);
+                grad.addColorStop(0, hexA(EMO_COLOR.greed, 0.38));
+                grad.addColorStop(1, hexA(EMO_COLOR.greed, 0));
+                f.globalAlpha = Math.min(1, 0.2 + emo.greed * 0.6);
+                f.beginPath(); f.arc(ex, ey, R, 0, Math.PI * 2); f.fillStyle = grad; f.fill();
+              }
+            }
+          }
+          f.globalAlpha = 1;
+          f.globalCompositeOperation = "source-over";
+          ctx.save();
+          ctx.globalAlpha = focus ? 0.28 : 0.55;
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(fl, 0, 0, w, h);
+          ctx.restore();
+        }
+      }
 
       /* --- edges --- */
-      const hotEdges: { a: [number, number]; b: [number, number]; c: number }[] = [];
+      const hotEdges: { a: [number, number]; b: [number, number]; c: number; hop: number; rev: boolean }[] = [];
+      const gateMarks: { x: number; y: number }[] = [];
+      const showDetail = k >= fitKRef.current * 1.5;
       for (const e of edgesRef.current) {
         const a = sp.get(e.src)!, b = sp.get(e.dst)!;
         const hidden = live.hidden.has(byIdRef.current.get(e.src)!.type) || live.hidden.has(byIdRef.current.get(e.dst)!.type);
-        const contribution = live.hot.get(`${e.src}|${e.dst}`);
-        const isHot = contribution !== undefined && !hidden;
+        const hot = live.hot.get(`${e.src}|${e.dst}`);
+        const isHot = hot !== undefined && !hidden;
         const touchesFocus = focus && (e.src === live.selected || e.dst === live.selected);
         const touchesHover = live.hover && (e.src === live.hover || e.dst === live.hover);
-        const wgt = e.weight ?? 0.5;
-        let alpha = 0.18 + wgt * 0.25;
+        // the propagation math weighs every edge by weight × confidence —
+        // so does the ink
+        const wc = (e.weight ?? 0.5) * (e.confidence ?? 1);
+        let alpha = 0.14 + wc * 0.3;
         if (hidden) alpha = 0.03;
         else if (focus && !touchesFocus && !isHot) alpha = 0.05;
         else if (touchesFocus || touchesHover) alpha = 0.75;
@@ -344,30 +522,134 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
         ctx.moveTo(a[0], a[1]);
         ctx.lineTo(b[0], b[1]);
         if (isHot) {
-          ctx.strokeStyle = contribution! >= 0 ? th.pos : th.neg;
-          ctx.globalAlpha = 0.9;
-          ctx.lineWidth = 2.4;
-          hotEdges.push({ a, b, c: contribution! });
+          const cmag = Math.min(1, Math.abs(hot.c) * 2.2);
+          ctx.strokeStyle = hot.c >= 0 ? th.pos : th.neg;
+          ctx.globalAlpha = 0.55 + 0.4 * cmag;
+          ctx.lineWidth = 1.4 + 2.2 * cmag;
+          hotEdges.push({ a, b, c: hot.c, hop: hot.hop, rev: hot.rev });
         } else {
-          ctx.strokeStyle = touchesFocus || touchesHover ? th.ink2 : th.axis;
+          const inv = (e.sign ?? 1) < 0 && (touchesFocus || touchesHover);
+          ctx.strokeStyle = inv ? th.neg : touchesFocus || touchesHover ? th.ink2 : th.axis;
           ctx.globalAlpha = alpha;
-          ctx.lineWidth = touchesFocus || touchesHover ? 1.6 : 0.5 + wgt * 1.1;
+          ctx.lineWidth = touchesFocus || touchesHover ? 1.6 : 0.4 + wc * 1.6;
         }
-        if (e.provenance === "llm") ctx.setLineDash([5, 4]); else ctx.setLineDash([]);
+        // dash grammar: LLM-proposed = dashed; τ-lagged = dot-dash (the effect
+        // takes delay_days to arrive); both = fall back to τ style
+        if ((e.delay_days ?? 0) > 0) ctx.setLineDash([2, 5]);
+        else if (e.provenance === "llm") ctx.setLineDash([5, 4]);
+        else ctx.setLineDash([]);
         ctx.stroke();
+        if (e.regime_gate && !hidden && (showDetail || touchesFocus || touchesHover)) {
+          gateMarks.push({ x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2 });
+        }
       }
       ctx.setLineDash([]);
 
-      /* --- ripple particles on hot edges --- */
-      for (let i = 0; i < hotEdges.length; i++) {
-        const { a, b, c } = hotEdges[i];
-        const t = ((now / 1400) + i * 0.31) % 1;
-        const px = a[0] + (b[0] - a[0]) * t, py = a[1] + (b[1] - a[1]) * t;
+      /* --- regime-gate markers: this edge only holds in one regime band --- */
+      for (const g of gateMarks) {
         ctx.beginPath();
-        ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+        ctx.moveTo(g.x, g.y - 4); ctx.lineTo(g.x + 4, g.y);
+        ctx.lineTo(g.x, g.y + 4); ctx.lineTo(g.x - 4, g.y);
+        ctx.closePath();
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = th.warn;
+        ctx.lineWidth = 1.2;
+        ctx.fillStyle = th.plane;
+        ctx.fill(); ctx.stroke();
+      }
+
+      /* --- directional ripple particles on hot edges ---
+         speed and density scale with |contribution|; size shrinks with hop
+         (the per-hop decay of the path-sum made visible) --- */
+      for (let i = 0; i < hotEdges.length; i++) {
+        const { a, b, c, hop, rev } = hotEdges[i];
+        const from = rev ? b : a, to = rev ? a : b;
+        const cmag = Math.min(1, Math.abs(c) * 2.2);
+        const dur = 2100 - 1300 * cmag;
+        const count = 1 + Math.round(cmag * 2);
+        const size = Math.max(1.6, 3.6 - hop * 0.55);
         ctx.fillStyle = c >= 0 ? th.pos : th.neg;
-        ctx.globalAlpha = 0.9;
-        ctx.fill();
+        for (let p = 0; p < count; p++) {
+          const t = ((now / dur) + i * 0.31 + p / count) % 1;
+          const px = from[0] + (to[0] - from[0]) * t, py = from[1] + (to[1] - from[1]) * t;
+          ctx.beginPath();
+          ctx.arc(px, py, size, 0, Math.PI * 2);
+          ctx.globalAlpha = 0.9 * (0.4 + 0.6 * Math.sin(Math.PI * t));
+          ctx.fill();
+        }
+      }
+
+      /* --- τ-pipeline comets: delayed effects still in flight ---
+         a matured effect will re-enter propagation as a fresh impulse; until
+         then it crawls its via→destination path (field.py pending queue) --- */
+      for (let i = 0; i < live.pending.length; i++) {
+        const pd = live.pending[i];
+        const a = sp.get(pd.via), b = sp.get(pd.node);
+        if (!a || !b) continue;
+        const hidden = live.hidden.has(byIdRef.current.get(pd.via)!.type)
+          || live.hidden.has(byIdRef.current.get(pd.node)!.type);
+        if (hidden) continue;
+        const dim = focus && pd.node !== live.selected && pd.via !== live.selected ? 0.3 : 1;
+        // curved path so comets don't overprint the straight live edge
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const d = Math.max(1, Math.hypot(dx, dy));
+        const cx = mx - (dy / d) * d * 0.16, cy = my + (dx / d) * d * 0.16;
+        const col = pd.contribution >= 0 ? th.pos : th.neg;
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.quadraticCurveTo(cx, cy, b[0], b[1]);
+        ctx.setLineDash([1, 6]);
+        ctx.strokeStyle = col;
+        ctx.globalAlpha = 0.22 * dim;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // comet + tail, slow: the effect is scheduled, not travelling fast
+        const t = ((now / 5200) + i * 0.37) % 1;
+        const qt = (tt: number): [number, number] => {
+          const u = 1 - tt;
+          return [u * u * a[0] + 2 * u * tt * cx + tt * tt * b[0],
+                  u * u * a[1] + 2 * u * tt * cy + tt * tt * b[1]];
+        };
+        ctx.fillStyle = col;
+        for (let s = 3; s >= 0; s--) {
+          const [px, py] = qt(Math.max(0, t - s * 0.035));
+          ctx.beginPath();
+          ctx.arc(px, py, 2.8 - s * 0.55, 0, Math.PI * 2);
+          ctx.globalAlpha = (0.85 - s * 0.2) * dim;
+          ctx.fill();
+        }
+        if ((showDetail || pd.node === live.hover || pd.node === live.selected) && pd.days !== null) {
+          const [lx, ly] = qt(0.5);
+          const label = `τ ${pd.contribution >= 0 ? "+" : ""}${pd.contribution.toFixed(2)} in ${pd.days < 1 ? "<1" : Math.round(pd.days)}d`;
+          ctx.font = "10px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.globalAlpha = 0.9 * dim;
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = th.plane;
+          ctx.strokeText(label, lx, ly - 4);
+          ctx.fillStyle = th.ink2;
+          ctx.fillText(label, lx, ly - 4);
+        }
+      }
+
+      /* --- impulse epicenters: where this cycle's events landed --- */
+      for (const [nid, v] of Object.entries(live.impulses)) {
+        const p = sp.get(nid);
+        const n = byIdRef.current.get(nid);
+        if (!p || !n || Math.abs(v) < 0.02 || live.hidden.has(n.type)) continue;
+        const r0 = nodeR(n, live, k);
+        const reach = (34 + 40 * Math.min(1, Math.abs(v) * 2)) * Math.pow(k, 0.5);
+        ctx.strokeStyle = v >= 0 ? th.pos : th.neg;
+        for (const ph of [0, 0.5]) {
+          const t = ((now / 1900) + ph) % 1;
+          ctx.beginPath();
+          ctx.arc(p[0], p[1], r0 + t * reach, 0, Math.PI * 2);
+          ctx.globalAlpha = (1 - t) * 0.4 * Math.min(1, Math.abs(v) * 2) * (focus && !live.neighbors.has(nid) ? 0.3 : 1);
+          ctx.lineWidth = 1.4 * (1 - t) + 0.4;
+          ctx.stroke();
+        }
       }
 
       /* --- nodes --- */
@@ -384,9 +666,10 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
         const isHover = live.hover === n.id;
         let alpha = hidden ? 0.05 : inFocus ? 0.95 : 0.15;
 
-        // glow for charged nodes
+        // glow for charged nodes — breath period follows the type half-life
         if (mag > 0.02 && !hidden) {
-          const pulse = 1 + 0.12 * Math.sin(now / 300 + p[0]);
+          const hl = TYPE_HL[n.type] ?? 36;
+          const pulse = 1 + 0.12 * Math.sin(now / (55 * Math.sqrt(hl)) + n.phase);
           const glowR = (r + 7) * pulse;
           const grad = ctx.createRadialGradient(p[0], p[1], r * 0.4, p[0], p[1], glowR + 6);
           const gc = imp > 0 ? th.pos : th.neg;
@@ -397,6 +680,29 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
           ctx.arc(p[0], p[1], glowR + 6, 0, Math.PI * 2);
           ctx.fillStyle = grad;
           ctx.fill();
+        }
+
+        // emotion auras: fear (violet) hugs the left arc, greed (amber) the
+        // right — one node can carry both (a fought-over name)
+        const emo = live.emotions[n.id];
+        if (emo && !hidden) {
+          const wob = 0.35 * Math.sin(now / 1300 + n.phase);
+          if (emo.fear > 0.03) {
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], r + 4, Math.PI * 0.4 + wob, Math.PI * 1.6 + wob);
+            ctx.strokeStyle = EMO_COLOR.fear;
+            ctx.globalAlpha = (0.25 + emo.fear * 0.65) * (inFocus ? 1 : 0.3);
+            ctx.lineWidth = 1.6 + emo.fear * 2.4;
+            ctx.stroke();
+          }
+          if (emo.greed > 0.03) {
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], r + 4, -Math.PI * 0.6 - wob, Math.PI * 0.6 - wob);
+            ctx.strokeStyle = EMO_COLOR.greed;
+            ctx.globalAlpha = (0.25 + emo.greed * 0.65) * (inFocus ? 1 : 0.3);
+            ctx.lineWidth = 1.6 + emo.greed * 2.4;
+            ctx.stroke();
+          }
         }
 
         ctx.beginPath();
@@ -651,6 +957,11 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
       .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selNode, graph]);
+  const selPending = useMemo(() => {
+    if (!selNode) return [] as PendingEffect[];
+    return (pending ?? []).filter((p) => p.node === selNode.id || p.via === selNode.id);
+  }, [selNode, pending]);
+  const selEmotion = selNode ? liveRef.current.emotions[selNode.id] : undefined;
 
   const typeCounts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -659,6 +970,7 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
   }, [graph]);
 
   const hoverNode = hover ? byIdRef.current.get(hover) : null;
+  const hoverEmotion = hover ? liveRef.current.emotions[hover] : undefined;
 
   return (
     <div ref={wrapRef} className="gf-wrap">
@@ -752,6 +1064,13 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
             {" · "}influence {((centrality[hoverNode.id] ?? 0) * 100).toFixed(0)}
             {" · "}{(adjRef.current.get(hoverNode.id)?.size ?? 0)} links
           </span>
+          {hoverEmotion && (hoverEmotion.fear > 0.03 || hoverEmotion.greed > 0.03) && (
+            <span>
+              {hoverEmotion.fear > 0.03 && <>fear <b style={{ color: EMO_COLOR.fear }}>{(hoverEmotion.fear * 100).toFixed(0)}%</b></>}
+              {hoverEmotion.fear > 0.03 && hoverEmotion.greed > 0.03 && " · "}
+              {hoverEmotion.greed > 0.03 && <>greed <b style={{ color: EMO_COLOR.greed }}>{(hoverEmotion.greed * 100).toFixed(0)}%</b></>}
+            </span>
+          )}
         </div>
       )}
 
@@ -765,6 +1084,7 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
           </div>
           <div className="gf-panel-sub">
             {selNode.type}{selNode.symbol ? ` · ${selNode.symbol}` : ""}{selNode.market ? ` · ${selNode.market}` : ""}
+            {` · memory ½-life ${TYPE_HL[selNode.type] ?? 36}h`}
           </div>
           <div className="gf-panel-stats">
             <span>
@@ -776,7 +1096,27 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
             <span>influence <b>{((centrality[selNode.id] ?? 0) * 100).toFixed(0)}/100</b></span>
             <span>links <b>{selEdges.length}</b></span>
           </div>
+          {selEmotion && (selEmotion.fear > 0.03 || selEmotion.greed > 0.03) && (
+            <div className="gf-panel-stats">
+              <span>fear <b style={{ color: EMO_COLOR.fear }}>{(selEmotion.fear * 100).toFixed(0)}%</b></span>
+              <span>greed <b style={{ color: EMO_COLOR.greed }}>{(selEmotion.greed * 100).toFixed(0)}%</b></span>
+            </div>
+          )}
           {selNode.equilibrium && <div className="gf-panel-eq">stable point: {selNode.equilibrium}</div>}
+          {selPending.length > 0 && (
+            <div className="gf-panel-eq">
+              {selPending.slice(0, 4).map((p, i) => (
+                <div key={i}>
+                  τ {p.node === selNode.id ? `incoming from ${byIdRef.current.get(p.via ?? "")?.label ?? p.via}` : `outgoing to ${byIdRef.current.get(p.node)?.label ?? p.node}`}
+                  {" "}
+                  <b style={{ color: p.contribution >= 0 ? "var(--pos)" : "var(--neg)" }}>
+                    {p.contribution >= 0 ? "+" : ""}{p.contribution.toFixed(2)}
+                  </b>
+                  {p.due ? ` due ${p.due.slice(0, 10)}` : p.delay_days != null ? ` in ~${p.delay_days}d` : ""}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="gf-panel-edges">
             {selEdges.map((e, i) => {
               const otherId = e.src === selNode.id ? e.dst : e.src;
@@ -788,6 +1128,9 @@ export default function GraphField({ graph, impacts, centrality, trace, selected
                   <span className="who">{other?.label ?? otherId}</span>
                   <em>
                     {e.type}{(e.sign ?? 1) < 0 ? " · inverse" : ""} · w{(e.weight ?? 0.5).toFixed(1)}
+                    {(e.confidence ?? 1) < 1 ? ` · c${(e.confidence ?? 1).toFixed(1)}` : ""}
+                    {(e.delay_days ?? 0) > 0 ? ` · τ${e.delay_days}d` : ""}
+                    {e.regime_gate ? ` · gated: ${e.regime_gate.dial}` : ""}
                     {e.provenance === "llm" ? " · llm" : ""}
                   </em>
                   {e.note && <span className="note">{e.note}</span>}
