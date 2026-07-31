@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 20
+SEED_VERSION = 21
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -514,6 +514,32 @@ SEED_NODES = [
      "aliases": ["eth", "ether"]},
     {"id": "sol", "type": "asset", "label": "Solana", "symbol": "SOL/USD", "market": "CRYPTO",
      "aliases": ["sol"]},
+    # ---- altcoin universe (seed v21): thematic rotation targets. yfinance
+    # tickers verified w/ full 2023-07+ history; odd suffixes are yf disambiguators.
+    {"id": "xrp", "type": "asset", "label": "XRP", "symbol": "XRP/USD", "market": "CRYPTO",
+     "aliases": ["ripple", "瑞波币"]},
+    {"id": "bnb", "type": "asset", "label": "BNB", "symbol": "BNB/USD", "market": "CRYPTO",
+     "aliases": ["binance coin"]},
+    {"id": "avax", "type": "asset", "label": "Avalanche", "symbol": "AVAX/USD", "market": "CRYPTO",
+     "aliases": ["avalanche"]},
+    {"id": "near", "type": "asset", "label": "NEAR Protocol", "symbol": "NEAR/USD", "market": "CRYPTO",
+     "aliases": ["near protocol"]},
+    {"id": "link", "type": "asset", "label": "Chainlink", "symbol": "LINK/USD", "market": "CRYPTO",
+     "aliases": ["chainlink"]},
+    {"id": "inj", "type": "asset", "label": "Injective", "symbol": "INJ/USD", "market": "CRYPTO",
+     "aliases": ["injective"]},
+    {"id": "arb", "type": "asset", "label": "Arbitrum", "symbol": "ARB11841/USD", "market": "CRYPTO",
+     "aliases": ["arbitrum"]},
+    {"id": "doge", "type": "asset", "label": "Dogecoin", "symbol": "DOGE/USD", "market": "CRYPTO",
+     "aliases": ["dogecoin", "狗狗币"]},
+    {"id": "render", "type": "asset", "label": "Render", "symbol": "RENDER/USD", "market": "CRYPTO",
+     "aliases": ["rndr", "render network"]},
+    {"id": "tao", "type": "asset", "label": "Bittensor", "symbol": "TAO22974/USD", "market": "CRYPTO",
+     "aliases": ["bittensor"]},
+    {"id": "fet", "type": "asset", "label": "Fetch.ai / ASI", "symbol": "FET/USD", "market": "CRYPTO",
+     "aliases": ["fetch.ai", "artificial superintelligence alliance"]},
+    {"id": "akt", "type": "asset", "label": "Akash Network", "symbol": "AKT/USD", "market": "CRYPTO",
+     "aliases": ["akash"]},
     # ------------- bill-of-materials sub-themes (seed v13) -------------
     # BOM decomposition of the big demand themes: each tier is a `theme` that
     # SUPPLIES its parent industry (supplies flows both ways: a tier shock hits
@@ -1036,8 +1062,9 @@ SEED_EDGES = [
              "narrative needs a bid: in deep risk-off it recruits nobody (mute)"},
     {"src": "power_demand", "dst": "btc_halving", "type": "influences", "sign": -1, "weight": 0.2,
      "note": "power costs squeeze miners post-halving (capitulation risk)"},
-    {"src": "crypto_liquidity", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.7,
-     "note": "exchange revenue IS volume x volatility"},
+    {"src": "crypto_liquidity", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.35,
+     "note": "exchange revenue IS volume x volatility; weight halved 2026-07-31 — 3y replay "
+             "calibration contradicted the 5d transmission (n=23, t=-3.6, hit 22%)"},
     {"src": "crypto_regulation", "dst": "coin", "type": "influences", "sign": -1, "weight": 0.4,
      "note": "the regulated on-ramp carries the direct policy risk"},
     {"src": "mstr", "dst": "btc", "type": "owns", "weight": 0.9,
@@ -1073,6 +1100,41 @@ SEED_EDGES = [
     {"src": "btc", "dst": "crypto_majors", "type": "member_of", "weight": 0.9},
     {"src": "eth", "dst": "crypto_majors", "type": "member_of", "weight": 0.9},
     {"src": "sol", "dst": "crypto_majors", "type": "member_of", "weight": 0.8},
+    # ---- altcoin wiring (seed v21) ----
+    {"src": "xrp", "dst": "crypto_majors", "type": "member_of", "weight": 0.7},
+    {"src": "bnb", "dst": "crypto_majors", "type": "member_of", "weight": 0.7},
+    {"src": "avax", "dst": "crypto_majors", "type": "member_of", "weight": 0.7},
+    {"src": "near", "dst": "crypto_majors", "type": "member_of", "weight": 0.7},
+    {"src": "link", "dst": "crypto_majors", "type": "member_of", "weight": 0.7},
+    {"src": "inj", "dst": "crypto_majors", "type": "member_of", "weight": 0.6},
+    {"src": "arb", "dst": "crypto_majors", "type": "member_of", "weight": 0.6},
+    {"src": "doge", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "meme beta: rides the tide with no fundamental anchor — sentiment IS the asset"},
+    {"src": "render", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "tao", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "fet", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "akt", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
+    # Direct edges rather than a new crypto_ai theme node, so the digester's §7
+    # taggable set (brief v1.4) stays untouched; promote to a proper theme at
+    # the next brief version bump.
+    {"src": "ai_capex_cycle", "dst": "render", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "GPU-compute demand narrative reprices decentralized-GPU tokens"},
+    {"src": "ai_capex_cycle", "dst": "tao", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "ai_capex_cycle", "dst": "fet", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "ai_capex_cycle", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "ai_datacenter", "dst": "render", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "ai_datacenter", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "datacenter compute scarcity is the bull case for decentralized compute"},
+    # exchange-token and enforcement wiring
+    {"src": "custody_risk", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.5,
+     "note": "exchange tokens are the epicenter of custody scares — the FTT lesson"},
+    {"src": "crypto_regulation", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "enforcement waves hit exchanges first"},
+    {"src": "crypto_regulation", "dst": "xrp", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "the SEC-suit asset: regulatory shifts reprice it hardest in both directions"},
+    {"src": "crypto_liquidity", "dst": "doge", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "retail liquidity floods memecoins last and loudest"},
     # ---- supply / competition / proxies ----
     # supplies flows BOTH ways: supplier disruption hits the customer, customer
     # weakness hits the supplier — one shock moves the whole cluster.
@@ -1715,8 +1777,11 @@ SEED_EDGES = [
      "weight": 0.5, "note": "FTX mechanism: custody doubt -> withdrawal run -> forced selling"},
     {"src": "custody_risk", "dst": "crypto_adoption", "type": "influences", "sign": -1,
      "weight": 0.3, "note": "each custodial blowup sets institutional adoption back a cycle"},
-    {"src": "custody_risk", "dst": "coin", "type": "influences", "sign": -1, "weight": 0.3,
-     "note": "the listed exchange carries the sector's custody-trust beta"},
+    {"src": "custody_risk", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.25,
+     "note": "SIGN FLIPPED 2026-07-31: 3y calibration rejected the old negative sign "
+             "(n=38, t=-5.2, hit 21%) and the mechanism agrees — custody scares at "
+             "offshore venues drive flow TO the regulated US custodian (spot-ETF custody "
+             "role); Coinbase gains share exactly when custody trust breaks elsewhere"},
     {"src": "custody_risk", "dst": "financial_fraud", "type": "correlates_with", "sign": 1,
      "weight": 0.3},
     # ---- market-priced macro wiring (seed v19) ----

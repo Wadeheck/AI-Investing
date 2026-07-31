@@ -268,6 +268,12 @@ class Settings:
         "https://www.bankofengland.co.uk/rss/news",   # BoE — feeds the boe_rate/uk_* nodes (seed v12)
         # crypto + energy + commodities
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        # crypto expansion (probed working 2026-07-31): institutional/regulatory
+        # depth + zh-language crypto wire (same early-Asia edge as the TW feeds)
+        "https://www.theblock.co/rss.xml",                        # The Block (institutional/reg)
+        "https://decrypt.co/feed",                                # Decrypt (broad crypto)
+        "https://wublockchain.substack.com/feed",                 # Wu Blockchain (CN mining/exchange/reg)
+        "https://rss.panewslab.com/zh/tvsq/rss",                  # PANews (CN, zh crypto wire)
         "https://oilprice.com/rss/main",
         "https://www.mining.com/feed/",
     ]))

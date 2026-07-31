@@ -1,76 +1,96 @@
 # Digestion Status & Continuation Orders
 
-*Updated 2026-07-29 after completing the v1.2 redo of the first 40 days.
-Read together with `docs/SONNET_DIGEST_BRIEF.md` (v1.2 — the operating
-instructions) and `data/digest_v2/README.md` (workspace layout + retention
-rules).*
+*Rewritten 2026-07-31 (night) — all six marching orders below are now
+COMPLETE. Read together with `docs/SONNET_DIGEST_BRIEF.md` (**v1.4** — the
+operating instructions) and `data/digest_v2/README.md` (workspace layout +
+retention rules).*
 
-## What is DONE
+## Current state (verified 2026-07-31 night)
 
-- **Input archive: COMPLETE.** `data/news_archive_guardian.jsonl` holds
-  all **1,123 days** (2023-07-01 → 2026-07-28), ~80K articles, every record
-  with title, summary, section, full UTC timestamp, and body text.
-- **v1.2 redo: COMPLETE.** Days 2023-07-01 → 2023-08-09 (40 days, matching
-  parity with the original headline-only batch) have been fully
-  re-digested against the current body+ts archive under brief v1.2:
-  every event carries `ts`; the escalation pass (§2.1) was applied to
-  events with confidence<0.6 or magnitude≥0.5; cold-start (§3.6) and
-  anchored-node (§7a) rules were in force from day one.
-  The old headline-only output lives in `events_v0_headlines/` as a
-  permanent audit record (never deleted, per the retention rule).
+- **Full corpus digested and merged, 2023-07-01 → 2026-07-30 (1,126 days,
+  5,052 events), all under v1.4 discipline.** `events/` (1,124 days) is the
+  untouched original corpus (retention rule); `events_amend_v14/` (608
+  files) holds the append-only node-gap/asset-fix amendments; the two are
+  folded together by `_merge_amendments.py` into `ledger.jsonl` (2,056
+  event_keys) and `../news_impulses_v2.jsonl` (1,126 days). Re-run
+  `_merge_amendments.py` any time the amendment set changes — it is
+  idempotent and safe to re-run.
+- `validation_report.md` has the full distribution audit: magnitude median
+  0.30, only 3 events ≥0.8 across 3 years, 100% `ts` coverage, all 42
+  previously-zero nodes now populated (`uk_banks` 96, `commercial_aerospace`
+  76, `financial_fraud` 94, etc. — see the report for the full table).
+- The 91 illegally asset-tagged events (`tsla`/`btc`/`nvda`/`aapl`/`msft`/
+  `crwd`/`tsmc`/`arm`) are fixed: 75 remapped to a correct §7 node, 16
+  dropped (no legal origin, single-stock-only story).
+- Guardian archive: gapless through 2026-07-30. Live multi-source archive
+  (`../news_archive_live.jsonl`) covers 2026-07-30 onward; 2026-07-29 was
+  digested from Guardian, 2026-07-30 from the live archive per §2.2.
+- **YouTube dossier pass complete**: 172/173 nodes have a static dossier
+  in `youtube_dossiers/` (one node had a count edge-case, worth a spot
+  check). No events were emitted — enrichment only, per the hard rule.
 
-## v1.2 redo audit — 40 days, 204 events
+## Known residual items for human review (not auto-applied)
 
-| Check | Target | Measured | |
-|---|---|---|---|
-| Events/day | 5–15 weekdays, 3–6 weekends | 5.1 avg (range 3–8) | ✅ |
-| Magnitude median | 0.2–0.4 | 0.30 | ✅ |
-| Magnitude ≥0.8 | rare | 0% | ✅ |
-| risk_appetite share | ≤15% | 0% | ✅ |
-| Invalid node ids | 0 | 0 | ✅ |
-| Novelty mix | ~50/35/15 | 49.5/48.0/2.5 | ⚠️ 0.2-tier still thin |
-| `ts` present | 100% | 204/204 | ✅ |
-| Ledger keys | — | 100 | — |
+- **`proposed_edges`** surfaced across the amendment pass and the YouTube
+  dossiers (e.g. `power_demand→uranium_price`, `ai_datacenter→copper_price`,
+  `bond_stress→ai_capex_cycle`, `robotics→power_demand`,
+  `china_government→gold_price`, `berkshire→googl`) — these are proposals
+  only (capped confidence, `provenance: llm` per brief §12), not applied to
+  the graph. Review before accepting.
+- **`integrity`/`integrity_patterns`** flags from both passes (circular AI
+  financing, China's paper-gold market, DRAM antitrust signaling,
+  memecoin-as-bribery-vehicle, CATL/Tesla supply-exclusivity risk, etc.) —
+  same: flagged, not auto-applied to any asset veto.
+- A handful of amendment agents used slightly different `event_key` slugs
+  for the same real-world story (only one alias — Thames Water — was
+  reconciled in the merge script's `ALIASES` dict). Worth a broader
+  near-duplicate sweep of `ledger.jsonl` before trainer use.
+- The node-gap amendment pass was a parallel best-effort scan, not a second
+  full line-by-line read of all 1,124 days — high-recall on material misses,
+  not an exhaustiveness guarantee.
+- `news_impulses_v2.jsonl`'s aggregation formula (`polarity * magnitude *
+  novelty * confidence * (1-manipulation_likelihood)`, summed per node per
+  day) is a reasonable first cut consistent with the brief's fields, but
+  not itself specified by the brief — downstream code may want a different
+  formula.
 
-`geopolitical_tension` improved from 52% (day-14 checkpoint) to 43.6% over
-the full 40 days as earnings season, Fed/ECB/BoE decisions, and commodity
-shocks (Black Sea grain collapse, India rice ban, Niger coup, Fitch US
-downgrade) diversified the mix. Remaining concentration reflects a
-genuinely geopolitics-dense month (Niger coup, Israel judicial overhaul,
-Wagner mutiny aftermath, Poland-Belarus tension, Sudan) rather than
-under-diversified tagging — confirmed with the user mid-batch.
+## What REMAINS (next steps, none of them Sonnet's job per the brief)
 
-**Discovered node-map gap:** no dedicated UK-banks node exists. Several
-genuinely market-moving UK bank stories were skipped for lack of a clean
-node home: the NatWest/Coutts CEO resignations (£1bn wiped off NatWest
-shares), Wilko's collapse, WeWork's near-bankruptcy. Also no UK-specific
-growth/inflation node (UK GDP/CPI/PMI events were routed through the
-`europe_growth`/`credit_conditions` catchalls as an approximation) and no
-wind-energy-specific node distinct from `solar` (Vattenfall/Dogger
-Bank/Hornsea stories routed through `energy_transition`). Flag these for
-consideration if the node graph is revised.
+- **Live daily continuation**: from 2026-07-31 onward, run the same §2.2
+  live-archive protocol day by day as new dates become eligible. Live
+  inputs now come from THREE files: `../news_archive_live.jsonl` (RSS,
+  ~44 feeds incl. crypto press added 2026-07-31),
+  `../news_archive_guardian.jsonl` (still appending), and
+  `../news_archive_x.jsonl` — curated-X captures from browser sessions
+  reading the user's crypto Following feed (same day-record schema;
+  `source` is `x.com/<handle>`, per-handle trust priors live in
+  `events.py`; timestamps are snowflake-exact where a status id was
+  captured, capture-relative otherwise). X capture protocol: single tab,
+  human pacing, chronological Following/list feed, ads and pure-promo
+  posts skipped, sentiment posts kept but labeled as gauges in their
+  summaries — the digester treats them per §2.2's StockTwits rule.
+- **Human review** of the proposed_edges/integrity backlog above before
+  anything touches the graph.
+- **Event-study calibration (B2) and trainer rounds** — see
+  `docs/DIGESTION_SPEC.md` §B6.
+- **Edge re-weighting from data** — its own gated round
+  (`DIGESTION_SPEC.md` B3/R21-learned-edges), code-side, not digester work.
 
-**proposed_edges: still zero.** No genuinely new causal mechanism outside
-the existing 85-node map surfaced in this batch that warranted a proposal
-(the Niger→uranium and Poland-Belarus stories used existing dual-node
-tagging, not new edges).
+## History (kept for the record)
 
-## What REMAINS
-
-- Continue chronologically from **2023-08-10** through **2023-07-28**...
-  correction: through the full archive to **2026-07-28** — ~1,083 further
-  days. `ready_days.txt` already lists the full 1,123-day contiguous
-  prefix; resume by digesting the next undigested date after 2023-08-09.
-- Per ~14 digested days: emit the distribution report (§14/§15); halt only
-  on a distribution-prior violation or a zero-event day from 30+ headlines.
-- On completion: the validation report, then event-study calibration (B2)
-  and trainer rounds — see `docs/DIGESTION_SPEC.md` §B6.
-- Separately, code-side (not Sonnet's job): edge re-weighting from data is
-  planned as its own gated round (`DIGESTION_SPEC.md` B3/R21-learned-edges).
+- v1.2 redo of days 2023-07-01 → 2023-08-09 completed 2026-07-29 (204
+  events; superseded by the v1.4 amendment pass above, which layered
+  additional node coverage on top without touching the originals).
+- Full backfill through 2026-07-28 completed by 9 parallel agents, merged
+  in commit `658444d` (`docs/NODE_GRAPH_GAP_ANALYSIS.md`).
+- 2026-07-31: v1.4 node-gap amendment pass (8 parallel date-chunk agents),
+  asset-tag fix, sequential 2026-07-29/30 digestion, merge/rebuild, and the
+  full YouTube dossier pass — all completed in one session.
 
 ## Retention guarantee (permanent)
 
 Raw news archives are **never deleted or overwritten**:
 `news_archive_guardian.jsonl` (bodies+ts), the `.bak` headlines-only pull,
-GDELT/wiki archives, and every `events*/` generation are all kept — we must
-always be able to re-run digestion from scratch.
+GDELT/wiki archives, and every `events*/` generation (including
+`events_amend_v14/`) are all kept — we must always be able to re-run
+digestion from scratch.

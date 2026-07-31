@@ -925,6 +925,10 @@ ROUNDS = [
         "w_lsr": [0.4, 0.8], "w_oi": [0.0, 0.4]}),
     ("R21 tactical crypto SHORTS (earn the bear: fast sleeve trades both sides)", {
         "tact_short": [1]}),
+    ("R22 crypto market-structure hybrid (v1's fng/on-chain/gain restored on the v2 base — "
+     "crypto alpha may live in market data, not news)", {
+        "w_fng": [0.2], "w_onchain": [0.24], "crypto_gain": [1.0, 1.2],
+        "tact_take": [0.3, 0.39], "crypto_gate": [1]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",

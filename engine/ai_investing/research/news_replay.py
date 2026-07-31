@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 ARCHIVE = DATA_DIR / "news_archive.jsonl"      # date -> headlines (GDELT)
 WIKI_ARCHIVE = DATA_DIR / "news_archive_wiki.jsonl"  # fallback: Wikipedia Current Events
-IMPULSES = DATA_DIR / "news_impulses.jsonl"    # date -> node impulses (LLM-digested)
+IMPULSES = DATA_DIR / os.environ.get("IMPULSES_FILE", "news_impulses.jsonl")  # date -> node impulses (LLM-digested); IMPULSES_FILE=news_impulses_v2.jsonl replays the Sonnet corpus
 # Backfill window — overridable so this machine can rebuild history without
 # the Guardian archive (e.g. BACKFILL_START=2017-01-01 for the GDELT era).
 import os as _os
@@ -274,6 +274,15 @@ def replay() -> None:
     from ai_investing.brain.field import HALF_LIFE_BY_TYPE, HALF_LIFE_HOURS
 
     g = KnowledgeGraph.load(str(DATA_DIR / "knowledge_graph.json"))
+    # REPLAY_CALIBRATION=<edge_calibration.json>: replay with evidence
+    # multipliers attached (A/B the calibrator's verdicts against baseline)
+    cal_file = os.environ.get("REPLAY_CALIBRATION")
+    if cal_file:
+        from ai_investing.brain.calibration import factors_from_report
+        factors = factors_from_report(json.load(open(cal_file)))
+        g.set_calibration(factors)
+        print(f"[replay] calibration applied: {len(factors)} edge multipliers "
+              f"from {cal_file}", flush=True)
     node_types = {nid: n.type for nid, n in g.nodes.items()}
     node_by_sym = {n.symbol: nid for nid, n in g.nodes.items() if getattr(n, "symbol", None)}
     news = {}
@@ -306,6 +315,23 @@ def replay() -> None:
     curve, icurve, dates = [], [], []
     ledger: list[dict] = []                     # every trading-book bet, graded
 
+    # REPLAY_RECORD_DB=<path>: persist daily node activations + prices in the
+    # live brain.db schema so the edge calibrator (brain.calibration, pointed
+    # at this DB via BRAIN_DB_PATH) can score 3 years of history instead of
+    # waiting for live cycles to accumulate.
+    rec_db = os.environ.get("REPLAY_RECORD_DB")
+    rec = None
+    if rec_db:
+        import sqlite3
+        os.makedirs(os.path.dirname(rec_db) or ".", exist_ok=True)
+        rec = sqlite3.connect(rec_db)
+        rec.executescript(
+            "CREATE TABLE IF NOT EXISTS node_history (ts TEXT, node TEXT, activation REAL);"
+            "CREATE INDEX IF NOT EXISTS idx_nh_node ON node_history(node, ts);"
+            "CREATE TABLE IF NOT EXISTS price_history (date TEXT NOT NULL, symbol TEXT NOT NULL,"
+            " price REAL NOT NULL, PRIMARY KEY (date, symbol));"
+            "DELETE FROM node_history; DELETE FROM price_history;")
+
     def decay(f, hours=24.0):
         out = {}
         for k, v in f.items():
@@ -337,6 +363,13 @@ def replay() -> None:
             impacts, _, _ = g.propagate(impulses, max_hops=3, decay=0.6)
             for k, v in impacts.items():
                 field[k] = max(-1.0, min(1.0, field.get(k, 0.0) + v))
+        if rec is not None:
+            rec.executemany("INSERT INTO node_history VALUES (?,?,?)",
+                            [(dstr + "T21:00:00+00:00", k, float(v))
+                             for k, v in field.items()])
+            rec.executemany("INSERT OR REPLACE INTO price_history VALUES (?,?,?)",
+                            [(dstr, s.upper(), float(px[s]))
+                             for s in symbols if not np.isnan(px[s])])
         asset_imp = g.asset_impacts(field)
 
         # --- trading book: exits, then capped entries ---
@@ -439,6 +472,13 @@ def replay() -> None:
     # bull/bear split: monthly returns bucketed by SPY's month sign
     m = pd.DataFrame({"strat": c, "inv": ic, "spy": spy_al}).resample("ME").last().pct_change().dropna()
     up, down = m[m["spy"] > 0], m[m["spy"] <= 0]
+
+    if rec is not None:
+        rec.commit()
+        n_nh = rec.execute("SELECT COUNT(*) FROM node_history").fetchone()[0]
+        n_ph = rec.execute("SELECT COUNT(*) FROM price_history").fetchone()[0]
+        rec.close()
+        print(f"[replay] recorded {n_nh} node_history + {n_ph} price_history rows -> {rec_db}")
 
     print("\n========== 3-YEAR NEWS-FED REPLAY ==========")
     for name, series in (("TRADING book", c), ("INVESTING book", ic), ("SPY", spy_al)):

@@ -100,6 +100,27 @@ def _fred_snapshot(api_key: str) -> dict:
     return out
 
 
+def _stablecoin_snapshot() -> dict:
+    """Aggregate USD-stablecoin supply from DefiLlama (free, no key). Supply
+    GROWTH is liquidity entering crypto's rails; sustained CONTRACTION has
+    led every major drawdown — the cleanest crypto_liquidity anchor there is."""
+    out: dict = {}
+    try:
+        req = urllib.request.Request(
+            "https://stablecoins.llama.fi/stablecoincharts/all",
+            headers={"User-Agent": "ai-investing/1.0"})
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            rows = json.loads(resp.read().decode())
+        usd = [float(r["totalCirculatingUSD"]["peggedUSD"]) for r in rows
+               if r.get("totalCirculatingUSD", {}).get("peggedUSD")]
+        if len(usd) >= 31:
+            out["stablecoin_mcap_bn"] = round(usd[-1] / 1e9, 2)
+            out["stablecoin_chg_30d"] = round(usd[-1] / usd[-31] - 1.0, 4)
+    except Exception:
+        pass
+    return out
+
+
 def get_snapshot(settings) -> dict:
     """The per-cycle macro snapshot, disk-cached. Keys may be missing — consumers
     must treat every field as optional."""
@@ -114,6 +135,7 @@ def get_snapshot(settings) -> dict:
 
     snap = _yf_snapshot()
     snap.update(_fred_snapshot(settings.brain.fred_api_key))
+    snap.update(_stablecoin_snapshot())
     snap["_fetched_at"] = time.time()
     try:
         os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)

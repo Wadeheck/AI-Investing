@@ -324,6 +324,9 @@ class Brain:
         put("ecb_policy", m.get("eu_cpi_yoy"), 2.0, 2.5)         # hot HICP = hawkish ECB
         put("china_consumer", m.get("cn_cpi_yoy"), 1.5, 2.5)     # deflation = weak demand
         put("yen_carry", m.get("jp_cpi_yoy"), 2.0, 2.5)          # hot JP CPI = BOJ normalizes
+        # stablecoin supply growth: ~+1%/30d is cruise; +5% = strong inflow,
+        # sustained contraction = liquidity leaving crypto's rails (bear tell)
+        put("crypto_liquidity", m.get("stablecoin_chg_30d"), 0.01, 0.04)
         return a
 
     def _valuation_anchors(self) -> dict[str, float]:

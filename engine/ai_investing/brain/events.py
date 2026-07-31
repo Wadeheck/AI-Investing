@@ -42,7 +42,14 @@ SOURCE_TRUST = {
     "economictimes": 0.65, "mining.com": 0.6,
     # state media: useful policy signal, but reads like advocacy
     "globaltimes": 0.45,
-    "coindesk": 0.6,
+    "coindesk": 0.6, "theblock": 0.65, "decrypt": 0.5, "panewslab": 0.5,
+    "wublockchain": 0.6,
+    # curated X handles (news_archive_x.jsonl capture) — listed BEFORE the
+    # generic x.com fallback because first substring match wins
+    "x.com/farsideuk": 0.8, "x.com/glassnode": 0.7, "x.com/zachxbt": 0.7,
+    "x.com/eleanorterrett": 0.7, "x.com/theblockco": 0.65,
+    "x.com/blockworks": 0.6, "x.com/messaricrypto": 0.6,
+    "x.com/coinbureau": 0.5, "x.com/watcherguru": 0.35,
     "cointelegraph": 0.45, "reddit": 0.25, "twitter": 0.25, "x.com": 0.25,
     "substack": 0.35, "seekingalpha": 0.45, "zerohedge": 0.3, "benzinga": 0.45,
 }
