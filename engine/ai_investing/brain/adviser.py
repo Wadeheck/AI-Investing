@@ -26,6 +26,8 @@ DEFENSIVE = {"GLD", "XLP", "TLT"}
 HIGH_BETA = {"BTC/USD", "ETH/USD", "SOL/USD", "XLK", "NVDA", "TSLA"}
 
 W_FIELD, W_FORMULA, W_SCENARIO, W_REGIME, W_CROWD = 1.0, 0.6, 0.5, 0.25, 0.6
+W_CONTRA, W_BENEF = 0.45, 0.3
+CAMPAIGN_HAIRCUT = 0.6         # long score x (1 - this x pressure) on campaigned names
 MIN_SCORE = 0.03
 
 
@@ -100,6 +102,15 @@ def advise(settings, brain, log: bool = True) -> dict:
     graph, field = brain.graph, brain.field
     activations = field.activations
     asset_impacts = graph.asset_impacts(activations)
+    # scale + priced-in: impacts become expected moves; signals the tape already
+    # ran on get discounted before they can become conviction
+    try:
+        from ai_investing.brain.priced_in import priced_in_scores
+        from ai_investing.brain.scale import enrich_with_scale
+        vols = enrich_with_scale(asset_impacts, settings, graph)
+        priced_in = priced_in_scores(settings, asset_impacts, vols)
+    except Exception:
+        vols, priced_in = {}, {}
     formula = _formula_views(settings)
     boosts = _scenario_boosts(brain, now)
     crowding = _crowding(brain)
@@ -127,20 +138,51 @@ def advise(settings, brain, log: bool = True) -> dict:
     except Exception:
         froth = {}
 
+    # the offense: contrarian buy/fade lists, fraud-beneficiary tilts, and the
+    # campaign-pressure index (all precomputed by the brain cycle; pure reads)
+    try:
+        from ai_investing.brain.contrarian import load as load_contrarian
+        contra = load_contrarian(settings)
+    except Exception:
+        contra = {}
+    contra_buy = {r["symbol"]: r["score"] for r in contra.get("buys", [])}
+    contra_fade = {r["symbol"]: r["score"] for r in contra.get("fades", [])}
+    beneficiaries = {s: v["benefit"] for s, v in (contra.get("beneficiaries") or {}).items()}
+    try:
+        from ai_investing.brain.campaign import load as load_campaigns
+        campaign_pressure = {v["symbol"]: v["pressure"]
+                             for v in load_campaigns(settings).values() if v.get("symbol")}
+    except Exception:
+        campaign_pressure = {}
+
     rows = []
-    symbols = set(asset_impacts) | set(boosts) | set(formula)
+    symbols = (set(asset_impacts) | set(boosts) | set(formula)
+               | set(contra_buy) | set(contra_fade) | set(beneficiaries))
     for sym in symbols:
         node = graph.node_for_symbol(sym)
         if node is None or node.type != "asset":
             continue
         impact = asset_impacts.get(sym, {}).get("impact", 0.0)
-        score = W_FIELD * impact * rel.get(sym, 1.0)
+        pi = priced_in.get(sym, {}).get("priced_in", 0.0)
+        impact_eff = impact * (1.0 - pi)   # the tape already ran? less signal left
+        score = W_FIELD * impact_eff * rel.get(sym, 1.0)
         score += W_FORMULA * formula.get(sym, 0.0)
         score += W_SCENARIO * boosts.get(sym, 0.0)
         if risk_off:
             score += W_REGIME * (0.5 if sym in DEFENSIVE else (-0.5 if sym in HIGH_BETA else 0.0))
         elif risk_on:
             score += W_REGIME * (0.4 if sym in HIGH_BETA else 0.0)
+        # contrarian offense: buy panic in clean value, fade euphoric froth,
+        # tilt toward competitors of integrity-flagged names
+        contra_net = (W_CONTRA * contra_buy.get(sym, 0.0)
+                      - W_CONTRA * contra_fade.get(sym, 0.0)
+                      + W_BENEF * beneficiaries.get(sym, 0.0))
+        score += contra_net
+        # campaign pressure: someone is paying to excite this name — a fresh
+        # LONG must not take the bait (fade/short direction unaffected)
+        camp_p = campaign_pressure.get(sym, 0.0)
+        if score > 0 and camp_p > 0:
+            score *= max(0.0, 1.0 - CAMPAIGN_HAIRCUT * camp_p)
         # crowding: never BUY what noise is pumping (short/fade is unaffected)
         crowd = sum(p for n, p in crowding.items()
                     if n == node.id or any(e.src == node.id and e.dst == n for e in graph.edges))
@@ -162,17 +204,27 @@ def advise(settings, brain, log: bool = True) -> dict:
             continue
         chain = _chain(graph, activations, node.id)
         root = chain[0] if len(chain) > 1 else None
+        # size RISK, not conviction: the same score buys half the notional in a
+        # 4%-a-day asset as in a 1% one (weight scaled by 2% reference vol)
+        vol = vols.get(sym, 0.02)
+        vol_norm = max(0.4, min(2.0, 0.02 / vol)) if vol else 1.0
         rows.append({
             "symbol": sym, "market": node.market, "label": node.label,
             "direction": "long" if score > 0 else "short_or_avoid",
             "score": round(score, 4),
             "weight_suggestion": round(min(settings.risk.max_position_weight,
-                                           abs(score) * 0.3) * mood_mult, 4),
+                                           abs(score) * 0.3 * vol_norm) * mood_mult, 4),
             "chain": " → ".join(chain) if len(chain) > 1 else "formula/scenario driven",
             "invalidation": f"reversal of: {root}" if root else "formula conviction fading",
             "drivers": {"field": round(impact, 3), "formula": round(formula.get(sym, 0.0), 3),
                         "scenarios": round(boosts.get(sym, 0.0), 3),
-                        "crowding_penalty": round(crowd, 3)},
+                        "crowding_penalty": round(crowd, 3),
+                        "priced_in": round(pi, 3),
+                        **({"contrarian": round(contra_net, 3)} if contra_net else {}),
+                        **({"campaign_pressure": round(camp_p, 3)} if camp_p else {})},
+            **({"expected_move_pct": asset_impacts[sym]["expected_move_pct"]}
+               if asset_impacts.get(sym, {}).get("expected_move_pct") is not None else {}),
+            **({"vol_daily": round(vol, 4)} if vol else {}),
             **({"circular_financing": True} if circular else {}),
         })
     rows.sort(key=lambda r: -abs(r["score"]))

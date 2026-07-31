@@ -54,12 +54,25 @@ _HYPE_WORDS = re.compile(
     r"could soar|set to surge|unstoppable)\b", re.I)
 
 
-def source_trust(source: str) -> float:
+def source_trust(source: str, settings=None) -> float:
+    """Static prior, blended 50/50 with LEARNED per-source precision once a
+    source has enough scored outcomes (brain/source_learning.py). Feeds that
+    keep pointing the right way earn weight; wolf-criers lose it."""
     s = (source or "").lower()
+    static = DEFAULT_TRUST
     for key, val in SOURCE_TRUST.items():
         if key in s:
-            return val
-    return DEFAULT_TRUST
+            static = val
+            break
+    if settings is not None:
+        try:
+            from ai_investing.brain.source_learning import MIN_N, learned_map
+            for src, entry in learned_map(settings).items():
+                if src and src.lower() in s and entry.get("n", 0) >= MIN_N:
+                    return round(0.5 * static + 0.5 * entry["trust"], 3)
+        except Exception:
+            pass
+    return static
 
 
 def _tokens(text: str) -> set[str]:
@@ -67,14 +80,22 @@ def _tokens(text: str) -> set[str]:
             if w not in ("this", "that", "with", "from", "after", "amid", "over", "says")}
 
 
-def corroboration(headline: str, source: str, all_headlines: list[dict]) -> int:
-    """How many OTHER sources carry a substantially similar story (token overlap)."""
+def corroboration(headline: str, source: str, all_headlines: list[dict],
+                  min_trust: float = 0.55, settings=None) -> int:
+    """How many other TRUSTED sources carry a substantially similar story.
+    Independence-weighted on purpose: a chorus of low-trust feeds echoing one
+    another is how pump campaigns look, so only sources at or above `min_trust`
+    count as confirmation (pass min_trust=0 to count everyone). With `settings`,
+    trust is the LEARNED blend — a no-name feed that has earned precision can
+    confirm; a big name that keeps crying wolf loses the privilege."""
     t = _tokens(headline)
     if not t:
         return 0
     others = 0
     for h in all_headlines:
         if h.get("title") == headline or h.get("source", "") == source:
+            continue
+        if source_trust(h.get("source", ""), settings) < min_trust:
             continue
         overlap = len(t & _tokens(h.get("title", "")))
         # rephrased duplicates share the facts, not the words: 2+ meaty tokens
@@ -84,18 +105,30 @@ def corroboration(headline: str, source: str, all_headlines: list[dict]) -> int:
     return others
 
 
-def credibility(event: dict, all_headlines: list[dict]) -> float:
-    """Blend source trust, corroboration, manipulation likelihood, and hype language
-    into one credibility score. This is the noise filter."""
+def low_trust_echoes(headline: str, source: str, all_headlines: list[dict],
+                     settings=None) -> int:
+    """The campaign signature: similar stories carried ONLY by low-trust feeds."""
+    return (corroboration(headline, source, all_headlines, min_trust=0.0)
+            - corroboration(headline, source, all_headlines, settings=settings))
+
+
+def credibility(event: dict, all_headlines: list[dict], settings=None) -> float:
+    """Blend source trust, trusted corroboration, manipulation likelihood, hype
+    language, and the low-trust-chorus signature into one credibility score.
+    This is the noise filter."""
     src = event.get("source", "")
     headline = event.get("headline", event.get("summary", ""))
-    trust = source_trust(src)
-    corr = min(2, corroboration(headline, src, all_headlines))
+    trust = source_trust(src, settings)
+    corr = min(2, corroboration(headline, src, all_headlines, settings=settings))
+    echoes = low_trust_echoes(headline, src, all_headlines, settings=settings)
     manip = max(0.0, min(1.0, float(event.get("manipulation_likelihood", 0.0))))
     hype_pen = 0.15 if _HYPE_WORDS.search(headline or "") else 0.0
+    # many low-trust feeds, zero trusted ones: coordination, not confirmation
+    chorus_pen = 0.15 if (echoes >= 3 and corr == 0) else 0.0
     official = 0.1 if event.get("type") in ("monetary_policy", "fiscal_policy",
                                             "trade_policy", "regulation") else 0.0
-    score = 0.15 + 0.45 * trust + 0.15 * (corr / 2) + official - 0.5 * manip - hype_pen
+    score = (0.15 + 0.45 * trust + 0.15 * (corr / 2) + official
+             - 0.5 * manip - hype_pen - chorus_pen)
     return max(0.0, min(1.0, score))
 
 
@@ -215,7 +248,7 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
         ev["polarity"] = max(-1.0, min(1.0, float(ev.get("polarity", 0.0) or 0.0)))
         ev["magnitude"] = max(0.0, min(1.0, float(ev.get("magnitude", 0.0) or 0.0)))
         ev["confidence"] = max(0.0, min(1.0, float(ev.get("confidence", 0.5) or 0.5)))
-        ev["credibility"] = round(credibility(ev, headlines), 3)
+        ev["credibility"] = round(credibility(ev, headlines, settings), 3)
         ev["is_noise"] = ev["credibility"] < threshold or ev.get("type") == "rumor_hype"
         ev["emotion"] = ev.get("emotion") if ev.get("emotion") in EMOTIONS else "neutral"
         ev["emotion_intensity"] = max(0.0, min(1.0, float(ev.get("emotion_intensity", 0.0) or 0.0)))
@@ -223,6 +256,20 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
         # effective impulse the graph will feel: direction x size x trust x certainty
         ev["impulse"] = round(ev["polarity"] * ev["magnitude"] * ev["credibility"]
                               * ev["confidence"], 4)
+        # fear-monger discount: a source whose doom stories measurably never move
+        # markets gets its fear-event impulses damped (learned, per source)
+        if ev["emotion"] in ("fear", "panic") and ev["polarity"] < 0:
+            try:
+                from ai_investing.brain.source_learning import learned_map
+                s = (ev.get("source") or "").lower()
+                for src, entry in learned_map(settings).items():
+                    dd = entry.get("doom_discount")
+                    if dd is not None and src and src.lower() in s:
+                        ev["impulse"] = round(ev["impulse"] * dd, 4)
+                        ev["doom_discount"] = dd
+                        break
+            except Exception:
+                pass
         out.append(ev)
     return out
 

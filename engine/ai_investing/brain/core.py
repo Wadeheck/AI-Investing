@@ -35,6 +35,20 @@ class Brain:
         self.field = FieldState.load(cfg.field_path)
         self.store = BrainStore(cfg.db_path)
         self.last_new_headlines: list[dict] = []   # set by think(); consumed by news.py
+        # evidence weighting: saved edge-calibration verdicts adjust edge
+        # confidence in memory (supported x1.15, contradicted x0.5)
+        try:
+            from ai_investing.brain import calibration
+            self.calibration_summary = calibration.apply(settings, self.graph)
+        except Exception:
+            self.calibration_summary = {}
+
+    def _regime_dials(self) -> dict:
+        """The regime snapshot propagate() needs for gates + crisis convergence."""
+        r = self.regime
+        return {"risk_appetite": r.risk_appetite, "inflation_trend": r.inflation_trend,
+                "rate_trajectory": r.rate_trajectory, "dollar_trend": r.dollar_trend,
+                "fear": r.fear, "greed": r.greed}
 
     # -- the per-cycle pass ---------------------------------------------------
     def think(self, headlines: list[dict], macro: Optional[dict] = None,
@@ -81,12 +95,28 @@ class Brain:
         for node, contrib in self.field.mature_pending(now).items():
             impulses[node] = max(impulses.get(node, 0.0), contrib, key=abs)
 
+        # regime BEFORE propagation: the gates and crisis-convergence must see
+        # TODAY'S dials (a hot CPI print this morning should flip the Fed edge
+        # this cycle, not next) — EMA smoothing already prevents whiplash
+        self.regime.update(macro, events, performance=self._performance())
+
         impacts, trace, deferred = self.graph.propagate(impulses, max_hops=cfg.max_hops,
-                                                        decay=cfg.decay)
+                                                        decay=cfg.decay,
+                                                        regime=self._regime_dials())
         self.field.defer(deferred, now)
         # persistent field: today's ripple lands on top of what's still ringing
         self.field.absorb(impacts)
         asset_impacts = self.graph.asset_impacts(self.field.activations)
+        # sense of scale + what's already priced: impacts become expected moves
+        # (impact x vol x sqrt(h) x calibration gain), then get discounted by how
+        # far the tape already ran in the signal's direction
+        try:
+            from ai_investing.brain.priced_in import priced_in_scores
+            from ai_investing.brain.scale import enrich_with_scale
+            vols = enrich_with_scale(asset_impacts, self.settings, self.graph)
+            priced_in_scores(self.settings, asset_impacts, vols)
+        except Exception:
+            pass
         fired = self.scenarios.match(events)
         for sc in fired:
             for sym, tilt in (sc.get("assets") or {}).items():
@@ -94,8 +124,6 @@ class Brain:
                                                {"impact": 0.0, "node": "", "label": sym, "market": ""})
                 cur["impact"] = round(max(-1.0, min(1.0, cur["impact"] + tilt * sc["strength"])), 4)
                 cur.setdefault("scenarios", []).append(sc["id"])
-
-        self.regime.update(macro, events, performance=self._performance())
 
         # LLM-proposed edges: append with provenance, capped confidence (see graph.py)
         now = datetime.now(timezone.utc).isoformat()
@@ -133,6 +161,45 @@ class Brain:
         except Exception:
             self._integrity = {}
 
+        # The bullshit/emotion layer: WHERE the crowd is scared or greedy
+        # (per-node emotion field), WHO is paying to excite a name (campaign
+        # pressure + pump lifecycle), whether sources/emotions have EARNED
+        # trust (outcome scoring -> learned source trust + measured contrarian
+        # coefficients), and the OFFENSE composed from all of it (buy panic in
+        # clean value / fade euphoric froth / tilt to fraud beneficiaries).
+        emotions, campaigns_report, contrarian_report = {}, {}, {}
+        layer_error = ""
+        try:
+            from ai_investing.brain import calibration as edge_calibration
+            from ai_investing.brain import campaign as campaign_mod
+            from ai_investing.brain import contrarian as contrarian_mod
+            from ai_investing.brain import emotion_calibration
+            from ai_investing.brain import emotion_field
+            from ai_investing.brain import source_learning
+            now_dt = datetime.now(timezone.utc)
+            emotions = emotion_field.update(self.settings, events, now_dt)
+            campaigns_report = campaign_mod.update(self.settings, self.store,
+                                                   self.graph, now_dt)
+            # evidence loops (cheap idempotent batches, all local data): when
+            # fresh outcomes land, EVERYTHING recalibrates — source trust, the
+            # emotion coefficients, and the edge/path calibrator itself, whose
+            # new verdicts re-weight the live graph immediately (not next boot)
+            if source_learning.score_events(self.settings, self.graph):
+                source_learning.learn(self.settings)
+                emotion_calibration.calibrate(self.settings)
+                cal_report = edge_calibration.calibrate(self.settings, self.graph)
+                self.graph.set_calibration(
+                    edge_calibration.factors_from_report(cal_report))
+                self.calibration_summary = {
+                    "generated": cal_report.get("generated"),
+                    "gain": cal_report.get("gain", 1.0),
+                    **(cal_report.get("summary") or {})}
+            contrarian_report = contrarian_mod.compose(
+                self.settings, self.graph, self.field.activations,
+                emotions, campaigns_report)
+        except Exception as exc:   # degrade gracefully but NEVER silently
+            layer_error = f"{type(exc).__name__}: {exc}"
+
         state = self._state(events, impulses, impacts, trace, asset_impacts, fired, macro)
         if deal_report.get("nodes_created") or deal_report.get("edges_added") \
                 or deal_report.get("edges_corroborated"):
@@ -146,6 +213,19 @@ class Brain:
                            "headlines_new": len(new_heads), "backlog": backlog}
         state["circular_financing"] = self.graph.detect_circular_financing()
         state["integrity_flags"] = getattr(self, "_integrity", {})
+        state["calibration"] = self.calibration_summary   # proof-of-reflexes status
+        if emotions:
+            state["emotion_field"] = dict(sorted(
+                emotions.items(), key=lambda kv: -max(kv[1].get("fear", 0),
+                                                      kv[1].get("greed", 0)))[:20])
+        if campaigns_report:
+            state["campaigns"] = campaigns_report
+        if contrarian_report:
+            state["contrarian"] = {k: contrarian_report.get(k) for k in
+                                   ("buys", "watching", "fades", "beneficiaries",
+                                    "coefficients")}
+        if layer_error:
+            state["layer_error"] = layer_error   # visible on the dashboard, not swallowed
         try:                    # standing stress report (risk-committee view)
             from ai_investing.brain.stress import run_stress
             state["stress"] = run_stress(self.graph, top_n=5)
@@ -184,10 +264,19 @@ class Brain:
                 impulses[node] = max(impulses.get(node, 0.0), ev["impulse"], key=abs)
         cfg = self.settings.brain
         impacts, trace, deferred = self.graph.propagate(impulses, max_hops=cfg.max_hops,
-                                                        decay=cfg.decay)
+                                                        decay=cfg.decay,
+                                                        regime=self._regime_dials())
         fired = self.scenarios.match(events)
+        asset_impacts = self.graph.asset_impacts(impacts)
+        try:
+            from ai_investing.brain.priced_in import priced_in_scores
+            from ai_investing.brain.scale import enrich_with_scale
+            vols = enrich_with_scale(asset_impacts, self.settings, self.graph)
+            priced_in_scores(self.settings, asset_impacts, vols)
+        except Exception:
+            pass
         state = self._state(events, impulses, impacts, trace,
-                            self.graph.asset_impacts(impacts), fired, macro=None,
+                            asset_impacts, fired, macro=None,
                             simulated=True)
         state["delayed_preview"] = deferred   # what WOULD land later (τ-edges)
         state["centrality"] = self.graph.centrality()

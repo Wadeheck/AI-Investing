@@ -379,13 +379,15 @@ def test_circular_financing_detection_and_haircut():
     # the adviser must haircut long conviction on loop members
     s = Settings()
     b = Brain(s)
+    # NOTE: MSFT is itself a loop member since seed v16 (owns+supplies OpenAI),
+    # so the clean control is a non-loop name — KO carries no financing circle.
     b.field.activations = {"ai_capex_cycle": 0.6, "ai_datacenter": 0.5,
-                           "crwv": 0.5, "nvda": 0.5, "msft": 0.5}
+                           "crwv": 0.5, "nvda": 0.5, "ko": 0.5}
     b.field.updated = datetime.now(timezone.utc).isoformat()
     a = advise(s, b, log=False)
     by = {t["symbol"]: t for t in a["trades"]}
-    if "CRWV" in by and "MSFT" in by:
-        assert by["CRWV"]["score"] < by["MSFT"]["score"]   # same field charge, haircut applied
+    if "CRWV" in by and "KO" in by:
+        assert by["CRWV"]["score"] < by["KO"]["score"]   # same field charge, haircut applied
     assert any(t.get("circular_financing") for t in a["trades"] if t["symbol"] in ("NVDA", "CRWV"))
 
 
@@ -521,7 +523,7 @@ def test_scorecard_judges_and_learns():
                     {"symbol": "TSLA", "direction": "long"},
                     {"symbol": "KO", "direction": "long"}]})))
     old_day = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=6)).date().isoformat()
-    sc.conn.executemany("INSERT INTO price_history VALUES(?,?,?)",
+    sc.conn.executemany("INSERT INTO price_history(date,symbol,price) VALUES(?,?,?)",
                         [(old_day, "NVDA", 100.0), (old_day, "TSLA", 200.0), (old_day, "KO", 60.0)])
     sc.snapshot_prices({"NVDA": 110.0, "TSLA": 180.0, "KO": 60.05})   # +10%, -10%, flat
     outs = sc.score_due(horizon_days=5)
@@ -611,7 +613,8 @@ def test_day_moves_pulse_once_per_day():
     s = Settings()
     sc = Scorecard(s)
     yesterday = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=1)).date().isoformat()
-    sc.conn.execute("INSERT INTO price_history VALUES(?,?,?)", (yesterday, "NVDA", 100.0))
+    sc.conn.execute("INSERT INTO price_history(date,symbol,price) VALUES(?,?,?)",
+                    (yesterday, "NVDA", 100.0))
     sc.conn.commit()
     moves = sc.day_moves({"NVDA": 93.0, "KO": 50.0})
     assert moves == {"NVDA": -0.07}          # KO has no prior snapshot -> no pulse

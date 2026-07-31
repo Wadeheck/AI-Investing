@@ -1,6 +1,11 @@
 """The scalability criterion: a money circle must surface from DIGESTED NEWS
 alone — private hub auto-created, legs accrued, cycle detected — with zero
 company-specific code."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from ai_investing.brain.deals import apply_deals, resolve
 from ai_investing.brain.graph import Edge, KnowledgeGraph, Node
 

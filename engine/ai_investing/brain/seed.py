@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 18
+SEED_VERSION = 20
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -229,12 +229,14 @@ SEED_NODES = [
     # ------------- node-graph gap analysis (seed v12) -------------
     # Factors/themes promoted from docs/NODE_GRAPH_GAP_ANALYSIS.md — each backed
     # by dated digestion evidence of stories skipped or force-tagged to a proxy.
-    {"id": "political_stability", "type": "factor", "label": "Political & institutional stability",
+    {"id": "political_stability", "type": "factor",
+     "label": "Political instability (up = crises rising)",
      "aliases": ["coup", "government collapse", "civil unrest", "political crisis",
                  "leadership purge", "hung parliament", "state of emergency",
                  "no-confidence vote", "mutiny"],
-     "equilibrium": "stable governance and orderly transitions; deteriorating = "
-                    "coups, mass unrest, contested power, purges"},
+     "equilibrium": "+1 = instability RISING (coups, mass unrest, contested power, "
+                    "purges); 0 = stable governance and orderly transitions. "
+                    "Convention: ALL stress nodes read +1 = stress rising"},
     {"id": "boe_rate", "type": "factor", "label": "BoE policy rate",
      "aliases": ["bank of england", "boe", "mpc", "monetary policy committee",
                  "uk interest rate", "bank rate", "andrew bailey", "uk rate rise",
@@ -253,13 +255,15 @@ SEED_NODES = [
      "equilibrium": "sanctioned economies function under external constraint but "
                     "without acute crisis; deteriorating = currency collapse, "
                     "emergency rate action, capital controls, reserve depletion"},
-    {"id": "eurozone_political_risk", "type": "factor", "label": "Eurozone sovereign political/fiscal risk",
+    {"id": "eurozone_political_risk", "type": "factor",
+     "label": "Eurozone sovereign political/fiscal stress (up = stress rising)",
      "aliases": ["french debt", "oat spread", "excessive deficit procedure",
                  "snap election", "sovereign risk premium", "coalition talks",
                  "budget crisis", "confidence vote"],
-     "equilibrium": "+1 = fiscal-political risk EASING (budget passed, spreads "
-                    "narrowing); deteriorating = snap elections, hung parliaments, "
-                    "EU deficit procedures, sovereign-spread blowouts"},
+     "equilibrium": "+1 = stress RISING (snap elections, hung parliaments, EU "
+                    "deficit procedures, sovereign-spread blowouts); -1 = easing "
+                    "(budget passed, spreads narrowing). Convention: ALL stress "
+                    "nodes read +1 = stress rising"},
     {"id": "us_growth", "type": "factor", "label": "US growth",
      "aliases": ["us economy", "us gdp", "gdp print", "ism", "us pmi", "us recession"],
      "equilibrium": "trend ~2%; +1 = accelerating (GDP prints, ISM/PMI beats), "
@@ -695,6 +699,82 @@ SEED_NODES = [
      "aliases": ["claude"]},
     {"id": "xai", "type": "asset", "label": "xAI (private)",
      "aliases": ["grok"]},
+    # ------------- market-priced macro + systemic hubs (seed v19) -------------
+    # Market-priced twins of qualitative factors: the 2Y is what the market
+    # THINKS the Fed does next; HY spreads are credit conditions with a price.
+    {"id": "us_2y_yield", "type": "factor", "label": "US 2Y yield / policy expectations",
+     "aliases": ["2-year yield", "two-year yield", "front end", "rate expectations",
+                 "fed funds futures", "2s10s", "yield curve inversion"],
+     "equilibrium": "tracks expected Fed path; 2Y above 10Y (inversion) is the "
+                    "classic recession signal — the curve IS the market's forecast"},
+    {"id": "credit_spreads", "type": "factor",
+     "label": "Corporate credit spreads (up = widening)",
+     "aliases": ["high yield spread", "hy oas", "credit spread", "spread widening",
+                 "investment grade spread", "maturity wall", "refinancing wall",
+                 "junk bonds", "default rate"],
+     "equilibrium": "HY OAS ~300-400bp = calm; >500bp = stress priced; spreads "
+                    "are the market-priced twin of credit_conditions and lead it"},
+    {"id": "cnh_devaluation", "type": "factor",
+     "label": "CNY devaluation pressure (up = weaker yuan)",
+     "aliases": ["usd/cnh", "usdcnh", "yuan devaluation", "renminbi", "cny fix",
+                 "offshore yuan", "yuan weakness", "人民币贬值", "人民幣"],
+     "equilibrium": "PBOC manages the fix; a break above ~7.3-7.4 signals Beijing "
+                    "tolerating devaluation — the single loudest China-macro tell"},
+    {"id": "private_credit", "type": "factor",
+     "label": "Private credit / shadow banking stress (up = stress rising)",
+     "aliases": ["private credit", "direct lending", "shadow bank", "nbfi",
+                 "business development company", "bdc", "private debt",
+                 "credit fund gating", "nav loan"],
+     "equilibrium": "+1 = stress RISING (marks questioned, redemptions gated, "
+                    "defaults surfacing) — today's vehicle for the "
+                    "financial_engineering mechanism: opaque, levered, unpriced"},
+    {"id": "cb_gold_buying", "type": "factor", "label": "Central-bank gold buying",
+     "aliases": ["central bank gold", "gold reserves", "official sector gold",
+                 "reserve diversification", "de-dollarization"],
+     "equilibrium": "structural bid since reserves were weaponized in 2022; "
+                    "accumulation waves reset gold's floor independent of real rates"},
+    {"id": "us_cre", "type": "factor",
+     "label": "US commercial real estate stress (up = stress rising)",
+     "aliases": ["commercial real estate", "cre", "office vacancy", "office loans",
+                 "cmbs", "office tower", "cre refinancing"],
+     "equilibrium": "+1 = stress RISING (vacancies, marks, maturing loans "
+                    "refinanced at double the rate); lands on regional-bank books"},
+    # crypto systemic hubs: private, never tradable, but they ARE where the
+    # custody/peg mechanisms detonate — the loop is real even untradable.
+    {"id": "tether", "type": "asset", "label": "Tether/USDT (private)",
+     "aliases": ["usdt", "tether reserves", "usdt depeg"]},
+    {"id": "binance", "type": "asset", "label": "Binance (private)",
+     "aliases": ["cz", "binance outflows", "bnb"]},
+    {"id": "crcl", "type": "asset", "label": "Circle (USDC)", "symbol": "CRCL",
+     "market": "US", "aliases": ["usdc", "circle internet"]},
+    # missing coverage: money-center banks, payments, retail, defense primes,
+    # China domestic semis, European rearmament
+    {"id": "jpm", "type": "asset", "label": "JPMorgan", "symbol": "JPM", "market": "US",
+     "aliases": ["jamie dimon", "jp morgan"]},
+    {"id": "gs", "type": "asset", "label": "Goldman Sachs", "symbol": "GS", "market": "US",
+     "aliases": ["goldman"]},
+    {"id": "visa", "type": "asset", "label": "Visa", "symbol": "V", "market": "US"},
+    {"id": "mastercard", "type": "asset", "label": "Mastercard", "symbol": "MA", "market": "US"},
+    {"id": "wmt", "type": "asset", "label": "Walmart", "symbol": "WMT", "market": "US",
+     "aliases": ["walmart"]},
+    {"id": "cost", "type": "asset", "label": "Costco", "symbol": "COST", "market": "US"},
+    {"id": "xly", "type": "asset", "label": "Consumer Discretionary ETF", "symbol": "XLY",
+     "market": "US"},
+    {"id": "lmt", "type": "asset", "label": "Lockheed Martin", "symbol": "LMT", "market": "US",
+     "aliases": ["lockheed"]},
+    {"id": "rtx", "type": "asset", "label": "RTX (Raytheon)", "symbol": "RTX", "market": "US",
+     "aliases": ["raytheon"]},
+    {"id": "rheinmetall", "type": "asset", "label": "Rheinmetall", "symbol": "RHM.DE",
+     "market": "EU", "aliases": ["rheinmetall ag"]},
+    {"id": "smic", "type": "asset", "label": "SMIC", "symbol": "0981.HK", "market": "HK",
+     "aliases": ["semiconductor manufacturing international", "中芯国际", "中芯國際"]},
+    {"id": "payments", "type": "theme", "label": "Payments / card networks",
+     "aliases": ["card networks", "interchange", "payment processing", "digital payments"]},
+    {"id": "us_retail", "type": "theme", "label": "US retail",
+     "aliases": ["big box", "retailer earnings", "same-store sales", "holiday shopping"]},
+    {"id": "china_semis", "type": "theme", "label": "China domestic semiconductors",
+     "aliases": ["domestic substitution", "china chipmakers", "china foundry",
+                 "semiconductor self-sufficiency", "国产替代", "國產替代"]},
 ]
 
 SEED_EDGES = [
@@ -703,16 +783,29 @@ SEED_EDGES = [
      "note": "hot inflation forces hikes / delays cuts"},
     {"src": "fed_rate", "dst": "us_10y_yield", "type": "influences", "sign": 1, "weight": 0.7},
     {"src": "fed_rate", "dst": "usd_strength", "type": "influences", "sign": 1, "weight": 0.7},
-    {"src": "fed_rate", "dst": "risk_appetite", "type": "influences", "sign": -1, "weight": 0.6},
+    {"src": "fed_rate", "dst": "risk_appetite", "type": "influences", "sign": -1, "weight": 0.6,
+     "regime_gate": {"dial": "inflation_trend", "lo": -0.15, "hi": 1.0, "outside": "flip"},
+     "note": "hikes hurt risk while inflation is the fear; in a growth scare "
+             "(inflation cooling hard) the correlation FLIPS — cuts accompany "
+             "risk-off, 'good news is good news' again"},
     {"src": "fed_rate", "dst": "mas_policy", "type": "influences", "sign": 1, "weight": 0.6,
      "note": "SG imports US rates via the SGD peg framework"},
     {"src": "us_10y_yield", "dst": "us_megacap_tech", "type": "influences", "sign": -1,
-     "weight": 0.6, "note": "duration: long-dated cashflows discount harder"},
+     "weight": 0.6,
+     "regime_gate": {"dial": "inflation_trend", "lo": -0.15, "hi": 1.0, "outside": "damp"},
+     "note": "duration: long-dated cashflows discount harder — but in a growth "
+             "scare recession fear competes with duration relief (2008 vs 2020 "
+             "went opposite ways), so the edge only DAMPS there"},
     {"src": "us_10y_yield", "dst": "sg_reits", "type": "influences", "sign": -1, "weight": 0.7,
      "note": "REIT financing costs + yield competition"},
     {"src": "us_10y_yield", "dst": "gold_price", "type": "influences", "sign": -1, "weight": 0.6,
-     "note": "real yields are gold's opportunity cost"},
-    {"src": "usd_strength", "dst": "gold_price", "type": "influences", "sign": -1, "weight": 0.5},
+     "regime_gate": {"dial": "fear", "lo": 0.0, "hi": 0.7, "outside": "damp"},
+     "note": "real yields are gold's opportunity cost — but in a panic the "
+             "crisis bid overrides the real-rate anchor (gold up WITH yields "
+             "is the fiscal/fear signature; bond_stress edge carries that leg)"},
+    {"src": "usd_strength", "dst": "gold_price", "type": "influences", "sign": -1, "weight": 0.5,
+     "regime_gate": {"dial": "fear", "lo": 0.0, "hi": 0.7, "outside": "damp"},
+     "note": "in a panic USD and gold can rise together (both are exits)"},
     {"src": "usd_strength", "dst": "copper_price", "type": "influences", "sign": -1, "weight": 0.4},
     {"src": "usd_strength", "dst": "crypto_liquidity", "type": "influences", "sign": -1, "weight": 0.4},
     {"src": "usd_strength", "dst": "china_tech", "type": "influences", "sign": -1, "weight": 0.3,
@@ -730,7 +823,11 @@ SEED_EDGES = [
     {"src": "oil_price", "dst": "energy_sector", "type": "influences", "sign": 1, "weight": 0.8},
     {"src": "geopolitical_tension", "dst": "oil_price", "type": "influences", "sign": 1, "weight": 0.6},
     {"src": "geopolitical_tension", "dst": "gold_price", "type": "influences", "sign": 1, "weight": 0.6},
-    {"src": "geopolitical_tension", "dst": "risk_appetite", "type": "influences", "sign": -1, "weight": 0.6},
+    {"src": "geopolitical_tension", "dst": "risk_appetite", "type": "influences", "sign": -1,
+     "weight": 0.6,
+     "regime_gate": {"dial": "greed", "lo": 0.0, "hi": 0.7, "outside": "damp"},
+     "note": "in a melt-up the crowd shrugs at war headlines (2021) — the edge "
+             "damps, and that very shrug is late-cycle complacency"},
     {"src": "yen_carry", "dst": "risk_appetite", "type": "influences", "sign": -1, "weight": 0.5,
      "note": "BOJ tightening (node up) unwinds carry -> global risk-off"},
     {"src": "opec", "dst": "oil_price", "type": "influences", "sign": 1, "weight": 0.7,
@@ -784,7 +881,13 @@ SEED_EDGES = [
      "weight": 0.6, "delay_days": 90, "note": "budget cycles ratchet slowly"},
     {"src": "defense_spending", "dst": "defense_industry", "type": "influences", "sign": 1, "weight": 0.7},
     {"src": "us_10y_yield", "dst": "us_financials", "type": "influences", "sign": 1, "weight": 0.3,
-     "note": "steeper curve helps NIMs (to a point)"},
+     "regime_gate": {"dial": "fear", "lo": 0.0, "hi": 0.65, "outside": "flip"},
+     "note": "steeper curve helps NIMs (to a point) — but in a panic, yield "
+             "spikes mark bond losses on bank books instead (SVB mechanism)"},
+    {"src": "us_employment", "dst": "risk_appetite", "type": "influences", "sign": -1, "weight": 0.3,
+     "regime_gate": {"dial": "inflation_trend", "lo": -0.15, "hi": 1.0, "outside": "flip"},
+     "note": "hot jobs = hawkish Fed = bad for risk while inflation dominates; "
+             "in a growth scare hot jobs are RELIEF (flip)"},
     # ---- global coverage wiring (seed v3) ----
     {"src": "ecb_policy", "dst": "europe_growth", "type": "influences", "sign": -1, "weight": 0.4,
      "delay_days": 90},
@@ -806,7 +909,10 @@ SEED_EDGES = [
     {"src": "em_flows", "dst": "china_tech", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "em_flows", "dst": "sg_banks", "type": "influences", "sign": 1, "weight": 0.2},
     {"src": "us_government", "dst": "us_tech_regulation", "type": "influences", "sign": 1, "weight": 0.5},
-    {"src": "us_tech_regulation", "dst": "us_megacap_tech", "type": "influences", "sign": -1, "weight": 0.5},
+    {"src": "us_tech_regulation", "dst": "us_megacap_tech", "type": "influences", "sign": -1,
+     "weight": 0.5,
+     "regime_gate": {"dial": "greed", "lo": 0.0, "hi": 0.7, "outside": "damp"},
+     "note": "antitrust headlines are ignored in euphoria, punished in fear"},
     {"src": "us_government", "dst": "crypto_regulation", "type": "influences", "sign": 1, "weight": 0.4},
     {"src": "crypto_regulation", "dst": "crypto_liquidity", "type": "influences", "sign": -1, "weight": 0.5,
      "note": "tightening chokes flows; approvals (node down) unlock them"},
@@ -886,7 +992,9 @@ SEED_EDGES = [
     {"src": "china_stimulus", "dst": "china_consumer", "type": "influences", "sign": 1, "weight": 0.7},
     {"src": "china_stimulus", "dst": "china_property", "type": "influences", "sign": 1, "weight": 0.6},
     {"src": "china_stimulus", "dst": "copper_price", "type": "influences", "sign": 1, "weight": 0.5},
-    {"src": "china_stimulus", "dst": "china_tech", "type": "influences", "sign": 1, "weight": 0.5},
+    {"src": "china_stimulus", "dst": "china_tech", "type": "influences", "sign": 1, "weight": 0.5,
+     "regime_gate": {"dial": "risk_appetite", "lo": -0.5, "hi": 1.0, "outside": "damp"},
+     "note": "stimulus rallies fade fast when global risk is in liquidation mode"},
     {"src": "china_property", "dst": "china_financials", "type": "influences", "sign": 1, "weight": 0.6,
      "note": "property NPLs sit on bank balance sheets"},
     {"src": "china_property", "dst": "china_consumer", "type": "influences", "sign": 1, "weight": 0.5,
@@ -896,7 +1004,9 @@ SEED_EDGES = [
     {"src": "china_anti_corruption", "dst": "china_staples", "type": "influences", "sign": -1,
      "weight": 0.7, "note": "gifting/banquet demand collapses in campaigns (Moutai)"},
     {"src": "lithium_price", "dst": "ev_supply_chain", "type": "influences", "sign": -1, "weight": 0.4,
-     "note": "cheap lithium helps battery/EV margins"},
+     "regime_gate": {"dial": "risk_appetite", "lo": -0.4, "hi": 1.0, "outside": "damp"},
+     "note": "cheap lithium helps battery/EV margins — unless the collapse IS "
+             "the demand signal (risk-off commodity crashes aren't margin relief)"},
     {"src": "ai_capex_cycle", "dst": "semis", "type": "influences", "sign": 1, "weight": 0.8},
     {"src": "ai_capex_cycle", "dst": "ai_datacenter", "type": "influences", "sign": 1, "weight": 0.8},
     {"src": "ai_capex_cycle", "dst": "us_megacap_tech", "type": "influences", "sign": 1, "weight": 0.5},
@@ -910,7 +1020,9 @@ SEED_EDGES = [
     {"src": "yen_carry", "dst": "crypto_liquidity", "type": "influences", "sign": -1, "weight": 0.4,
      "note": "carry unwinds hit the most liquid 24/7 risk asset FIRST"},
     {"src": "crypto_adoption", "dst": "crypto_liquidity", "type": "influences", "sign": 1, "weight": 0.6},
-    {"src": "crypto_adoption", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.4},
+    {"src": "crypto_adoption", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.4,
+     "regime_gate": {"dial": "risk_appetite", "lo": -0.5, "hi": 1.0, "outside": "damp"},
+     "note": "adoption headlines can't fight a liquidation cascade (damp)"},
     {"src": "crypto_regulation", "dst": "crypto_adoption", "type": "influences", "sign": -1, "weight": 0.5,
      "note": "approvals (regulation node DOWN) unlock the institutional wave"},
     {"src": "sanctions", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
@@ -918,7 +1030,10 @@ SEED_EDGES = [
     {"src": "us_inflation", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
      "note": "debasement narrative recruits marginal buyers (weak but real)"},
     {"src": "btc_halving", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.3,
-     "delay_days": 60, "note": "supply squeeze transmits slowly, narrative faster"},
+     "delay_days": 60,
+     "regime_gate": {"dial": "risk_appetite", "lo": -0.4, "hi": 1.0, "outside": "mute"},
+     "note": "supply squeeze transmits slowly, narrative faster — but the cycle "
+             "narrative needs a bid: in deep risk-off it recruits nobody (mute)"},
     {"src": "power_demand", "dst": "btc_halving", "type": "influences", "sign": -1, "weight": 0.2,
      "note": "power costs squeeze miners post-halving (capitulation risk)"},
     {"src": "crypto_liquidity", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.7,
@@ -1042,7 +1157,10 @@ SEED_EDGES = [
     {"src": "power_demand", "dst": "uranium_price", "type": "influences", "sign": 1, "weight": 0.5,
      "note": "nuclear restart wave for datacenter power"},
     {"src": "uranium_price", "dst": "cameco", "type": "influences", "sign": 1, "weight": 0.7},
-    {"src": "energy_transition", "dst": "solar", "type": "influences", "sign": 1, "weight": 0.6},
+    {"src": "energy_transition", "dst": "solar", "type": "influences", "sign": 1, "weight": 0.6,
+     "regime_gate": {"dial": "rate_trajectory", "lo": -1.0, "hi": 0.4, "outside": "damp"},
+     "note": "solar is a duration asset: project economics break under an "
+             "aggressive tightening path (2022-23), policy support or not"},
     {"src": "energy_transition", "dst": "uranium_price", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "energy_transition", "dst": "copper_price", "type": "influences", "sign": 1, "weight": 0.4,
      "note": "electrification is copper-hungry"},
@@ -1172,8 +1290,9 @@ SEED_EDGES = [
      "note": "strategic stake in Sea (Shopee)"},
     {"src": "softbank", "dst": "arm", "type": "owns", "weight": 0.8,
      "note": "~88% — SoftBank trades like leveraged Arm"},
-    {"src": "berkshire", "dst": "aapl", "type": "owns", "weight": 0.4,
-     "note": "largest equity holding"},
+    {"src": "berkshire", "dst": "aapl", "type": "owns", "weight": 0.15,
+     "note": "still a top holding but the stake was cut ~2/3 through 2024 — "
+             "ownership weights are point-in-time facts; refresh on 13F news"},
     {"src": "berkshire", "dst": "ko", "type": "owns", "weight": 0.15,
      "note": "~9% of Coca-Cola, decades-held"},
     {"src": "temasek", "dst": "dbs", "type": "owns", "weight": 0.4,
@@ -1209,8 +1328,8 @@ SEED_EDGES = [
      "weight": 0.15, "note": "GBP strength on hawkish BoE surprises is a modest drag on the dollar index"},
     {"src": "boe_rate", "dst": "uk_banks", "type": "influences", "sign": 1,
      "weight": 0.4, "note": "higher rates initially expand UK bank net interest margins"},
-    {"src": "boe_rate", "dst": "uk_utilities", "type": "influences", "sign": 1,
-     "weight": 0.35, "note": "regulated utilities carry heavy floating/refinanced debt; higher rates raise distress risk"},
+    {"src": "boe_rate", "dst": "uk_utilities", "type": "influences", "sign": -1,
+     "weight": 0.35, "note": "regulated utilities carry heavy floating/refinanced debt; higher rates raise distress risk -> sector DOWN"},
     {"src": "boe_rate", "dst": "uk_growth", "type": "influences", "sign": -1, "weight": 0.4,
      "delay_days": 90, "note": "UK monetary tightening hits output with a lag (mirrors ecb_policy -> europe_growth)"},
     # uk_banks
@@ -1274,14 +1393,14 @@ SEED_EDGES = [
     {"src": "geopolitical_tension", "dst": "commercial_aerospace", "type": "influences", "sign": 1,
      "weight": 0.1, "confidence": 0.6,
      "note": "export-control/sanctions regimes hit aircraft parts supply chains (weak, mostly latent)"},
-    # eurozone_political_risk (+1 = risk EASING — inverted vs geopolitical_tension)
-    {"src": "eurozone_political_risk", "dst": "risk_appetite", "type": "influences", "sign": 1,
+    # eurozone_political_risk (+1 = stress RISING — same convention as every stress node)
+    {"src": "eurozone_political_risk", "dst": "risk_appetite", "type": "influences", "sign": -1,
      "weight": 0.25, "confidence": 0.75,
-     "note": "fiscal-political risk easing in a major eurozone economy is risk-on for European assets"},
-    {"src": "eurozone_political_risk", "dst": "europe_growth", "type": "influences", "sign": 1,
+     "note": "sovereign fiscal-political stress rising in a major eurozone economy is risk-off"},
+    {"src": "eurozone_political_risk", "dst": "europe_growth", "type": "influences", "sign": -1,
      "weight": 0.15, "confidence": 0.6,
      "note": "prolonged fiscal-political uncertainty depresses investment and confidence"},
-    {"src": "ecb_policy", "dst": "eurozone_political_risk", "type": "influences", "sign": -1,
+    {"src": "ecb_policy", "dst": "eurozone_political_risk", "type": "influences", "sign": 1,
      "weight": 0.1, "confidence": 0.5,
      "note": "ECB tightening raises debt-servicing costs for indebted member states (weak, latent)"},
     # us_growth / uk_growth: dedicated growth factors (parity with china/europe/korea/india)
@@ -1582,7 +1701,11 @@ SEED_EDGES = [
      "weight": 0.2, "note": "foreign capital exits markets that ban selling"},
     # financial_fraud: revealed fraud is contagious late-cycle
     {"src": "financial_fraud", "dst": "risk_appetite", "type": "influences", "sign": -1,
-     "weight": 0.3, "note": "each exposé makes every similar balance sheet suspect (Enron -> Worldcom -> Tyco)"},
+     "weight": 0.3,
+     "regime_gate": {"dial": "greed", "lo": 0.0, "hi": 0.75, "outside": "damp"},
+     "note": "each exposé makes every similar balance sheet suspect (Enron -> "
+             "Worldcom -> Tyco) — though melt-ups shrug at the first ones "
+             "(2021 SPACs); the shrug itself is late-cycle"},
     {"src": "financial_fraud", "dst": "credit_conditions", "type": "influences", "sign": -1,
      "weight": 0.2, "note": "lenders tighten against everyone when books prove fake"},
     {"src": "financial_fraud", "dst": "us_tech_regulation", "type": "influences", "sign": 1,
@@ -1596,4 +1719,119 @@ SEED_EDGES = [
      "note": "the listed exchange carries the sector's custody-trust beta"},
     {"src": "custody_risk", "dst": "financial_fraud", "type": "correlates_with", "sign": 1,
      "weight": 0.3},
+    # ---- market-priced macro wiring (seed v19) ----
+    # the 2Y: policy expectations, the front end the Fed actually steers
+    {"src": "fed_rate", "dst": "us_2y_yield", "type": "influences", "sign": 1, "weight": 0.8},
+    {"src": "us_inflation", "dst": "us_2y_yield", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "hot prints reprice the expected Fed path instantly"},
+    {"src": "us_2y_yield", "dst": "us_10y_yield", "type": "influences", "sign": 1, "weight": 0.6},
+    {"src": "us_2y_yield", "dst": "usd_strength", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "front-end differentials drive FX harder than the long end"},
+    # credit spreads: the market-priced twin of credit_conditions — and it LEADS
+    {"src": "risk_appetite", "dst": "credit_spreads", "type": "influences", "sign": -1,
+     "weight": 0.5, "note": "risk-off widens spreads immediately"},
+    {"src": "credit_spreads", "dst": "credit_conditions", "type": "influences", "sign": -1,
+     "weight": 0.6, "delay_days": 30,
+     "note": "widening spreads become tighter lending a month later"},
+    {"src": "credit_spreads", "dst": "us_financials", "type": "influences", "sign": -1,
+     "weight": 0.4},
+    {"src": "financial_engineering", "dst": "credit_spreads", "type": "influences", "sign": 1,
+     "weight": 0.25, "delay_days": 120,
+     "note": "hidden leverage eventually gets priced"},
+    # CNY devaluation pressure: the loudest China tell
+    {"src": "china_growth", "dst": "cnh_devaluation", "type": "influences", "sign": -1,
+     "weight": 0.4, "note": "weak growth = devaluation pressure builds"},
+    {"src": "usd_strength", "dst": "cnh_devaluation", "type": "influences", "sign": 1,
+     "weight": 0.4},
+    {"src": "cnh_devaluation", "dst": "em_flows", "type": "influences", "sign": -1,
+     "weight": 0.5, "note": "2015 playbook: yuan breaks, ALL EM sells"},
+    {"src": "cnh_devaluation", "dst": "currency_peg_stress", "type": "influences", "sign": 1,
+     "weight": 0.4},
+    {"src": "cnh_devaluation", "dst": "china_tech", "type": "influences", "sign": -1,
+     "weight": 0.3},
+    {"src": "cnh_devaluation", "dst": "us_china_tariffs", "type": "influences", "sign": 1,
+     "weight": 0.25, "delay_days": 30,
+     "note": "devaluation invites the tariff response"},
+    # private credit: today's financial_engineering vehicle
+    {"src": "fed_rate", "dst": "private_credit", "type": "influences", "sign": 1,
+     "weight": 0.3, "delay_days": 180,
+     "note": "floating-rate borrowers absorb hikes with a lag, then crack"},
+    {"src": "private_credit", "dst": "credit_spreads", "type": "influences", "sign": 1,
+     "weight": 0.4, "note": "gated funds and questioned marks reprice public credit"},
+    {"src": "private_credit", "dst": "credit_conditions", "type": "influences", "sign": -1,
+     "weight": 0.4, "delay_days": 60},
+    {"src": "private_credit", "dst": "us_financials", "type": "influences", "sign": -1,
+     "weight": 0.3, "note": "bank credit lines TO private-credit funds are the contagion path"},
+    {"src": "financial_engineering", "dst": "private_credit", "type": "correlates_with",
+     "sign": 1, "weight": 0.4, "note": "same mechanism, current vehicle"},
+    # central-bank gold bid
+    {"src": "cb_gold_buying", "dst": "gold_price", "type": "influences", "sign": 1,
+     "weight": 0.5, "note": "the structural bid that decoupled gold from real rates"},
+    {"src": "sanctions", "dst": "cb_gold_buying", "type": "influences", "sign": 1,
+     "weight": 0.4, "note": "reserve freezes teach every central bank to diversify"},
+    {"src": "us_gov_debt", "dst": "cb_gold_buying", "type": "influences", "sign": 1,
+     "weight": 0.3, "delay_days": 90},
+    # US commercial real estate: rates -> refinancing shock -> regional banks
+    {"src": "fed_rate", "dst": "us_cre", "type": "influences", "sign": 1, "weight": 0.4,
+     "delay_days": 180, "note": "maturing CRE loans refinance at double the coupon, slowly"},
+    {"src": "us_cre", "dst": "us_financials", "type": "influences", "sign": -1, "weight": 0.4,
+     "note": "office marks live on regional-bank books"},
+    {"src": "us_cre", "dst": "credit_conditions", "type": "influences", "sign": -1,
+     "weight": 0.3, "delay_days": 60},
+    # crypto systemic hubs: where custody/peg mechanisms actually detonate
+    {"src": "currency_peg_stress", "dst": "tether", "type": "influences", "sign": -1,
+     "weight": 0.5, "note": "the biggest peg in crypto — stablecoin stress lands here first"},
+    {"src": "custody_risk", "dst": "tether", "type": "influences", "sign": -1, "weight": 0.4},
+    {"src": "tether", "dst": "crypto_liquidity", "type": "influences", "sign": 1, "weight": 0.6,
+     "note": "USDT is crypto's base money: Tether doubt = liquidity drain, market-wide"},
+    {"src": "custody_risk", "dst": "binance", "type": "influences", "sign": -1, "weight": 0.5,
+     "note": "the largest exchange carries the largest custody-trust exposure"},
+    {"src": "binance", "dst": "crypto_liquidity", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "dominant venue: its stress IS market liquidity stress"},
+    {"src": "crypto_liquidity", "dst": "crcl", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "USDC float (and Circle's interest income) grows with crypto liquidity"},
+    {"src": "crypto_regulation", "dst": "crcl", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "stablecoin law favors the REGULATED issuer — tightening is Circle's moat"},
+    {"src": "crcl", "dst": "tether", "type": "competes_with", "weight": 0.4,
+     "note": "stablecoin share war: Tether stress is USDC's inflow"},
+    {"src": "crcl", "dst": "crypto_majors", "type": "member_of", "weight": 0.4,
+     "note": "equity beta to the asset class, like COIN"},
+    # money-center banks + payments + retail
+    {"src": "jpm", "dst": "us_financials", "type": "member_of", "weight": 0.9},
+    {"src": "us_10y_yield", "dst": "jpm", "type": "influences", "sign": 1, "weight": 0.2,
+     "regime_gate": {"dial": "fear", "lo": 0.0, "hi": 0.65, "outside": "flip"},
+     "note": "NIM tailwind in calm; in a panic yield spikes mark bond-book "
+             "losses instead (mirrors the us_financials SVB gate)"},
+    {"src": "gs", "dst": "us_financials", "type": "member_of", "weight": 0.9},
+    {"src": "credit_spreads", "dst": "gs", "type": "influences", "sign": -1, "weight": 0.3,
+     "note": "widening freezes issuance/M&A — the fee pool"},
+    {"src": "us_consumer", "dst": "payments", "type": "influences", "sign": 1, "weight": 0.5,
+     "note": "card volumes are a real-time consumer read"},
+    {"src": "visa", "dst": "payments", "type": "member_of", "weight": 0.9},
+    {"src": "mastercard", "dst": "payments", "type": "member_of", "weight": 0.9},
+    {"src": "visa", "dst": "mastercard", "type": "competes_with", "weight": 0.4},
+    {"src": "us_consumer", "dst": "us_retail", "type": "influences", "sign": 1, "weight": 0.7,
+     "note": "the consumer factor finally has tradable members to land on"},
+    {"src": "us_china_tariffs", "dst": "us_retail", "type": "influences", "sign": -1,
+     "weight": 0.3, "note": "import costs squeeze merchandise margins"},
+    {"src": "wmt", "dst": "us_retail", "type": "member_of", "weight": 0.85},
+    {"src": "cost", "dst": "us_retail", "type": "member_of", "weight": 0.85},
+    {"src": "xly", "dst": "us_retail", "type": "member_of", "weight": 0.9},
+    {"src": "wmt", "dst": "consumer_staples", "type": "member_of", "weight": 0.5,
+     "note": "the defensive grocer half of Walmart"},
+    # defense primes + European rearmament
+    {"src": "lmt", "dst": "defense_industry", "type": "member_of", "weight": 0.9},
+    {"src": "rtx", "dst": "defense_industry", "type": "member_of", "weight": 0.85},
+    {"src": "rheinmetall", "dst": "defense_industry", "type": "member_of", "weight": 0.9,
+     "note": "the purest European-rearmament play"},
+    {"src": "rheinmetall", "dst": "europe_equities", "type": "member_of", "weight": 0.4},
+    # China domestic semis: export controls are this theme's TAILWIND
+    {"src": "china_export_controls", "dst": "china_semis", "type": "influences", "sign": 1,
+     "weight": 0.5, "note": "every tightening round accelerates domestic substitution"},
+    {"src": "china_government", "dst": "china_semis", "type": "influences", "sign": 1,
+     "weight": 0.4, "note": "big-fund subsidies"},
+    {"src": "smic", "dst": "china_semis", "type": "member_of", "weight": 0.9},
+    {"src": "smic", "dst": "china_tech", "type": "member_of", "weight": 0.4},
+    {"src": "china_semis", "dst": "semis", "type": "competes_with", "weight": 0.3,
+     "note": "substitution: their gain is the incumbents' China revenue"},
 ]

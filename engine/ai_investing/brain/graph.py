@@ -76,6 +76,14 @@ class Edge:
     note: str = ""
     proposed_by: str = ""        # event summary that proposed it (llm edges)
     proposed_at: str = ""
+    regime_gate: Optional[dict] = None   # {"dial","lo","hi","outside"}: some
+                                 # relationships are only true in one regime.
+                                 # While the named regime dial sits inside
+                                 # [lo, hi] the edge behaves normally; outside
+                                 # the band it flips sign ("flip"), goes quiet
+                                 # ("mute"), or halves ("damp"). Example: Fed
+                                 # hikes hurt risk when inflation is the fear,
+                                 # but in a growth scare cuts ARE the fear.
 
     def to_dict(self) -> dict:
         d = {"src": self.src, "dst": self.dst, "type": self.type, "sign": self.sign,
@@ -84,11 +92,30 @@ class Edge:
             d["weight_rev"] = self.weight_rev
         if self.delay_days:
             d["delay_days"] = self.delay_days
+        if self.regime_gate:
+            d["regime_gate"] = self.regime_gate
         for k in ("note", "proposed_by", "proposed_at"):
             v = getattr(self, k)
             if v:
                 d[k] = v
         return d
+
+    def gated(self, regime: Optional[dict]) -> tuple[int, float]:
+        """(sign_multiplier, weight_multiplier) after evaluating the regime gate."""
+        g = self.regime_gate
+        if not g or not regime:
+            return 1, 1.0
+        v = regime.get(g.get("dial", ""))
+        if v is None:
+            return 1, 1.0
+        if g.get("lo", -1.0) <= v <= g.get("hi", 1.0):
+            return 1, 1.0
+        action = g.get("outside", "damp")
+        if action == "flip":
+            return -1, 1.0
+        if action == "mute":
+            return 1, 0.0
+        return 1, 0.5                      # "damp"
 
 
 class KnowledgeGraph:
@@ -97,6 +124,19 @@ class KnowledgeGraph:
         self.edges: list[Edge] = edges
         self._adj: Optional[dict] = None
         self._alias_index: Optional[dict[str, str]] = None
+        self._calibration: dict[str, float] = {}   # edge key -> evidence multiplier
+
+    @staticmethod
+    def edge_key(e: Edge) -> str:
+        return f"{e.src}->{e.dst}:{e.type}"
+
+    def set_calibration(self, factors: dict[str, float]) -> None:
+        """Attach evidence-based per-edge multipliers (from brain/calibration.py).
+        Applied at adjacency-build time, IN MEMORY ONLY — never persisted into
+        edge confidence, so reloading and reapplying can't compound the discount."""
+        self._calibration = {k: max(0.25, min(1.5, float(v)))
+                             for k, v in (factors or {}).items()}
+        self._adj = None
 
     # -- persistence ---------------------------------------------------------
     @classmethod
@@ -123,7 +163,16 @@ class KnowledgeGraph:
     def _merge_seed(self) -> None:
         seed = KnowledgeGraph.seeded()
         for nid, node in seed.nodes.items():
-            self.nodes.setdefault(nid, node)
+            cur = self.nodes.get(nid)
+            if cur is None:
+                self.nodes[nid] = node
+            else:
+                # curated node METADATA refreshes too (labels/aliases/equilibrium
+                # updates must reach existing graph files — a sign-convention fix
+                # in the seed is meaningless if deployed labels keep the old
+                # wording); only the live `state` survives from the old node.
+                node.state = cur.state
+                self.nodes[nid] = node
         by_key = {(e.src, e.dst, e.type): i for i, e in enumerate(self.edges)}
         for e in seed.edges:
             i = by_key.get((e.src, e.dst, e.type))
@@ -159,6 +208,7 @@ class KnowledgeGraph:
             flow = EDGE_FLOW.get(e.type, "fwd")
             sign = -1 if e.type == "competes_with" else e.sign
             conf = max(0.0, min(1.0, e.confidence))
+            conf *= self._calibration.get(self.edge_key(e), 1.0)   # evidence weighting
             w_fwd = max(0.0, min(1.0, e.weight)) * conf
             w_back = e.weight_rev if e.weight_rev is not None else e.weight
             w_rev = max(0.0, min(1.0, w_back)) * conf
@@ -209,8 +259,17 @@ class KnowledgeGraph:
         return hits
 
     # -- propagation (the actual thinking) ------------------------------------
+    # markets front-run known real-economy lags: this share of a τ-edge's
+    # contribution lands NOW when the destination is a PRICED thing (asset /
+    # theme / sector / commodity); the rest still arrives on schedule as the
+    # data prints. Factor destinations (CPI, growth...) stay fully deferred —
+    # the real economy doesn't reprice, it arrives.
+    ANTICIPATION = 0.5
+    _PRICED_TYPES = {"asset", "theme", "sector", "commodity"}
+
     def propagate(self, impulses: dict[str, float], max_hops: int = 3,
-                  decay: float = 0.6) -> tuple[dict[str, float], list[dict], list[dict]]:
+                  decay: float = 0.6,
+                  regime: Optional[dict] = None) -> tuple[dict[str, float], list[dict], list[dict]]:
         """Ripple impulses through the graph — exact truncated path-sum.
 
         The math: for every directed path p = (n0 -> n1 -> ... -> nk), k <= max_hops,
@@ -228,18 +287,32 @@ class KnowledgeGraph:
         a shock straight back onto its source. Genuine feedback loops through
         DISTINCT edges are allowed and correctly summed.
 
+        `regime` (optional dial snapshot: risk_appetite, inflation_trend, fear…)
+        activates two non-linear corrections the linear sum can't express:
+          * regime gates — edges whose sign/strength is only true in one regime
+            (see Edge.regime_gate) flip, mute, or damp outside their band;
+          * crisis correlation convergence — in deep risk-off, diversification
+            dies: membership/correlation wiring is pushed toward weight 1, so
+            everything risky becomes one trade, the way it actually does.
+
         Raw sums are squashed through tanh at read time — smooth saturation, so
         stacked shocks keep their ordering instead of flat-lining at a clip.
 
         Returns (impacts, trace, deferred). `deferred` carries contributions that
-        crossed time-delayed edges (τ > 0): they do NOT land now — the caller
-        queues them and re-injects each as a fresh impulse once due.
+        crossed time-delayed edges (τ > 0) into REAL-ECONOMY nodes: they land
+        later via the field's pending queue. For priced destinations, the market
+        discounts the known lag: ANTICIPATION of the contribution lands now and
+        only the remainder is deferred.
         """
         import math
         adj = self._adjacency()
         raw: dict[str, float] = {}
         trace: list[dict] = []
         deferred: list[dict] = []
+        # crisis correlation convergence: 0 (calm) .. 1 (full panic)
+        conv = 0.0
+        if regime and regime.get("risk_appetite") is not None:
+            conv = max(0.0, min(1.0, (-float(regime["risk_appetite"]) - 0.35) / 0.65))
         # frontier entries: (node, delta_to_push, edge_arrived_by | None)
         frontier: list[tuple[str, float, Optional[Edge]]] = []
         for n, v in impulses.items():
@@ -253,13 +326,30 @@ class KnowledgeGraph:
                 for dst, sign, w, edge in adj.get(src, []):
                     if edge is in_edge:
                         continue           # no instant echo back along the same edge
-                    contrib = delta * sign * w * decay
+                    g_sign, g_w = edge.gated(regime)
+                    if g_w == 0.0:
+                        continue           # muted outside its regime band
+                    if conv > 0 and edge.type in ("member_of", "correlates_with"):
+                        w = w + (1.0 - w) * conv * 0.6   # correlations -> 1 in a crash
+                    contrib = delta * sign * g_sign * w * g_w * decay
                     if abs(contrib) < 0.015:
                         continue
                     if edge.delay_days > 0:
-                        deferred.append({"node": dst, "contribution": round(contrib, 4),
+                        dst_type = self.nodes[dst].type if dst in self.nodes else ""
+                        now_part = 0.0
+                        if dst_type in self._PRICED_TYPES:
+                            now_part = contrib * self.ANTICIPATION
+                        later = contrib - now_part
+                        deferred.append({"node": dst, "contribution": round(later, 4),
                                          "delay_days": edge.delay_days, "via": src,
                                          "edge_type": edge.type})
+                        if abs(now_part) < 0.015:
+                            continue
+                        raw[dst] = raw.get(dst, 0.0) + now_part
+                        nxt.append((dst, now_part, edge))
+                        trace.append({"from": src, "to": dst, "edge_type": edge.type,
+                                      "hop": hop, "contribution": round(now_part, 4),
+                                      "anticipated": True})
                         continue
                     raw[dst] = raw.get(dst, 0.0) + contrib
                     nxt.append((dst, contrib, edge))

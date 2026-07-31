@@ -113,6 +113,46 @@ def _gather_evidence(settings, brain_state: dict, labels: dict[str, str]) -> dic
         ev["bubble_watch"] = bubble_scores(settings).get("clusters", [])
     except Exception:
         pass
+    # the offense + its evidence: contrarian lists, live manipulation
+    # campaigns, where the crowd's emotion sits, and whether the brain's own
+    # reflexes are proven — the strategist must challenge theses against ALL
+    # of what the system knows, not a subset
+    try:
+        from ai_investing.brain.contrarian import load as _load_contrarian
+        c = _load_contrarian(settings)
+        if c and (c.get("buys") or c.get("fades") or c.get("beneficiaries")
+                  or c.get("watching")):
+            ev["contrarian_offense"] = {
+                "buy_panic_candidates": [f"{r['symbol']}: {r['why']}"
+                                         for r in (c.get("buys") or [])[:4]],
+                "watching_still_falling": [r["symbol"]
+                                           for r in (c.get("watching") or [])[:4]],
+                "fade_candidates": [f"{r['symbol']}: {r['why']}"
+                                    for r in (c.get("fades") or [])[:4]],
+                "fraud_beneficiaries": {s: v.get("why", "")
+                                        for s, v in (c.get("beneficiaries") or {}).items()},
+            }
+    except Exception:
+        pass
+    try:
+        from ai_investing.brain.campaign import load as _load_campaigns
+        hot = sorted(_load_campaigns(settings).items(),
+                     key=lambda kv: -kv[1].get("pressure", 0.0))[:4]
+        if hot:
+            ev["manipulation_campaigns"] = [
+                f"{v.get('symbol', labels.get(nid, nid))}: pressure {v['pressure']}"
+                + (f", phase {v['phase']}" if v.get("phase") else "")
+                + (", volume-confirmed" if v.get("volume_confirmed") else "")
+                for nid, v in hot]
+    except Exception:
+        pass
+    emo = brain_state.get("emotion_field") or {}
+    if emo:
+        ev["crowd_emotion_by_node"] = [
+            f"{labels.get(n, n)}: fear {ch.get('fear', 0):.2f} / greed {ch.get('greed', 0):.2f}"
+            for n, ch in list(emo.items())[:5]]
+    if brain_state.get("calibration"):
+        ev["reflex_calibration"] = brain_state["calibration"]
     return ev
 
 

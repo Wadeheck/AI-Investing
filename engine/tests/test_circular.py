@@ -1,4 +1,9 @@
 """Circular-financing detection: multi-party money round-trips."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from ai_investing.brain.graph import Edge, KnowledgeGraph, Node
 
 

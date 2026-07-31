@@ -170,7 +170,10 @@ class Runner:
             try:
                 from ai_investing.brain.scorecard import Scorecard
                 sc = Scorecard(self.settings)
-                sc.snapshot_prices(px_by_sym)
+                vol_by_sym = {a.symbol: (bars_by_key[a.key][-1].volume
+                                         if bars_by_key.get(a.key) else 0.0)
+                              for a in self.assets}
+                sc.snapshot_prices(px_by_sym, vol_by_sym)
                 outcomes = sc.score_due()
                 learn_notes = sc.update_reliability(outcomes)
                 track = sc.track_record()

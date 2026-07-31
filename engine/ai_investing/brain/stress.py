@@ -49,6 +49,20 @@ SCENARIOS = {
         "impulses": {"financial_fraud": 0.7, "financial_engineering": 0.5,
                      "credit_conditions": -0.4},
     },
+    "private_credit_bust": {
+        "label": "Private-credit bust: marks questioned, funds gated, spreads gap",
+        "impulses": {"private_credit": 0.7, "credit_spreads": 0.6,
+                     "financial_engineering": 0.4},
+    },
+    "yuan_break": {
+        "label": "Yuan breaks: PBOC tolerates devaluation, EM sells as one",
+        "impulses": {"cnh_devaluation": 0.7, "currency_peg_stress": 0.5,
+                     "china_growth": -0.4},
+    },
+    "cre_crunch": {
+        "label": "CRE refinancing crunch: office marks land on regional banks",
+        "impulses": {"us_cre": 0.7, "credit_conditions": -0.5, "credit_spreads": 0.4},
+    },
 }
 
 

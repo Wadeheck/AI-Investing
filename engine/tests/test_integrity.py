@@ -1,6 +1,11 @@
 """Fraud/manipulation detection: hardcoded tier, adaptive (LLM) tier, and the
 mechanism-free math detectors — replaying history's episodes as inputs."""
 import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import os
 import tempfile
 
 from ai_investing import indicators as ind

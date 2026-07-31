@@ -1,4 +1,9 @@
 """Value scanner: cheap+honest+resilient scores; traps vetoed; units guarded."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import json
 import os
 import tempfile

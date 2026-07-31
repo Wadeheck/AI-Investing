@@ -1,5 +1,10 @@
 """The 7 investment-banker upgrades: cluster caps, event gating, estimates,
 ownership, balance-sheet depth, comps, stress."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import datetime
 
 from ai_investing.brain.graph import KnowledgeGraph

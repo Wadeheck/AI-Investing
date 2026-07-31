@@ -322,22 +322,151 @@ stake's share of the owner.
 
 Known simplifications that remain (the roadmap, in honesty):
 
-- **Linearity.** Real responses are nonlinear (a 10bp cut ≠ 1/10th of a 100bp
-  cut) and state-dependent (good jobs news is bad equity news in a tightening
-  regime). Today nonlinearity enters only via tanh and via composition through
-  intermediate nodes. Next step: per-node response curves / regime-conditional
-  weights — but every such parameter must be LEARNED, not asserted, or it's
-  astrology with extra steps.
-- **Hand-set weights.** Curated edge weights are educated priors. The honest
-  fix is empirical: regress historical node shocks against realized asset moves
-  and let data adjust weights (the framework doc's own "hardest problem").
-  node_history + events tables already collect exactly the data needed.
+- **Linearity.** Partially addressed in v3 (below): regime gates flip/mute
+  state-dependent edges and crisis convergence bends correlations toward 1 in
+  deep risk-off. Per-node response CURVES (10bp ≠ 1/10th of 100bp) are still
+  missing.
+- **Hand-set weights.** Addressed in v3: `brain/calibration.py` scores every
+  curated influences-edge against realized forward returns and demotes the
+  contradicted ones. Weights without enough history remain priors — labeled
+  "unproven", not silently trusted.
 - **No belief updating on old events.** A story judged noise is not upgraded
   when a trusted source later confirms it; the confirmation arrives as a NEW
   event instead. Adequate, not elegant.
 - **Volatility ≠ direction.** Some shocks (elections) mainly widen the
   distribution rather than move its mean; the graph currently only models mean
   shifts.
+
+## 4e. The decision layer (v3, seed v19) — scale, priced-in, calibration
+
+The v2 graph answered one of a trade's four questions (direction). v3 adds the
+other three — how big, how much is already known, and how much to trust it:
+
+1. **Regime-conditional edges** (`Edge.regime_gate`). The biggest macro
+   relationships are only true in one regime: Fed hikes hurt risk while
+   inflation is the fear, but in a growth scare the correlation flips ("bad
+   news is bad news again"); yield spikes help bank NIMs in calm and mark bond
+   losses on their books in a panic (SVB). A gate names a regime dial
+   (`inflation_trend`, `fear`, …) and a band; outside the band the edge flips,
+   mutes, or damps. `propagate(…, regime=dials)` evaluates them per hop.
+2. **Crisis correlation convergence.** In deep risk-off (regime risk_appetite
+   below ≈ −0.35), `member_of`/`correlates_with` weights are pushed toward 1 —
+   diversification dies exactly when it's needed, and now the model knows.
+3. **Market anticipation of known lags.** τ-edges model the real economy, but
+   markets discount instantly: for delayed edges into PRICED destinations
+   (asset/theme/sector/commodity) half the contribution lands now
+   (`ANTICIPATION`) and half arrives on schedule as the data prints.
+   Real-economy destinations (CPI, growth) stay fully deferred.
+4. **Sense of scale** (`brain/scale.py`). Every tradable gets a daily vol —
+   realized from brain.db price snapshots when ≥15 obs, honest per-market
+   priors otherwise — so an impact becomes an expected move:
+   `impact × vol × √h × gain`. A −0.3 on BTC and on KO are finally different
+   numbers. The adviser sizes RISK, not conviction (weights scaled by 2%/vol).
+5. **What's already priced** (`brain/priced_in.py`). A signal whose direction
+   the tape already ran ≥0.5σ in gets discounted (up to 80% at a 3σ run);
+   a contra-move keeps the full signal. The adviser multiplies field conviction
+   by (1 − priced_in).
+6. **Proof of calibration** (`brain/calibration.py`, CLI:
+   `python3 -m ai_investing.brain.calibration`). Every curated influences-edge
+   into an asset is scored against realized ~5d forward returns on the days its
+   source node was activated: n, hit-rate, t-stat, verdict. Supported edges get
+   confidence ×1.15, contradicted ×0.5 — applied IN MEMORY at load (never
+   persisted, so it can't compound). A global `gain` corrects systematic
+   over/under-shoot of expected-move magnitudes. Verdicts land in
+   `data/edge_calibration.json` and the summary in brain.json.
+
+Seed v19 also fixed live wiring bugs and coverage holes found in review:
+`boe_rate→uk_utilities` sign was inverted; the stress-node polarity convention
+is now uniform (+1 = stress RISING, `eurozone_political_risk` flipped, node
+metadata now refreshes on seed merge so deployed graphs actually receive such
+fixes); Berkshire's stale Apple weight was cut; and the graph gained its
+missing systemic mass: 2Y/policy expectations, HY credit spreads, USD/CNH
+devaluation pressure, private credit, CRE, central-bank gold bid, Tether &
+Binance (private hubs where custody/peg mechanisms detonate), Circle, JPM/GS,
+payments (V/MA), US retail (WMT/COST/XLY — us_consumer finally lands on
+tradables), defense primes (LMT/RTX/Rheinmetall), and China domestic semis
+(SMIC — the substitution theme export controls FEED). New stress scenarios:
+private-credit bust, yuan break, CRE crunch.
+
+## 4f. The bullshit/emotion layer (v4) — detection turned into offense
+
+Every detector used to end in abstention (noise didn't propagate, flagged
+assets didn't get bought, froth haircut longs). v4 adds the offense — and the
+evidence loops that keep the offense honest:
+
+1. **Per-node emotion field** (`brain/emotion_field.py`). Fear and greed
+   charges PER NODE (48h half-life, saturating), fed by event emotion tags.
+   Noise still charges greed at half weight (hype noise IS the signal here);
+   noise can never charge fear (spam must not fake capitulation). Assets
+   inherit their themes' emotion at 0.7 — panic on `china_tech` IS panic
+   about Tencent.
+2. **Campaign detector** (`brain/campaign.py`). A manipulation-pressure index
+   per node: mention-velocity burst + distinct low-trust chorus + coordinated
+   timing (≥3 low-trust sources in 3h) + noise mass. Pumped assets get a
+   lifecycle stage from price snapshots — building / hype_burst / dump — and
+   fading is only permitted in `dump` (never fade a pump that's working). The
+   adviser haircuts fresh longs by pressure.
+3. **Learned source trust** (`brain/source_learning.py`). Events ≥5d old are
+   scored: replay their impulse through the graph, compare predicted asset
+   direction vs realized moves (event_outcomes table). Per-source shrunk
+   hit-rates become learned trust, blended 50/50 with the static prior once
+   n≥10 — feeds that keep pointing right earn weight, wolf-criers sink. Plus a
+   per-source **doom discount**: a source whose fear stories measurably never
+   move markets gets its fear-event impulses damped at extraction.
+4. **Emotion calibration** (`brain/emotion_calibration.py`). "Be greedy when
+   others are fearful" is tested, not assumed: mean forward return after
+   panic events vs after euphoria events, t-statted. Honest priors (+0.30 /
+   −0.30) until n≥20 per group, then measured coefficients take over —
+   labeled "prior" vs "measured" in the report.
+5. **Contrarian composer** (`brain/contrarian.py`). The offense:
+   * BUY panic × clean integrity × not-in-a-money-circle × value case
+     (value_scanner, or capitulation-deep field as fallback) × stabilization
+     gate — still-falling knives are listed as WATCHING with zero boost.
+   * FADE euphoria × (froth | circularity | campaign pressure), lifecycle-gated.
+   * BENEFICIARIES: an integrity flag on X tilts X's `competes_with`
+     neighbors positive (Luckin's fraud was Starbucks China's market share).
+   Output in data/contrarian.json → adviser boosts (W_CONTRA=0.45,
+   W_BENEF=0.3), fully explained in each trade's drivers.
+6. **Credibility hardening** (events.py). Corroboration now counts only
+   TRUSTED sources — a chorus of low-trust feeds echoing one another is the
+   campaign signature and now *penalizes* credibility instead of boosting it.
+
+## 4g. Foundations widened (v4.1, seed v20)
+
+1. **Path-level calibration.** The calibrator now also scores every theme ->
+   member transmission (`member_of` paths) against member forward returns —
+   the graph's main arteries, not just its direct edges. A contradicted
+   membership wire demotes exactly that edge. Report gains a `paths` section.
+2. **Volume in the tape.** The daily snapshot now stores volume (schema
+   migration is automatic; legacy rows stay NULL). Priced-in weights its
+   discount by relative volume — a run on a heavy tape is real repricing
+   (bigger discount), a thin-tape drift decided less (smaller). The campaign
+   detector marks `volume_confirmed` when a story burst rides a >=2x tape
+   (retail actually taking the bait) and raises pressure accordingly.
+3. **Gate sweep (15 gated edges).** Curated only where mechanism + historical
+   instance both exist — each gate's note names them: inflation-regime flips
+   (Fed/jobs vs risk), fear-regime flips (yields vs banks/JPM — SVB), fear
+   damps (gold's rate/USD anchors break in panic), euphoria damps (war
+   headlines, antitrust, fraud exposés shrugged off in melt-ups — the shrug
+   itself is late-cycle), risk-off damps/mutes (halving narrative, adoption
+   headlines, China stimulus rallies, "cheap lithium" that is actually demand
+   collapse), and a tightening damp on solar (duration asset). Deliberately
+   stopped at defensible ones rather than filling a quota — every gate is a
+   falsifiable claim awaiting the calibrator.
+
+### 4g.1 Chain audit (the loops are actually closed)
+
+Verified end-to-end and fixed where a link was missing: (1) the edge/path
+calibrator now runs INSIDE the cycle — whenever fresh outcomes are scored, the
+graph re-weights immediately, not at next boot; (2) regime updates BEFORE
+propagation, so a hot/cooling print flips gated edges the same cycle (EMA
+smoothing still prevents whiplash); (3) bullshit-layer failures surface as
+state["layer_error"] instead of being swallowed; (4) learned source trust
+flows into corroboration and the campaign chorus — a no-name feed that earned
+precision can confirm stories and stops counting as pump chorus; (5) the
+strategist's evidence pack includes the contrarian lists, live campaigns,
+per-node crowd emotion, and the reflex-calibration status, so the daily
+challenge sees everything the system knows.
 
 ## 5. Guardrails (don't skip these)
 

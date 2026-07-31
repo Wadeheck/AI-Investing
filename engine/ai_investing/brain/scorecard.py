@@ -50,17 +50,23 @@ class Scorecard:
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.conn = sqlite3.connect(os.path.join(data_dir, "brain.db"))
         self.conn.executescript(_SCHEMA)
+        try:    # migration: daily volume rides the same snapshot (v4 upgrade)
+            self.conn.execute("ALTER TABLE price_history ADD COLUMN volume REAL")
+        except sqlite3.OperationalError:
+            pass                     # column already exists
         self.rel_path = os.path.join(data_dir, "reliability.json")
 
     def close(self) -> None:
         self.conn.close()
 
     # ------------------------------------------------------------- snapshot --
-    def snapshot_prices(self, prices_by_symbol: dict[str, float]) -> None:
+    def snapshot_prices(self, prices_by_symbol: dict[str, float],
+                        volumes_by_symbol: dict[str, float] | None = None) -> None:
         d = _today_sgt()
+        vols = volumes_by_symbol or {}
         self.conn.executemany(
-            "INSERT OR REPLACE INTO price_history(date,symbol,price) VALUES(?,?,?)",
-            [(d, s, p) for s, p in prices_by_symbol.items() if p > 0])
+            "INSERT OR REPLACE INTO price_history(date,symbol,price,volume) VALUES(?,?,?,?)",
+            [(d, s, p, vols.get(s) or None) for s, p in prices_by_symbol.items() if p > 0])
         self.conn.commit()
 
     def day_moves(self, prices_by_symbol: dict[str, float]) -> dict[str, float]:
