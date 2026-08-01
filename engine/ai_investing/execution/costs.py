@@ -12,7 +12,7 @@ calibrate `COST_*` to your venues.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 
 from ai_investing.models import Side
 
@@ -39,3 +39,42 @@ class CostModel:
         """Mid price worsened by costs — buys up, sells down."""
         frac = self.cost_fraction(qty, price, adv, vol)
         return price * (1 + frac) if side is Side.BUY else price * (1 - frac)
+
+
+# ---------------------------------------------------------------------------
+# Per-market frictions (evidence protocol v2, same table the walk-forward
+# trainer uses): commissions + transaction taxes (HK stamp duty, KR/TW
+# sell-side taxes averaged across sides) + realistic half-spreads. A flat
+# US-grade 3bps would flatter every HK/Asia/crypto fill — paper must lose
+# money exactly where real money would.
+MARKET_COSTS_BPS = {
+    "us":     (1.5, 2.5),
+    "hk":     (15.0, 10.0),
+    "cn":     (5.0, 5.0),
+    "sg":     (8.0, 12.0),
+    "jp":     (3.0, 5.0),
+    "kr":     (12.0, 6.0),
+    "tw":     (17.0, 6.0),
+    "eu":     (5.0, 5.0),
+    "crypto": (10.0, 5.0),
+}
+
+_SUFFIX_MKT = {"HK": "hk", "SS": "cn", "SZ": "cn", "SI": "sg", "T": "jp",
+               "KS": "kr", "KQ": "kr", "TW": "tw", "TWO": "tw",
+               "PA": "eu", "DE": "eu", "AS": "eu", "L": "eu", "MI": "eu"}
+
+
+def market_of_symbol(symbol: str, asset_class: str = "stock") -> str:
+    """Map a watchlist symbol to its cost market ('700.HK' -> 'hk')."""
+    if asset_class == "crypto" or "/" in symbol:
+        return "crypto"
+    if "." in symbol:
+        return _SUFFIX_MKT.get(symbol.rsplit(".", 1)[-1].upper(), "us")
+    return "us"
+
+
+def market_cost_model(base: "CostModel", market: str) -> "CostModel":
+    """The base model (carries enabled/slippage_coef from settings) re-priced
+    with the market's commission+spread."""
+    comm, spr = MARKET_COSTS_BPS.get(market, MARKET_COSTS_BPS["us"])
+    return _dc_replace(base, commission_bps=comm, spread_bps=spr)

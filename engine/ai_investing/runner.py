@@ -30,6 +30,17 @@ class Runner:
         self.use_news = use_news
         self.provider = get_provider(settings)
         self.broker = get_broker(settings)
+        # paper book persistence: restore holdings/cash across engine restarts
+        # (PC-off overnight must not amnesia the portfolio)
+        self._paper_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "paper_state.json")
+        if not settings.live and isinstance(self.broker, PaperBroker):
+            try:
+                with open(self._paper_path) as fh:
+                    self.broker = PaperBroker.from_state(
+                        json.load(fh), allow_short=settings.risk.allow_short)
+            except (OSError, json.JSONDecodeError, KeyError):
+                pass
         self.journal = Journal(settings.db_path)
         self.assets = self._build_watchlist()
         self._first_cycle = True
@@ -55,6 +66,10 @@ class Runner:
         c = settings.cost
         self.costs = CostModel(enabled=c.enabled, commission_bps=c.commission_bps,
                                spread_bps=c.spread_bps, slippage_coef=c.slippage_coef)
+        # per-market frictions: HK stamp duty, Asia taxes, crypto taker fees —
+        # every fill is charged what REAL money would lose in that market
+        from ai_investing.execution.costs import MARKET_COSTS_BPS, market_cost_model
+        self._market_costs = {m: market_cost_model(self.costs, m) for m in MARKET_COSTS_BPS}
         rg = settings.regime
         self.regime = RegimeGate(high_vol=rg.high_vol, ood_z=rg.ood_z, min_mult=rg.min_mult,
                                  feature_mean=self.model.feature_mean,
@@ -87,15 +102,20 @@ class Runner:
         self.shadow_risk = RiskManager(settings.risk, regime_gate=self.regime)
 
     def _load_shadow(self, starting_cash: float) -> PaperBroker:
-        # Persist the shadow only in LIVE mode (so it accumulates like the live account).
-        # In paper mode it resets each run, matching the paper broker, for a fair A/B.
-        if self.settings.live:
-            try:
-                with open(self._shadow_path) as fh:
-                    return PaperBroker.from_state(json.load(fh), allow_short=self.settings.risk.allow_short)
-            except (OSError, json.JSONDecodeError, KeyError):
-                pass
+        # Persist in ALL modes: the paper track record (and its formula-only
+        # A/B twin) must survive restarts — the brain REMEMBERS what it holds.
+        # Fresh start = delete data/shadow.json + data/paper_state.json.
+        try:
+            with open(self._shadow_path) as fh:
+                return PaperBroker.from_state(json.load(fh), allow_short=self.settings.risk.allow_short)
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
         return PaperBroker(starting_cash, allow_short=self.settings.risk.allow_short)
+
+    def _costs_for(self, asset) -> CostModel:
+        from ai_investing.execution.costs import market_of_symbol
+        mkt = market_of_symbol(asset.symbol, asset.asset_class.value)
+        return self._market_costs.get(mkt, self.costs)
 
     def _build_watchlist(self) -> list[Asset]:
         stocks = [Asset(s, AssetClass.STOCK) for s in self.settings.stock_watchlist]
@@ -333,18 +353,17 @@ class Runner:
         for o in self.shadow_risk.size_orders(decisions, port, prices, equity,
                                               market=self._stats, model=self.model):
             self._shadow_fill(o, prices)
-        if self.settings.live:
-            try:
-                with open(self._shadow_path, "w") as fh:
-                    json.dump(b.state(), fh)
-            except OSError:
-                pass
+        try:   # persist in ALL modes: the A/B must survive engine restarts
+            with open(self._shadow_path, "w") as fh:
+                json.dump(b.state(), fh)
+        except OSError:
+            pass
 
     def _shadow_fill(self, order: Order, prices: dict[str, float]) -> None:
         mid = prices.get(order.asset.key, 0.0)
         ms = self._stats.get(order.asset.key)
-        eff = self.costs.effective_price(order.side, mid, order.qty,
-                                         ms.adv if ms else None, ms.vol if ms else None)
+        eff = self._costs_for(order.asset).effective_price(order.side, mid, order.qty,
+                                                           ms.adv if ms else None, ms.vol if ms else None)
         self.shadow_broker.submit(order, eff)
 
     def _comparison(self, real_portfolio, prices) -> dict:
@@ -447,7 +466,7 @@ class Runner:
         # Slippage guard: refuse to OPEN a position whose modeled cost is too high
         # (illiquid / oversized). Protective exits pass guard_slippage=False.
         if guard_slippage and mid > 0:
-            frac = self.costs.cost_fraction(order.qty, mid, ms.adv if ms else None, ms.vol if ms else None)
+            frac = self._costs_for(order.asset).cost_fraction(order.qty, mid, ms.adv if ms else None, ms.vol if ms else None)
             if frac * 1e4 > self.settings.safety.max_slippage_bps:
                 print(f"  SKIP     {order.asset.symbol} — modeled slippage {frac * 1e4:.0f}bps "
                       f"> {self.settings.safety.max_slippage_bps:.0f}bps cap")
@@ -462,8 +481,8 @@ class Runner:
             order.limit_price = mid * (1 + band) if order.side is Side.BUY else mid * (1 - band)
 
         order.client_order_id = cid
-        eff = self.costs.effective_price(order.side, mid, order.qty,
-                                         ms.adv if ms else None, ms.vol if ms else None)
+        eff = self._costs_for(order.asset).effective_price(order.side, mid, order.qty,
+                                                           ms.adv if ms else None, ms.vol if ms else None)
         filled = self.broker.submit(order, eff)
         self._submitted.add(cid)
         self.journal.record_order(filled, self.settings.live)
@@ -577,6 +596,10 @@ class Runner:
             os.makedirs(data_dir, exist_ok=True)
             with open(self.settings.state_path, "w") as fh:
                 json.dump(state, fh, indent=2)
+            # the brain REMEMBERS its holdings: persist the paper book every cycle
+            if not self.settings.live and isinstance(self.broker, PaperBroker):
+                with open(self._paper_path, "w") as fh:
+                    json.dump(self.broker.state(), fh)
             self._append_history(data_dir, state)
             write_heartbeat(self.settings.heartbeat_path,
                             {"equity": state["equity"], "cash": state["cash"],
