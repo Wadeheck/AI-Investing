@@ -402,6 +402,10 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             pump_ride=0,                    # knowingly ride detected pumps, small + time-boxed
             pump_frac=0.2,                  # pump position size as fraction of crypto equity
             pump_hold=2,                    # max days to ride a pump before forced exit
+            core_gate=0,                    # stock-core winter gate: trim the core in equity bears
+            core_trim=0.5,                  # fraction of each core position sold when gated
+            core_ma=100,                    # SPY moving-average lookback for the gate
+            core_band=0.0,                  # hysteresis: enter winter below ma*(1-band), exit above ma
             w_mhm=0.0,                      # AHL multi-horizon momentum score into crypto nodes
             vol_target=0.0,                 # per-position daily-vol target (0 = off): the AHL
                                             # survival law — trade smaller when wild, larger when calm
@@ -506,6 +510,7 @@ def run_replay(ds, cfg, i0, i1):
     core_frac = min(max(cfg["stock_core"], 0.0), 0.9)
     book = {"cash": 100_000.0 * (1.0 - core_frac), "pos": {}}   # tactical sleeve
     kbook = {"cash": 100_000.0 * core_frac, "pos": {}}          # long-term core
+    core_state = {"trimmed": False}                             # equity winter gate flag
     slow_imp: dict[str, float] = {}         # ~30d EMA of field impact (core signal)
     ktrades = 0
     pending: list[dict] = []                # stock orders awaiting next open
@@ -959,6 +964,43 @@ def run_replay(ds, cfg, i0, i1):
                         tact_val += notional
         # ---- long-term value core: hold through dips, exit on thesis break
         if core_frac > 0:
+            if cfg["core_gate"]:
+                # equity winter gate — the stock-side mirror of the crypto
+                # machinery (R7/R10 analogue): SPY under its 100d mean trims
+                # every core position by core_trim into cash; recovery
+                # redeploys each survivor back toward its per-slot target.
+                spy_ = ds["bench"].get("SPY")
+                ma_n = int(cfg["core_ma"])
+                if spy_ is not None and i >= ma_n:
+                    ma = spy_.iloc[i - ma_n:i].mean()
+                    # hysteresis: entering winter needs a clear break BELOW the
+                    # band; exiting needs a clean reclaim of the line — kills
+                    # the whipsaw that plagues naive MA gates
+                    eqw = (spy_.iloc[i] < ma * (1.0 - cfg["core_band"])
+                           if not core_state["trimmed"] else spy_.iloc[i] < ma)
+                    if eqw and not core_state["trimmed"]:
+                        for s2 in list(kbook["pos"]):
+                            p2, v2 = kbook["pos"][s2], px[s2]
+                            if np.isnan(v2) or p2["qty"] <= 0:
+                                continue
+                            sell = p2["qty"] * cfg["core_trim"]
+                            kbook["cash"] += sell * v2 * (1 - cost_frac(ds, s2, sell, v2, i))
+                            p2["qty"] -= sell
+                            ktrades += 1
+                        core_state["trimmed"] = True
+                    elif not eqw and core_state["trimmed"]:
+                        per_slot = 0.95 * eq_of(kbook, px) / max(1, int(cfg["core_n"]))
+                        for s2 in list(kbook["pos"]):
+                            v2 = px[s2]
+                            if np.isnan(v2):
+                                continue
+                            need = per_slot - kbook["pos"][s2]["qty"] * v2
+                            if need > 500 and kbook["cash"] > need * 1.02:
+                                qty = need / v2
+                                kbook["pos"][s2]["qty"] += qty
+                                kbook["cash"] -= need * (1 + cost_frac(ds, s2, qty, v2, i))
+                                ktrades += 1
+                        core_state["trimmed"] = False
             for s in list(kbook["pos"]):    # disaster stop only (gap-aware)
                 p, v = kbook["pos"][s], px[s]
                 if np.isnan(v):
@@ -1151,6 +1193,10 @@ ROUNDS = [
     ("R32 AHL vol-targeted sizing (position = target vol / realized vol — "
      "trade smaller when wild, larger when calm; the survival law)", {
         "vol_target": [0.02, 0.035]}),
+    ("R33 stock-core winter gate (SPY under its 100d trims the core, recovery "
+     "redeploys — the crypto machinery's equity mirror; requires stock_core>0 "
+     "to matter)", {
+        "core_gate": [1], "core_trim": [0.5, 0.8]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
@@ -1158,7 +1204,7 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
            "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
-           "w_wash", "pump_frac", "w_mhm", "vol_target")
+           "w_wash", "pump_frac", "w_mhm", "vol_target", "core_trim")
 
 
 def preservation_ok(dev_new, dev_old):
