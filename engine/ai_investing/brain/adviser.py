@@ -232,12 +232,14 @@ def advise(settings, brain, log: bool = True) -> dict:
     # Some days that is zero — and saying so is honest, valuable advice.
     floor = settings.brain.advise_min_conviction
     top = [r for r in rows if abs(r["score"]) >= floor][:settings.brain.advise_top_n]
+    watch = [r for r in rows if abs(r["score"]) < floor][:settings.brain.advise_top_n]
     for i, r in enumerate(top, 1):
         r["rank"] = i
 
     advice = {
         "ts": now.isoformat(),
         "trades": top,
+        "watch": watch,          # considered + scored but below conviction — visible, not advised
         "considered": len(rows),
         "below_floor": len(rows) - len(top),
         "mood": brain.regime.mood_label,

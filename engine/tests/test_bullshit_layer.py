@@ -279,7 +279,9 @@ def test_adviser_consumes_contrarian_and_campaign_layers():
     with open(os.path.join(tmp, "campaigns.json"), "w") as fh:
         json.dump({"ts": "", "nodes": {"nvda": {"pressure": 0.8, "symbol": "NVDA"}}}, fh)
     a = advise(s, b, log=False)
-    by = {t["symbol"]: t for t in a["trades"]}
+    # a heavily-haircut name may fall below the conviction floor into the
+    # visible watch list — the layers' effect on SCORE is what we assert
+    by = {t["symbol"]: t for t in a["trades"] + a.get("watch", [])}
     # same field charge: KO boosted by the contrarian buy, NVDA haircut by pressure
     assert by["KO"]["score"] > by["NVDA"]["score"]
     assert by["KO"]["drivers"].get("contrarian", 0) > 0
