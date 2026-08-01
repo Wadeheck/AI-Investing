@@ -28,6 +28,10 @@ from ai_investing.models import Asset, AssetClass, Order, Side
 
 STOP_PCT = 0.10            # HARD RULE (user): max 10% loss on any investment
 MAX_WEIGHT = 0.12          # target weight per position in the investing pot
+import os as _os
+CASH_RESERVE = max(0.0, min(0.6, float(_os.environ.get("INVEST_CASH_RESERVE", "0.25"))))
+# dry powder: this fraction of the pot stays in cash no matter how many
+# proposals get approved — future opportunities always have budget
 
 
 def _today_sgt() -> str:
@@ -110,11 +114,26 @@ class Investor:
             p = book.get(sym, "buy" if t["stance"] == "long" else "sell", "long")
             if p and p["status"] == "approved":
                 book.consume(p["id"])
-                qty = p.get("qty") or (self._equity(prices_by_symbol) * MAX_WEIGHT / px)
+                equity = self._equity(prices_by_symbol)
+                qty = p.get("qty") or (equity * MAX_WEIGHT / px)
                 side = Side.BUY if t["stance"] == "long" else Side.SELL
+                # DRY-POWDER RESERVE: never let approved buying drain the pot —
+                # keep CASH_RESERVE of equity in cash so the NEXT great thesis
+                # always has budget. Buys shrink to fit; scaled-out buys skip.
+                if side is Side.BUY:
+                    reserve = CASH_RESERVE * equity
+                    spendable = self.broker.get_cash() - reserve
+                    if spendable < px * qty:
+                        qty = max(0.0, spendable) / px
+                    if qty * px < 500:
+                        notifier.send(f"🏛 *Investing book — skipped {labels.get(sym, sym)}* "
+                                      f"({sym}): cash reserve floor "
+                                      f"({CASH_RESERVE:.0%} of the pot stays liquid for "
+                                      f"future opportunities). It can re-propose after an exit.")
+                        continue
                 self.broker.submit(Order(_asset(sym, self.settings.crypto_exchange),
                                          side, qty, reason=f"thesis: {t.get('title', '')}"), px)
-                verb = "Bought" if side == Side.BUY else "Shorted"
+                verb = "Bought" if side is Side.BUY else "Shorted"
                 notifier.send(f"🏛 *Investing book — {verb} {labels.get(sym, sym)}* ({sym}), "
                               f"~${qty * px:,.0f}, under thesis “{t.get('title')}”. "
                               f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop.")
