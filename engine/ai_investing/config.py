@@ -162,6 +162,9 @@ class BrainConfig:
     advice_path: str = field(default_factory=lambda: _get("BRAIN_ADVICE_PATH", str(PROJECT_ROOT / "data" / "advice.json")))
     sentiment_cache_path: str = field(default_factory=lambda: _get("BRAIN_SENTIMENT_CACHE_PATH", str(PROJECT_ROOT / "data" / "sentiment_cache.json")))
     advise_top_n: int = field(default_factory=lambda: _get_int("BRAIN_ADVISE_TOP_N", 10))
+    # quality floor, not a quota: ideas below this conviction are never advised;
+    # an empty list ("cash is a position") is legitimate output
+    advise_min_conviction: float = field(default_factory=lambda: _get_float("BRAIN_ADVISE_MIN_CONVICTION", 0.10))
     credibility_threshold: float = field(default_factory=lambda: _get_float("BRAIN_CREDIBILITY_THRESHOLD", 0.35))
     max_hops: int = field(default_factory=lambda: _get_int("BRAIN_MAX_HOPS", 3))
     decay: float = field(default_factory=lambda: _get_float("BRAIN_DECAY", 0.6))

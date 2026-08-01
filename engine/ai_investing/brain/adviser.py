@@ -228,7 +228,10 @@ def advise(settings, brain, log: bool = True) -> dict:
             **({"circular_financing": True} if circular else {}),
         })
     rows.sort(key=lambda r: -abs(r["score"]))
-    top = rows[:settings.brain.advise_top_n]
+    # QUALITY FLOOR, not a quota: only ideas with real conviction are advised.
+    # Some days that is zero — and saying so is honest, valuable advice.
+    floor = settings.brain.advise_min_conviction
+    top = [r for r in rows if abs(r["score"]) >= floor][:settings.brain.advise_top_n]
     for i, r in enumerate(top, 1):
         r["rank"] = i
 
@@ -236,10 +239,13 @@ def advise(settings, brain, log: bool = True) -> dict:
         "ts": now.isoformat(),
         "trades": top,
         "considered": len(rows),
+        "below_floor": len(rows) - len(top),
         "mood": brain.regime.mood_label,
         "conviction_multiplier": mood_mult,
         "regime_note": ("risk-off tilt: defensives favored" if risk_off
                         else "risk-on tilt: beta favored" if risk_on else "neutral regime"),
+        **({"note": "no idea clears the conviction floor today — cash is a position"}
+           if not top else {}),
     }
     try:
         os.makedirs(os.path.dirname(os.path.abspath(settings.brain.advice_path)), exist_ok=True)
