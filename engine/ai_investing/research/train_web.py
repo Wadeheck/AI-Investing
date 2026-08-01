@@ -339,13 +339,17 @@ def load_dataset():
         ar.rolling(90, min_periods=30).std() + 1e-9)
     washz = volz - arz
     ret2 = close.pct_change(2)
+    # Man AHL multi-horizon momentum (transcript-3, 2026-08-01): sign of the
+    # trend over 5/10/21/42 trading days, summed and normalized to [-1, 1].
+    # A graded ensemble, not a binary line — half-conviction states exist.
+    mhm = sum(_np.sign(close - close.shift(k)) for k in (5, 10, 21, 42)) / 4.0
     log(f"dataset: {len(symbols)} symbols, {len(close)} days, news {len(news)} days, "
         f"factors {len(factors)} days, crypto-sig days {len(crypto_sig['fng'])}, "
         f"risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
                 open=opn, high=high, low=low, adv=adv, vol20=vol20, bench=bench,
                 rets=rets, news=news, factors=factors,
-                volz=volz, washz=washz, ret2=ret2,
+                volz=volz, washz=washz, ret2=ret2, mhm=mhm,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 crypto_sig=crypto_sig,
                 vix_dlog=vix_dlog, dxy_dlog=dxy_dlog, jpy_dlog=jpy_dlog,
@@ -398,6 +402,9 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             pump_ride=0,                    # knowingly ride detected pumps, small + time-boxed
             pump_frac=0.2,                  # pump position size as fraction of crypto equity
             pump_hold=2,                    # max days to ride a pump before forced exit
+            w_mhm=0.0,                      # AHL multi-horizon momentum score into crypto nodes
+            vol_target=0.0,                 # per-position daily-vol target (0 = off): the AHL
+                                            # survival law — trade smaller when wild, larger when calm
             bear_exit=0,                    # exit-form ensemble: early cash-out on bear evidence
             bear_k=2,                       # signals required (of: winter, stab drain, DVOL spike, ETF outflows)
             hodl_trim=0.5,                  # fraction of HODL core sold when deep/bear
@@ -670,6 +677,10 @@ def run_replay(ds, cfg, i0, i1):
                 z = cs["cot"].get(s, cs["cot"].get("BTC/USD", {})).get(dstr)
                 if z is not None and abs(z) > 1.0:
                     add += -cfg["w_cot"] * max(-1.0, min(1.0, z / 2.5)) * 0.3
+            if cfg["w_mhm"]:        # graded multi-horizon trend (AHL): confirmation,
+                sc = float(ds["mhm"][s].iloc[i]) if s in ds["mhm"].columns else float("nan")
+                if sc == sc and abs(sc) >= 0.5:   # half-conviction or stronger only
+                    add += cfg["w_mhm"] * sc * 0.25
             if abs(add) > 0.03:
                 impulses[nid] = max(impulses.get(nid, 0.0),
                                     max(-0.5, min(0.5, add)), key=abs)
@@ -932,6 +943,12 @@ def run_replay(ds, cfg, i0, i1):
                     room = CRYPTO_TACT_CAP * ceq - tact_val   # mandate: <=70%
                     base = (cfg["pump_frac"] * ceq * 0.5 if pump
                             else cfg["crypto_gain"] * abs(fimp_eff) * ceq * 0.4)
+                    if cfg["vol_target"] and not pump:
+                        # AHL sizing law: position ∝ target vol / realized vol —
+                        # automatic de-risking in wild tape, re-risking in calm
+                        rv = float(ds["vol20"][s].iloc[i]) if s in ds["vol20"].columns else float("nan")
+                        if rv == rv and rv > 1e-4:
+                            base *= max(0.3, min(2.0, cfg["vol_target"] / rv))
                     notional = min(base, cbook["cash"] * 0.9, room)
                     if notional > 1000:
                         qty = d_ * notional / px[s]
@@ -1128,6 +1145,12 @@ ROUNDS = [
     ("R30 pump-ride (knowingly ride organic-fuel pumps, small and time-boxed, "
      "first red day = out — profit from the game without becoming exit liquidity)", {
         "pump_ride": [1], "pump_frac": [0.15, 0.3], "pump_hold": [2, 3]}),
+    ("R31 AHL multi-horizon momentum (graded 5/10/21/42d trend ensemble into "
+     "crypto nodes — half-conviction states, not a binary line)", {
+        "w_mhm": [0.4, 0.8]}),
+    ("R32 AHL vol-targeted sizing (position = target vol / realized vol — "
+     "trade smaller when wild, larger when calm; the survival law)", {
+        "vol_target": [0.02, 0.035]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
@@ -1135,7 +1158,7 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
            "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
-           "w_wash", "pump_frac")
+           "w_wash", "pump_frac", "w_mhm", "vol_target")
 
 
 def preservation_ok(dev_new, dev_old):

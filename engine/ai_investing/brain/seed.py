@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 22
+SEED_VERSION = 23
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -1153,6 +1153,28 @@ SEED_EDGES = [
              "already present (crypto weakness then CONFIRMS and propagates "
              "stress), damped in complacent/melt-up tape where crypto froth "
              "says nothing about equity risk. Calibrator will verdict it"},
+    # ---- dossier-review admissions (seed v23, 2026-08-01): edges proposed by
+    # the YouTube-dossier passes, human-reviewed, admitted at prior weights for
+    # the calibrator to verdict. No new nodes were needed — the 127-node
+    # vocabulary absorbed every insight; the rest became integrity knowledge.
+    {"src": "bond_stress", "dst": "ai_capex_cycle", "type": "influences", "sign": -1, "weight": 0.3,
+     "note": "rising yields hit the long-duration AI-capex trade; corroborated by "
+             "the financial_engineering dossier (CoreWeave ~900bp OAS — debt cost "
+             "throttles buildout). Transmits on into GPU tokens via ai_capex edges"},
+    {"src": "ai_datacenter", "dst": "copper_price", "type": "influences", "sign": 1, "weight": 0.25,
+     "note": "hyperscale buildout is a large new incremental copper demand channel"},
+    {"src": "ev_supply_chain", "dst": "europe_growth", "type": "influences", "sign": -1, "weight": 0.25,
+     "note": "China Shock 2.0: Chinese EV export strength presses European auto — "
+             "the supply chain's health and Europe's growth pull opposite ways"},
+    {"src": "ai_capex_cycle", "dst": "japan_equities", "type": "influences", "sign": 1, "weight": 0.2,
+     "note": "AI capex demand for Japanese equipment/materials names; partially "
+             "redundant with semis membership — low weight, calibrator decides"},
+    {"src": "china_government", "dst": "cb_gold_buying", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "dossier described a coordinated multi-year Chinese state gold "
+             "campaign; routed through cb_gold_buying (which already feeds "
+             "gold_price) rather than duplicating a direct edge"},
+    {"src": "berkshire", "dst": "googl", "type": "owns", "weight": 0.3,
+     "note": "Berkshire >$31B Alphabet stake (from Q3 2025) — factual ownership wiring"},
     # ---- supply / competition / proxies ----
     # supplies flows BOTH ways: supplier disruption hits the customer, customer
     # weakness hits the supplier — one shock moves the whole cluster.
