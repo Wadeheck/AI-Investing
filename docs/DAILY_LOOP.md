@@ -10,6 +10,10 @@ session, see §3).*
 - `17 */4 * * *` — `scripts/accumulate_once.py`: pulls all ~44 RSS/alt feeds
   into `data/news_archive_live.jsonl` + the brain store. Log:
   `data/accumulate_cron.log`.
+- `53 7 * * *` — `scripts/refresh_market_data.py`: ALL signal/indicator
+  numbers, daily — stablecoin supply (DefiLlama), Fear&Greed, BTC/ETH ETF
+  flows (Farside), DVOL (Deribit), CFTC COT, Guardian archive top-up. Free
+  sources only, no keys. Log: `data/market_refresh_cron.log`.
 - The GDELT crypto crawler (`gdelt_crypto_fetch --loop`) is long-running and
   resumable; restart it in any session if dead:
   `cd engine && python3 -m ai_investing.research.gdelt_crypto_fetch --loop`
@@ -17,7 +21,12 @@ session, see §3).*
 
 ## 2. Daily AI routine (once per day, after ~08:30 SGT)
 
-1. Fresh pull: `scripts/accumulate_once.py`.
+RULE: gather from EVERY source (news text + signal/indicator numbers), then
+assign digestion to a Sonnet subagent via the Claude Code Agent tool
+(model: sonnet). NO external AI APIs, ever.
+
+1. Fresh pull: `scripts/accumulate_once.py`; verify the 07:53 numbers
+   refresh ran (else run `scripts/refresh_market_data.py`).
 2. Build YESTERDAY's (UTC) day-input from ALL live sources
    (`news_archive_live.jsonl` + `news_archive_x.jsonl` +
    `news_archive_gdelt_crypto.jsonl`), title-deduped, plus the trailing
