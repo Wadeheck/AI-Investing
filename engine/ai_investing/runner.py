@@ -476,7 +476,11 @@ class Runner:
 
         # Limit-order price protection on opening trades (protective exits stay market).
         if guard_slippage and mid > 0 and self.settings.execution.order_type == "limit":
-            band = self.settings.execution.limit_band_bps / 1e4
+            # the band is protection ON TOP of the market's normal frictions —
+            # a flat band tighter than HK stamp duty would reject every HK fill
+            cm = self._costs_for(order.asset)
+            band = (self.settings.execution.limit_band_bps
+                    + cm.commission_bps + cm.spread_bps) / 1e4
             order.order_type = OrderType.LIMIT
             order.limit_price = mid * (1 + band) if order.side is Side.BUY else mid * (1 - band)
 
