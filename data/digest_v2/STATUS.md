@@ -54,34 +54,49 @@ retention rules).*
   not itself specified by the brief — downstream code may want a different
   formula.
 
-## CRYPTO BACKFILL CAMPAIGN — COMPLETE (2026-08-01)
+## CRYPTO BACKFILL CAMPAIGN — WAVE 1 + WAVE 2 COMPLETE (2026-08-01)
 
 `crypto_backfill/` staged 1,417 dated day-files (2022-05 → 2026-07-31,
 9,620 items) from the GDELT crypto sweep, the Wu Blockchain newsletter
-archive, and Binance/Upbit listing announcements. Digested by 8 parallel
-Sonnet agents in date-range chunks (2023-07-01 → 2026-07-31, 1,089
-in-window days), per `crypto_backfill/README.md`'s append-only amendment
-protocol. Result: 479 day-files in `events_amend_crypto/`, 927 new events
-+ 5 `add_nodes` amendments proposed.
+archive, and Binance/Upbit listing announcements.
 
-`_merge_amendments.py` re-run and verified clean: base 4,483 events →
-**5,088 total** (626 new events, 357 `add_nodes`, 91 `replace_nodes`, 78
-`add_deals`, 21 dropped for no legal origin; 4 amendments skipped —
-referenced event_keys not in the ledger, sample logged in the run output).
-Ledger rebuilt to 2,084 event_keys; `news_impulses_v2.jsonl` regenerated
-for all 1,127 days (37 noise events excluded at the 0.35 threshold).
-`validation_report.md` rewritten — **not yet reviewed**; check it before
-trusting the new crypto-node distribution.
+**Wave 1** (8 parallel agents, date-range chunks, 1,089 in-window days
+2023-07-01 → 2026-07-31): 479 day-files, 927 events + 5 amendments.
 
-One-off fix applied during merge: 25 of the 479 output files were missing
-the `amendments` key (schema drift from some sub-agents) — backfilled to
-`[]` in place before merging; script itself was not modified.
+**Wave 2** (`crypto_backfill/WAVE2_BACKLOG.md`, 12 parallel agents — 6 on
+the dense 2025-12 → 2026-06 bear-era GDELT zone, 6 batching the thin
+2023-07 → 2025-11 Wu-Blockchain-only zone; 607 backlog days, 7,299
+headlines): dense zone alone produced ~920 events across 129 days;
+thin zone mostly confirmed "nothing new" (as expected for single-headline
+days) with occasional gap-fills. Combined `events_amend_crypto/` now has
+**630 day-files, 1,957 events + 12 amendments** (cumulative across both
+waves — Wave 2 agents checked for and extended Wave-1 files rather than
+overwriting).
 
-**Not yet done, still open**: the `_stage.py` re-run mentioned in the
-original orders (GDELT crawler may have filled more days since 2026-08-01
-staging) — worth one more digest wave if the crawler made material
-progress. Final trainer run with exit-form crypto rounds is still
-pending (next step below).
+`_merge_amendments.py` re-run after each wave, both clean:
+- Post-Wave-1: base 4,483 → 5,088 events.
+- Post-Wave-2 (current): base 4,483 → **7,036 total events** (2,574 new
+  events, 365 `add_nodes`, 91 `replace_nodes`, 171 `add_deals`, 21 dropped
+  for no legal origin; 5 amendments skipped — referenced event_keys not
+  in the ledger, e.g. `crypto-2025-bybit-hack`, `us-venezuela-2025-drug-boat-strike`
+  — sample logged in the run output, worth a look if those stories matter).
+  Ledger rebuilt to **3,753 event_keys**; `news_impulses_v2.jsonl`
+  regenerated for all 1,128 days (989 noise events excluded at the 0.35
+  threshold — note this jumped a lot from Wave 1's 37, consistent with
+  many more low-confidence GDELT-sourced events now in the pool).
+  `validation_report.md` rewritten — **not yet reviewed**; check it
+  before trusting the new crypto-node distribution, especially given the
+  much larger noise-exclusion count.
+
+One-off fixes applied during merges (schema drift from some sub-agents,
+not a script bug): 25 files missing the `amendments` key after Wave 1,
+5 more after Wave 2 — all backfilled to `[]` in place before merging.
+
+**Not yet done, still open**: the `_stage.py` re-run to pick up further
+GDELT crawler progress (paused at 268/1,127 days when Wave 2 was staged
+2026-08-01) — regenerate `WAVE2_BACKLOG.md` and run a Wave 3 if the
+crawler advanced materially. Final trainer run with exit-form crypto
+rounds is still pending (next step below).
 
 ## What REMAINS (next steps, none of them Sonnet's job per the brief)
 
