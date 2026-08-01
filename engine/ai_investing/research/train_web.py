@@ -216,10 +216,13 @@ def load_dataset():
     rets = close.pct_change()
     vol20 = rets.rolling(20, min_periods=10).std()
     # benchmarks: what doing nothing clever earns over the same dates
-    bpx = yf.download(["SPY", "QQQ", "AGG"], period="3y", interval="1d",
+    # (GLD/TLT ride along as R34 defensive-rotation shelters, not benchmarks)
+    bpx = yf.download(["SPY", "QQQ", "AGG", "GLD", "TLT"], period="3y", interval="1d",
                       auto_adjust=True, progress=False)["Close"]
     bench = {"SPY": bpx["SPY"].reindex(close.index).ffill(),
              "QQQ": bpx["QQQ"].reindex(close.index).ffill()}
+    defensive = {s: bpx[s].reindex(close.index).ffill()
+                 for s in ("GLD", "TLT") if s in bpx and bpx[s].notna().mean() > 0.5}
     agg = bpx["AGG"].reindex(close.index).ffill()
     r6040 = 0.6 * bench["SPY"].pct_change() + 0.4 * agg.pct_change()
     bench["60/40"] = 100.0 * (1.0 + r6040.fillna(0.0)).cumprod()
@@ -348,6 +351,7 @@ def load_dataset():
         f"risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
                 open=opn, high=high, low=low, adv=adv, vol20=vol20, bench=bench,
+                defensive=defensive,
                 rets=rets, news=news, factors=factors,
                 volz=volz, washz=washz, ret2=ret2, mhm=mhm,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
@@ -406,6 +410,8 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             core_trim=0.5,                  # fraction of each core position sold when gated
             core_ma=100,                    # SPY moving-average lookback for the gate
             core_band=0.0,                  # hysteresis: enter winter below ma*(1-band), exit above ma
+            core_defensive="",              # R34: where winter proceeds shelter — ""=cash,
+                                            # "GLD"/"TLT" fixed, "best"=defensive momentum pick
             w_mhm=0.0,                      # AHL multi-horizon momentum score into crypto nodes
             vol_target=0.0,                 # per-position daily-vol target (0 = off): the AHL
                                             # survival law — trade smaller when wild, larger when calm
@@ -471,6 +477,25 @@ def cost_frac(ds, s: str, qty: float, price: float, i: int) -> float:
 
 HARD_STOP = 0.10   # USER HARD RULE: max 10% loss on ANY trade or investment
 
+
+def pick_defensive(cfg, ds, i):
+    """R34: which defensive asset shelters the trimmed core this winter.
+    Returns a symbol from ds['defensive'] or None (= stay in cash)."""
+    mode = cfg.get("core_defensive") or ""
+    dfs = ds.get("defensive", {})
+    if mode in dfs:
+        return mode
+    if mode == "best" and i >= 63:      # whichever defense ran better last quarter
+        best, bm = None, None
+        for sym, ser in dfs.items():
+            a, b = float(ser.iloc[i]), float(ser.iloc[i - 63])
+            if a == a and b == b and b > 0:
+                m = a / b - 1.0
+                if bm is None or m > bm:
+                    best, bm = sym, m
+        return best
+    return None
+
 # USER CRYPTO MANDATE (2026-07-28): skeptical stance — 20% HODL core,
 # fast tactical sleeve capped at 70% of the crypto book (buy/sell churn,
 # quick take-profits, time-boxed holds), remainder cash buffer. The HODL
@@ -511,6 +536,7 @@ def run_replay(ds, cfg, i0, i1):
     book = {"cash": 100_000.0 * (1.0 - core_frac), "pos": {}}   # tactical sleeve
     kbook = {"cash": 100_000.0 * core_frac, "pos": {}}          # long-term core
     core_state = {"trimmed": False}                             # equity winter gate flag
+    kdef = {"sym": None, "qty": 0.0}        # R34: defensive shelter held through winter
     slow_imp: dict[str, float] = {}         # ~30d EMA of field impact (core signal)
     ktrades = 0
     pending: list[dict] = []                # stock orders awaiting next open
@@ -979,16 +1005,37 @@ def run_replay(ds, cfg, i0, i1):
                     eqw = (spy_.iloc[i] < ma * (1.0 - cfg["core_band"])
                            if not core_state["trimmed"] else spy_.iloc[i] < ma)
                     if eqw and not core_state["trimmed"]:
+                        freed = 0.0
                         for s2 in list(kbook["pos"]):
                             p2, v2 = kbook["pos"][s2], px[s2]
                             if np.isnan(v2) or p2["qty"] <= 0:
                                 continue
                             sell = p2["qty"] * cfg["core_trim"]
-                            kbook["cash"] += sell * v2 * (1 - cost_frac(ds, s2, sell, v2, i))
+                            proceeds = sell * v2 * (1 - cost_frac(ds, s2, sell, v2, i))
+                            kbook["cash"] += proceeds
+                            freed += proceeds
                             p2["qty"] -= sell
                             ktrades += 1
+                        # R34 defensive rotation: winter proceeds shelter in
+                        # gold/bonds instead of cash — the bear should pay
+                        dsym = pick_defensive(cfg, ds, i)
+                        if dsym is not None and freed > 500:
+                            dv = float(ds["defensive"][dsym].iloc[i])
+                            if dv == dv and dv > 0:
+                                spend = min(freed, kbook["cash"] * 0.98)
+                                qty = spend / dv
+                                kbook["cash"] -= spend * (1 + cost_frac(ds, dsym, qty, dv, i))
+                                kdef["sym"], kdef["qty"] = dsym, kdef["qty"] + qty
+                                ktrades += 1
                         core_state["trimmed"] = True
                     elif not eqw and core_state["trimmed"]:
+                        if kdef["qty"] > 0 and kdef["sym"]:
+                            dv = float(ds["defensive"][kdef["sym"]].iloc[i])
+                            if dv == dv and dv > 0:
+                                kbook["cash"] += kdef["qty"] * dv * (
+                                    1 - cost_frac(ds, kdef["sym"], kdef["qty"], dv, i))
+                                kdef["sym"], kdef["qty"] = None, 0.0
+                                ktrades += 1
                         per_slot = 0.95 * eq_of(kbook, px) / max(1, int(cfg["core_n"]))
                         for s2 in list(kbook["pos"]):
                             v2 = px[s2]
@@ -1046,6 +1093,10 @@ def run_replay(ds, cfg, i0, i1):
                     kbook["pos"][s] = {"qty": qty, "entry": px[s]}
                     ktrades += 1
         keq = eq_of(kbook, px) if core_frac > 0 else 0.0
+        if kdef["qty"] > 0 and kdef["sym"]:
+            dv = float(ds["defensive"][kdef["sym"]].iloc[i])
+            if dv == dv:
+                keq += kdef["qty"] * dv
         tcurve.append(eq)
         curve.append(eq + keq)
         ccurve.append(eq_of(cbook, px))
@@ -1197,6 +1248,11 @@ ROUNDS = [
      "redeploys — the crypto machinery's equity mirror; requires stock_core>0 "
      "to matter)", {
         "core_gate": [1], "core_trim": [0.5, 0.8]}),
+    ("R34 defensive rotation (winter proceeds shelter in gold/bonds instead of "
+     "cash — the published trend-sleeve answer to the lockbox's bear gap)", {
+        "core_gate": [1], "core_trim": [0.8, 1.0],
+        "core_defensive": ["GLD", "TLT", "best"],
+        "core_ma": [100, 150, 200]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
@@ -1205,6 +1261,27 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
            "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
            "w_wash", "pump_frac", "w_mhm", "vol_target", "core_trim")
+
+
+def plateau_ok(grid, keys, sweep, win_vals, incumbent_obj):
+    """Plateau guard (transcript-4): trust a sweep winner only if its grid
+    NEIGHBORS also hold up against the incumbent. A combination that wins
+    while every adjacent setting loses is a lucky spike — curve-fitting —
+    not a real edge. Checks each swept axis one step either side."""
+    msgs = []
+    for ki, k in enumerate(keys):
+        vals = grid[k]
+        if len(vals) < 2 or win_vals[ki] not in vals:
+            continue
+        j = vals.index(win_vals[ki])
+        for nj in (j - 1, j + 1):
+            if not 0 <= nj < len(vals):
+                continue
+            nb = win_vals[:ki] + (vals[nj],) + win_vals[ki + 1:]
+            o = sweep.get(nb)
+            if o is not None and o < incumbent_obj - 0.01:
+                msgs.append(f"{k}={vals[nj]} obj {o:.3f} < incumbent")
+    return not msgs, "; ".join(msgs)
 
 
 def preservation_ok(dev_new, dev_old):
@@ -1318,16 +1395,27 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
         combos = list(itertools.product(*(grid[k] for k in keys)))
         log(f"--- {round_name}: {len(combos)} candidates ---")
         round_best, round_best_obj, round_best_m = None, best_obj, None
+        sweep = {}
         for vals in combos:
             cfg = {**best_cfg, **dict(zip(keys, vals))}
             m = run_replay(ds, cfg, warm, t_end)
             o = objective(m)
+            sweep[tuple(vals)] = o
             history.append({"round": round_name, "cfg": {k: cfg[k] for k in keys},
                             "train": m, "obj": round(o, 4)})
             if o > round_best_obj:
                 round_best, round_best_obj, round_best_m = cfg, o, m
         if round_best is None:
             log(f"{round_name}: no candidate beat incumbent — feature NOT adopted")
+            continue
+        # plateau guard: the winner's parameter NEIGHBORHOOD must hold up too
+        win_vals = tuple(round_best[k] for k in keys)
+        pl_ok, pl_msg = plateau_ok(grid, keys, sweep, win_vals, best_obj)
+        if not pl_ok:
+            log(f"{round_name}: REJECTED by plateau guard (lone-spike winner, "
+                f"neighbors fail: {pl_msg})")
+            history.append({"round": round_name, "plateau_rejected": pl_msg,
+                            "adopted": False})
             continue
         # anti-cheat: the winner must also help OUT-OF-SAMPLE, unseen by tuning
         refresh_news(ds)          # include any news digested while we trained

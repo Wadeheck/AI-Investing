@@ -9,7 +9,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_investing.research.train_web import (
-    COST_MODELS, bench_metrics, cost_frac, market_of, series_metrics,
+    COST_MODELS, bench_metrics, cost_frac, market_of, pick_defensive,
+    plateau_ok, series_metrics,
 )
 
 
@@ -68,6 +69,40 @@ def test_series_and_bench_metrics():
     assert m["cagr"] > 0 and m["maxdd"] == 0.0 and not math.isnan(m["sharpe"])
     b = bench_metrics(ds, 0, 60)
     assert b["SPY"]["cagr"] == m["cagr"]
+
+
+def test_plateau_guard_rejects_lone_spike():
+    grid = {"a": [0.1, 0.2, 0.3], "b": [1]}
+    keys = sorted(grid)                       # same ordering train() uses
+    # winner a=0.2 with BOTH neighbors below the incumbent -> lucky spike
+    sweep = {(0.1, 1): 0.00, (0.2, 1): 0.30, (0.3, 1): -0.05}
+    ok, msg = plateau_ok(grid, keys, sweep, (0.2, 1), incumbent_obj=0.10)
+    assert not ok and "a=" in msg
+    # neighbors that HOLD vs the incumbent -> a real plateau, accepted
+    sweep = {(0.1, 1): 0.12, (0.2, 1): 0.30, (0.3, 1): 0.11}
+    ok, _ = plateau_ok(grid, keys, sweep, (0.2, 1), incumbent_obj=0.10)
+    assert ok
+    # single-value axes (feature flags) never block adoption
+    ok, _ = plateau_ok({"flag": [1]}, ["flag"], {(1,): 0.3}, (1,), 0.1)
+    assert ok
+    # edge winner: only the existing neighbor is judged
+    sweep = {(0.1, 1): 0.30, (0.2, 1): 0.12, (0.3, 1): -0.9}
+    ok, _ = plateau_ok(grid, keys, sweep, (0.1, 1), incumbent_obj=0.10)
+    assert ok
+
+
+def test_pick_defensive_modes():
+    idx = pd.date_range("2024-01-01", periods=120, freq="B")
+    gld = pd.Series([100 + 0.2 * i for i in range(120)], index=idx)   # rising
+    tlt = pd.Series([100 - 0.1 * i for i in range(120)], index=idx)   # falling
+    ds = {"defensive": {"GLD": gld, "TLT": tlt}}
+    assert pick_defensive({"core_defensive": "GLD"}, ds, 100) == "GLD"
+    assert pick_defensive({"core_defensive": "TLT"}, ds, 100) == "TLT"
+    assert pick_defensive({"core_defensive": "best"}, ds, 100) == "GLD"
+    assert pick_defensive({"core_defensive": ""}, ds, 100) is None      # cash
+    assert pick_defensive({}, ds, 100) is None
+    # too early for the momentum window -> stay in cash rather than guess
+    assert pick_defensive({"core_defensive": "best"}, ds, 30) is None
 
 
 if __name__ == "__main__":
