@@ -262,6 +262,68 @@ def load_dataset():
         crypto_sig["addr"] = tr.dropna().to_dict()
     except Exception as exc:
         log(f"crypto signals unavailable: {exc}")
+    # ---- crypto history backfills (fetched 2026-07-31): ETF flows, stablecoin
+    # supply, Deribit DVOL, CFTC COT — all trailing-window, no future leakage
+    crypto_sig.update({"etf": {}, "stab": {}, "dvol": {}, "cot": {}})
+    hist = DATA_DIR / "crypto_history"
+    try:
+        from datetime import datetime as _dt
+        for fn, sym in [("btc_etf_flows.json", "BTC/USD"), ("eth_etf_flows.json", "ETH/USD")]:
+            rows = json.loads((hist / fn).read_text())
+            ser = {}
+            for r in rows:
+                try:
+                    d_ = _dt.strptime(r[0], "%d %b %Y").date().isoformat()
+                    ser[d_] = float(str(r[-1]).replace(",", ""))
+                except (ValueError, IndexError):
+                    continue
+            s_ = pd.Series(ser).sort_index()
+            z = s_.rolling(5, min_periods=2).sum() / 500.0   # 5d cum flow, $500M scale
+            daily = z.reindex(pd.date_range(s_.index[0], s_.index[-1]).strftime("%Y-%m-%d")).ffill(limit=3)
+            crypto_sig["etf"][sym] = daily.dropna().clip(-1, 1).to_dict()
+    except Exception as exc:
+        log(f"etf-flow history unavailable: {exc}")
+    try:
+        rows = json.loads((hist / "stablecoins_daily.json").read_text())
+        s_ = pd.Series({_dt.utcfromtimestamp(int(r["date"])).date().isoformat(): r["usd_bn"]
+                        for r in rows}).sort_index()
+        chg = s_.pct_change(30)
+        crypto_sig["stab"] = ((chg - 0.01) / 0.04).clip(-1, 1).dropna().to_dict()
+    except Exception as exc:
+        log(f"stablecoin history unavailable: {exc}")
+    try:
+        for fn, sym in [("dvol_btc.json", "BTC/USD"), ("dvol_eth.json", "ETH/USD")]:
+            rows = json.loads((hist / fn).read_text())
+            s_ = pd.Series({_dt.utcfromtimestamp(r["ts"]).date().isoformat(): r["close"]
+                            for r in rows}).sort_index()
+            z = (s_ - s_.rolling(90, min_periods=30).mean()) / (s_.rolling(90, min_periods=30).std() + 1e-9)
+            crypto_sig["dvol"][sym] = z.dropna().to_dict()
+    except Exception as exc:
+        log(f"dvol history unavailable: {exc}")
+    try:
+        rows = json.loads((hist / "cftc_cot_crypto.json").read_text())
+        for mkt, sym in [("BITCOIN - CHICAGO MERCANTILE EXCHANGE", "BTC/USD"),
+                         ("ETHER CASH SETTLED - CHICAGO MERCANTILE EXCHANGE", "ETH/USD")]:
+            ser = {}
+            for r in rows:
+                if r["market"] != mkt:
+                    continue
+                try:
+                    oi = float(r["oi"]); net = (float(r["lev_long"]) - float(r["lev_short"])) / max(oi, 1.0)
+                    # report published ~3 days after the as-of date: shift availability
+                    eff = (_dt.fromisoformat(r["date"]) + pd.Timedelta(days=3)).date().isoformat()
+                    ser[eff] = net
+                except (ValueError, KeyError):
+                    continue
+            s_ = pd.Series(ser).sort_index()
+            z = (s_ - s_.rolling(52, min_periods=12).mean()) / (s_.rolling(52, min_periods=12).std() + 1e-9)
+            daily = z.reindex(pd.date_range(s_.index[0], s_.index[-1]).strftime("%Y-%m-%d")).ffill(limit=8)
+            crypto_sig["cot"][sym] = daily.dropna().to_dict()
+    except Exception as exc:
+        log(f"cot history unavailable: {exc}")
+    log(f"crypto history: etf {sum(len(v) for v in crypto_sig['etf'].values())}d, "
+        f"stab {len(crypto_sig['stab'])}d, dvol {sum(len(v) for v in crypto_sig['dvol'].values())}d, "
+        f"cot {sum(len(v) for v in crypto_sig['cot'].values())}d")
     log(f"dataset: {len(symbols)} symbols, {len(close)} days, news {len(news)} days, "
         f"factors {len(factors)} days, crypto-sig days {len(crypto_sig['fng'])}, "
         f"risk node = {risk_node}")
@@ -311,6 +373,14 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             w_funding=0.0,                  # contrarian leverage-crowding (funding z)
             w_fng=0.0,                      # contrarian crypto fear/greed extremes
             w_onchain=0.0,                  # on-chain usage trend (BTC adoption)
+            w_etf=0.0,                      # spot-ETF net flows (institutional bid, follow)
+            w_stab=0.0,                     # stablecoin supply tide (liquidity in/out, all crypto)
+            w_dvol=0.0,                     # implied-vol regime (DVOL spike = de-risk)
+            w_cot=0.0,                      # CFTC leveraged-funds crowding (contrarian)
+            alt_trade=1,                    # 0 = tradable crypto book is BTC/ETH/SOL only
+            bear_exit=0,                    # exit-form ensemble: early cash-out on bear evidence
+            bear_k=2,                       # signals required (of: winter, stab drain, DVOL spike, ETF outflows)
+            hodl_trim=0.5,                  # fraction of HODL core sold when deep/bear
             trail_atr=0.0,                  # >0: trailing exits — let winners RUN
             use_rel=0,                      # per-symbol reliability reweighting
             w_vix=0.0,                      # real vol regime (VIX) pulses the risk node
@@ -398,8 +468,11 @@ def run_replay(ds, cfg, i0, i1):
     g, close, rets = ds["g"], ds["close"], ds["rets"]
     opn, high, low = ds["open"], ds["high"], ds["low"]
     node_by_sym, node_types = ds["node_by_sym"], ds["node_types"]
-    symbols, cryptos = ds["symbols"], ds["cryptos"]
-    stocks = [s for s in symbols if s not in cryptos]
+    symbols, all_cryptos = ds["symbols"], ds["cryptos"]
+    cryptos = all_cryptos
+    if not cfg.get("alt_trade", 1):         # majors-only book: alts stay signal-only
+        cryptos = [s for s in cryptos if s in ("BTC/USD", "ETH/USD", "SOL/USD")]
+    stocks = [s for s in symbols if s not in all_cryptos]   # alts NEVER leak into the stock book
     field: dict[str, float] = {}
     prev_imp: dict[str, float] = {}
     btc = next((s for s in cryptos if s.startswith("BTC")), None)
@@ -561,6 +634,22 @@ def run_replay(ds, cfg, i0, i1):
                 z = cs["oi_z"].get(s, {}).get(dstr)
                 if z is not None and abs(z) > 1.0:
                     add += -cfg["w_oi"] * max(-1.0, min(1.0, z / 2.5)) * 0.3
+            if cfg["w_etf"]:        # institutional flows: follow, don't fade
+                v = cs["etf"].get(s, {}).get(dstr)
+                if v is not None and abs(v) > 0.1:
+                    add += cfg["w_etf"] * v * 0.3
+            if cfg["w_stab"]:       # liquidity tide lifts/drains ALL crypto
+                v = cs["stab"].get(dstr)
+                if v is not None and abs(v) > 0.2:
+                    add += cfg["w_stab"] * v * 0.25
+            if cfg["w_dvol"]:       # implied-vol spike = de-risk crypto adds
+                z = cs["dvol"].get(s, cs["dvol"].get("BTC/USD", {})).get(dstr)
+                if z is not None and z > 1.0:
+                    add += -cfg["w_dvol"] * min(1.0, z / 2.5) * 0.3
+            if cfg["w_cot"]:        # institutional futures crowding, contrarian
+                z = cs["cot"].get(s, cs["cot"].get("BTC/USD", {})).get(dstr)
+                if z is not None and abs(z) > 1.0:
+                    add += -cfg["w_cot"] * max(-1.0, min(1.0, z / 2.5)) * 0.3
             if abs(add) > 0.03:
                 impulses[nid] = max(impulses.get(nid, 0.0),
                                     max(-0.5, min(0.5, add)), key=abs)
@@ -582,8 +671,15 @@ def run_replay(ds, cfg, i0, i1):
                     impulses[node] = max(impulses.get(node, 0.0), add, key=abs)
         field = decay_field(field)
         if impulses:
+            # regime-aware propagation: yesterday's risk field state drives the
+            # crisis-convergence law (correlations -> 1 in deep risk-off) and
+            # the fear-gated edges — so the graph's NONLINEAR couplings are
+            # exercised (and therefore tested) in the backtest, not only live
+            r_prev = field.get(ds["risk_node"], 0.0) if ds.get("risk_node") else 0.0
             impacts, _, _ = g.propagate(impulses, max_hops=cfg["max_hops"],
-                                        decay=cfg["hop_decay"])
+                                        decay=cfg["hop_decay"],
+                                        regime={"risk_appetite": r_prev,
+                                                "fear": max(0.0, min(1.0, -r_prev))})
             for k, v in impacts.items():
                 field[k] = max(-1.0, min(1.0, field.get(k, 0.0) + v))
         asset_imp = g.asset_impacts(field)
@@ -715,14 +811,31 @@ def run_replay(ds, cfg, i0, i1):
                             h_["entry"] = px[s]
                             h_["stopped"] = False
                             cbook["cash"] -= buy * (1 + cost_frac(ds, s, qty, px[s], i))
-        if cfg["crypto_gate"] or winter:
+        if cfg["crypto_gate"] or winter or cfg["bear_exit"]:
             deep = winter or (cfg["crypto_gate"] and risk < cfg["gate_level"])
+            if cfg["bear_exit"]:
+                # exit-form ensemble: count independent bear evidence streams
+                cs_ = ds["crypto_sig"]
+                stab_ = cs_["stab"].get(dstr)
+                dvz_ = cs_["dvol"].get("BTC/USD", {}).get(dstr)
+                etf_ = cs_["etf"].get("BTC/USD", {}).get(dstr)
+                score = (int(bool(winter)) + int(stab_ is not None and stab_ < -0.5)
+                         + int(dvz_ is not None and dvz_ > 1.5)
+                         + int(etf_ is not None and etf_ < -0.3))
+                if score >= cfg["bear_k"]:
+                    deep = True
+                    # cash out the tactical sleeve too (stables = cash here)
+                    for s2 in list(cbook["tact"]):
+                        p2, v2 = cbook["tact"][s2], px[s2]
+                        if p2["qty"] > 0 and not np.isnan(v2):
+                            cbook["cash"] += p2["qty"] * v2 * (1 - cost_frac(ds, s2, p2["qty"], v2, i))
+                            del cbook["tact"][s2]
             for s in cryptos:
                 if np.isnan(px[s]):
                     continue
                 h_ = cbook["hodl"].get(s)
                 if deep and h_ and not h_.get("trimmed"):
-                    sell = h_["qty"] * 0.5
+                    sell = h_["qty"] * cfg["hodl_trim"]
                     cbook["cash"] += sell * px[s] * (1 - cost_frac(ds, s, sell, px[s], i))
                     h_["qty"] -= sell
                     h_["trimmed"] = True
@@ -880,6 +993,31 @@ def objective(m):
     return s["cagr"] + 0.5 * c["cagr"] - 2.0 * (abs(s["maxdd"]) + abs(c["maxdd"])) / 2 - pen
 
 
+def book_objective(b):
+    """One book's own score — used by the Pareto guard so a shared-config
+    change can never spend one sleeve's alpha to flatter the joint objective
+    (the run-5 lesson: core_dstop tightened for zero crypto benefit)."""
+    pen = 3.0 * max(0.0, abs(b["maxdd"]) - MAX_DD_LIMIT)
+    return b["cagr"] - 2.0 * abs(b["maxdd"]) - pen
+
+
+PARETO_TOL = 0.03   # a book may give up at most this much of its own score
+
+
+def pareto_ok(dev_new, dev_old) -> tuple[bool, str]:
+    """Both books must hold their ground on the continuous path (small
+    tolerance): improvements must be genuine, not cross-subsidised."""
+    msgs = []
+    ok = True
+    for book in ("stock", "crypto"):
+        o_old = book_objective(dev_old[book])
+        o_new = book_objective(dev_new[book])
+        msgs.append(f"{book} {o_old:+.3f}->{o_new:+.3f}")
+        if o_new < o_old - PARETO_TOL:
+            ok = False
+    return ok, ", ".join(msgs)
+
+
 # ----------------------------------------------------------------- training --
 ROUNDS = [
     ("R1 baseline + parameter sweep", {
@@ -929,13 +1067,26 @@ ROUNDS = [
      "crypto alpha may live in market data, not news)", {
         "w_fng": [0.2], "w_onchain": [0.24], "crypto_gain": [1.0, 1.2],
         "tact_take": [0.3, 0.39], "crypto_gate": [1]}),
+    ("R23 spot-ETF flows (institutional bid since Jan 2024, follow the flow)", {
+        "w_etf": [0.4, 0.8]}),
+    ("R24 stablecoin liquidity tide (supply growth/contraction moves all crypto)", {
+        "w_stab": [0.4, 0.8]}),
+    ("R25 DVOL vol regime (implied-vol spikes trim crypto risk-taking)", {
+        "w_dvol": [0.4, 0.8]}),
+    ("R26 CFTC COT positioning (8y of institutional futures crowding, contrarian)", {
+        "w_cot": [0.4, 0.8]}),
+    ("R27 majors-only crypto book (alts stay signal-only until their news depth earns size)", {
+        "alt_trade": [0]}),
+    ("R28 bear-exit ensemble (winter + stablecoin drain + DVOL spike + ETF outflows "
+     "-> early cash-out to stables, trainable HODL trim)", {
+        "bear_exit": [1], "bear_k": [2, 3], "hodl_trim": [0.5, 0.8]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_gain", "short_bias",
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
-           "w_lsr", "w_oi")
+           "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim")
 
 
 def preservation_ok(dev_new, dev_old):
@@ -976,6 +1127,11 @@ def refine(ds, cfg, base_obj, warm, t_end, h_end, history, widen=1.0):
                     log(f"  refine: {k} -> {cand[k]} VETOED (continuous dd "
                         f"breach: stock {dev_new['stock']['maxdd']:.0%} "
                         f"crypto {dev_new['crypto']['maxdd']:.0%})")
+                    continue
+                p_ok, p_msg = pareto_ok(dev_new, best_dev)
+                if not p_ok:      # the run-5 core_dstop lesson, made structural
+                    log(f"  refine: {k} -> {cand[k]} REJECTED by book-Pareto "
+                        f"guard ({p_msg})")
                     continue
                 best_cfg, best_obj, best_dev = cand, o, dev_new
                 log(f"  refine: {k} -> {cand[k]} (obj {o:.3f}, holdout ok, dd ok)")
@@ -1071,9 +1227,14 @@ def train(seed_cfg: dict | None = None, widen: float = 1.0) -> dict:
                     f"crypto {dev_new['crypto']['maxdd']:.0%} "
                     f"exceeds {MAX_DD_LIMIT:.0%})")
             else:
-                best_cfg, best_obj, best_dev = round_best, round_best_obj, dev_new
-                log(f"{round_name}: ADOPTED (train obj {round_best_obj:.3f}; "
-                    f"holdout obj {objective(oos_new):.3f} vs {objective(oos_old):.3f})")
+                p_ok, p_msg = pareto_ok(dev_new, best_dev)
+                if not p_ok:
+                    log(f"{round_name}: REJECTED by book-Pareto guard "
+                        f"(one sleeve paying for the other: {p_msg})")
+                else:
+                    best_cfg, best_obj, best_dev = round_best, round_best_obj, dev_new
+                    log(f"{round_name}: ADOPTED (train obj {round_best_obj:.3f}; "
+                        f"holdout obj {objective(oos_new):.3f} vs {objective(oos_old):.3f})")
         history.append({"round": round_name, "holdout_old": oos_old, "holdout_new": oos_new,
                         "adopted": best_cfg == round_best})
 

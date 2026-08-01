@@ -43,7 +43,8 @@ SOURCE_TRUST = {
     # state media: useful policy signal, but reads like advocacy
     "globaltimes": 0.45,
     "coindesk": 0.6, "theblock": 0.65, "decrypt": 0.5, "panewslab": 0.5,
-    "wublockchain": 0.6,
+    "wublock": 0.6,                       # matches wublockchain + wublock.substack.com
+    "binance.com": 0.7, "upbit.com": 0.7,  # primary-source exchange announcements
     # curated X handles (news_archive_x.jsonl capture) — listed BEFORE the
     # generic x.com fallback because first substring match wins
     "x.com/farsideuk": 0.8, "x.com/glassnode": 0.7, "x.com/zachxbt": 0.7,

@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 21
+SEED_VERSION = 22
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -1135,6 +1135,24 @@ SEED_EDGES = [
      "note": "the SEC-suit asset: regulatory shifts reprice it hardest in both directions"},
     {"src": "crypto_liquidity", "dst": "doge", "type": "influences", "sign": 1, "weight": 0.5,
      "note": "retail liquidity floods memecoins last and loudest"},
+    # ---- stocks <-> crypto coupling (seed v22) — modeled NONLINEARLY ----
+    # These are deliberately NOT plain linear edges. Both ride the graph's
+    # existing regime machinery, and both carry prior-grade weights for the
+    # edge calibrator to verdict against realized 5d returns.
+    {"src": "crypto_majors", "dst": "us_megacap_tech", "type": "correlates_with", "sign": 1,
+     "weight": 0.3,
+     "note": "liquidity twins: mild coupling in calm tape; correlates_with edges "
+             "ride the crisis-convergence law (w -> w + (1-w)*conv*0.6, conv "
+             "driven by deep negative risk_appetite), so this pair tightens "
+             "toward ~0.7 in a panic — the empirically observed regime-dependent "
+             "BTC/NDX correlation, not a constant"},
+    {"src": "btc", "dst": "risk_appetite", "type": "influences", "sign": 1, "weight": 0.2,
+     "regime_gate": {"dial": "fear", "lo": 0.15, "hi": 1.0, "outside": "damp"},
+     "note": "the 24/7 canary: BTC trades weekends/overnight and leads Monday "
+             "risk tone. Fear-gated for ASYMMETRY — live only when fear is "
+             "already present (crypto weakness then CONFIRMS and propagates "
+             "stress), damped in complacent/melt-up tape where crypto froth "
+             "says nothing about equity risk. Calibrator will verdict it"},
     # ---- supply / competition / proxies ----
     # supplies flows BOTH ways: supplier disruption hits the customer, customer
     # weakness hits the supplier — one shock moves the whole cluster.

@@ -54,6 +54,35 @@ retention rules).*
   not itself specified by the brief — downstream code may want a different
   formula.
 
+## CRYPTO BACKFILL CAMPAIGN — COMPLETE (2026-08-01)
+
+`crypto_backfill/` staged 1,417 dated day-files (2022-05 → 2026-07-31,
+9,620 items) from the GDELT crypto sweep, the Wu Blockchain newsletter
+archive, and Binance/Upbit listing announcements. Digested by 8 parallel
+Sonnet agents in date-range chunks (2023-07-01 → 2026-07-31, 1,089
+in-window days), per `crypto_backfill/README.md`'s append-only amendment
+protocol. Result: 479 day-files in `events_amend_crypto/`, 927 new events
++ 5 `add_nodes` amendments proposed.
+
+`_merge_amendments.py` re-run and verified clean: base 4,483 events →
+**5,088 total** (626 new events, 357 `add_nodes`, 91 `replace_nodes`, 78
+`add_deals`, 21 dropped for no legal origin; 4 amendments skipped —
+referenced event_keys not in the ledger, sample logged in the run output).
+Ledger rebuilt to 2,084 event_keys; `news_impulses_v2.jsonl` regenerated
+for all 1,127 days (37 noise events excluded at the 0.35 threshold).
+`validation_report.md` rewritten — **not yet reviewed**; check it before
+trusting the new crypto-node distribution.
+
+One-off fix applied during merge: 25 of the 479 output files were missing
+the `amendments` key (schema drift from some sub-agents) — backfilled to
+`[]` in place before merging; script itself was not modified.
+
+**Not yet done, still open**: the `_stage.py` re-run mentioned in the
+original orders (GDELT crawler may have filled more days since 2026-08-01
+staging) — worth one more digest wave if the crawler made material
+progress. Final trainer run with exit-form crypto rounds is still
+pending (next step below).
+
 ## What REMAINS (next steps, none of them Sonnet's job per the brief)
 
 - **Live daily continuation**: from 2026-07-31 onward, run the same §2.2
