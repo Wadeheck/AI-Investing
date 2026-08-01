@@ -177,6 +177,7 @@ def load_dataset():
     low = data["Low"].rename(columns=ren).reindex(close.index)[symbols]
     adv = (data["Volume"].rename(columns=ren).reindex(close.index)[symbols]
            .rolling(20, min_periods=5).mean())
+    rawvol = data["Volume"].rename(columns=ren).reindex(close.index)[symbols]
     # ---- FX correctness: convert non-USD prices to USD (v2.1) ------------
     # 'div' quotes are <CCY> per USD (divide local price); 'mul' are USD per
     # unit (multiply). Without this, ~30 non-USD names' currency P&L is
@@ -324,12 +325,27 @@ def load_dataset():
     log(f"crypto history: etf {sum(len(v) for v in crypto_sig['etf'].values())}d, "
         f"stab {len(crypto_sig['stab'])}d, dvol {sum(len(v) for v in crypto_sig['dvol'].values())}d, "
         f"cot {sum(len(v) for v in crypto_sig['cot'].values())}d")
+    # ---- manipulation forensics (trailing-only, leak-free) --------------
+    # washz = log-volume z MINUS |return| z: volume the price displacement
+    # cannot explain — the wash-trading / bot-demand signature ("bots trading
+    # to make it seem like there's demand"). volz alone + a price burst is
+    # the pump signature. Both are inputs to trained rules, not vetoes.
+    import numpy as _np
+    lv = _np.log(rawvol.where(rawvol > 0))
+    volz = (lv - lv.rolling(90, min_periods=30).mean()) / (
+        lv.rolling(90, min_periods=30).std() + 1e-9)
+    ar = rets.abs()
+    arz = (ar - ar.rolling(90, min_periods=30).mean()) / (
+        ar.rolling(90, min_periods=30).std() + 1e-9)
+    washz = volz - arz
+    ret2 = close.pct_change(2)
     log(f"dataset: {len(symbols)} symbols, {len(close)} days, news {len(news)} days, "
         f"factors {len(factors)} days, crypto-sig days {len(crypto_sig['fng'])}, "
         f"risk node = {risk_node}")
     return dict(g=g, node_types=node_types, node_by_sym=node_by_sym, close=close,
                 open=opn, high=high, low=low, adv=adv, vol20=vol20, bench=bench,
                 rets=rets, news=news, factors=factors,
+                volz=volz, washz=washz, ret2=ret2,
                 symbols=symbols, risk_node=risk_node, valid_nodes=set(g.nodes),
                 crypto_sig=crypto_sig,
                 vix_dlog=vix_dlog, dxy_dlog=dxy_dlog, jpy_dlog=jpy_dlog,
@@ -378,6 +394,10 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             w_dvol=0.0,                     # implied-vol regime (DVOL spike = de-risk)
             w_cot=0.0,                      # CFTC leveraged-funds crowding (contrarian)
             alt_trade=1,                    # 0 = tradable crypto book is BTC/ETH/SOL only
+            w_wash=0.0,                     # discount entries whose "demand" is wash/bot volume
+            pump_ride=0,                    # knowingly ride detected pumps, small + time-boxed
+            pump_frac=0.2,                  # pump position size as fraction of crypto equity
+            pump_hold=2,                    # max days to ride a pump before forced exit
             bear_exit=0,                    # exit-form ensemble: early cash-out on bear evidence
             bear_k=2,                       # signals required (of: winter, stab drain, DVOL spike, ETF outflows)
             hodl_trim=0.5,                  # fraction of HODL core sold when deep/bear
@@ -871,6 +891,10 @@ def run_replay(ds, cfg, i0, i1):
                     fill = sfill
                 elif tfill is not None:     # bank the quick profit
                     fill = tfill
+                elif tact.get("pump") and (
+                        (rets[s].iloc[i] == rets[s].iloc[i] and rets[s].iloc[i] < 0)
+                        or i - tact.get("ei", i) >= int(cfg["pump_hold"])):
+                    fill = px[s]            # pump discipline: first red day or clock = OUT
                 elif (fimp * d_ < -0.05     # signal flipped, or clock expired
                       or i - tact.get("ei", i) >= int(cfg["tact_hold"])):
                     fill = px[s]
@@ -884,19 +908,37 @@ def run_replay(ds, cfg, i0, i1):
                                    if not np.isnan(px[s2]))
             if not tact and not exited and gate == 1.0 and not blocked["cb"]:
                 d_ = 0
-                if fimp > 0.10 and not winter:
+                wz = float(ds["washz"][s].iloc[i]) if s in ds["washz"].columns else float("nan")
+                vz = float(ds["volz"][s].iloc[i]) if s in ds["volz"].columns else float("nan")
+                fimp_eff = fimp
+                if cfg["w_wash"] and wz == wz and wz > 1.0:
+                    # the "demand" is bots printing volume: shrink conviction
+                    # smoothly with suspicion instead of a binary veto
+                    fimp_eff = fimp * max(0.0, 1.0 - cfg["w_wash"] * 0.4 * (wz - 1.0))
+                if fimp_eff > 0.10 and not winter:
                     d_ = 1
-                elif cfg["tact_short"] and fimp < -0.10:
+                elif cfg["tact_short"] and fimp_eff < -0.10:
                     d_ = -1     # shorts allowed in winter — that's their season
+                pump = False
+                if not d_ and cfg["pump_ride"]:
+                    r2 = float(ds["ret2"][s].iloc[i]) if s in ds["ret2"].columns else float("nan")
+                    # pump signature: 2-day price burst on a genuine volume burst
+                    # whose displacement backs it (washz moderate). Ride it SMALL
+                    # and time-boxed; never chase a blatant wash job (washz >= 2)
+                    if (r2 == r2 and r2 > 0.12 and vz == vz and vz > 1.5
+                            and not (wz == wz and wz >= 2.0)):
+                        d_, pump = 1, True
                 if d_:
                     room = CRYPTO_TACT_CAP * ceq - tact_val   # mandate: <=70%
-                    notional = min(cfg["crypto_gain"] * abs(fimp) * ceq * 0.4,
-                                   cbook["cash"] * 0.9, room)
+                    base = (cfg["pump_frac"] * ceq * 0.5 if pump
+                            else cfg["crypto_gain"] * abs(fimp_eff) * ceq * 0.4)
+                    notional = min(base, cbook["cash"] * 0.9, room)
                     if notional > 1000:
                         qty = d_ * notional / px[s]
                         cbook["cash"] -= d_ * notional
                         cbook["cash"] -= notional * cost_frac(ds, s, qty, px[s], i)
-                        cbook["tact"][s] = {"qty": qty, "entry": px[s], "ei": i}
+                        cbook["tact"][s] = {"qty": qty, "entry": px[s], "ei": i,
+                                            "pump": pump}
                         tact_val += notional
         # ---- long-term value core: hold through dips, exit on thesis break
         if core_frac > 0:
@@ -1080,13 +1122,20 @@ ROUNDS = [
     ("R28 bear-exit ensemble (winter + stablecoin drain + DVOL spike + ETF outflows "
      "-> early cash-out to stables, trainable HODL trim)", {
         "bear_exit": [1], "bear_k": [2, 3], "hodl_trim": [0.5, 0.8]}),
+    ("R29 wash-aware entries (volume the price can't explain = bot demand; "
+     "discount conviction, don't buy printed volume)", {
+        "w_wash": [0.6, 1.2]}),
+    ("R30 pump-ride (knowingly ride organic-fuel pumps, small and time-boxed, "
+     "first red day = out — profit from the game without becoming exit liquidity)", {
+        "pump_ride": [1], "pump_frac": [0.15, 0.3], "pump_hold": [2, 3]}),
 ]
 
 NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure_gain",
            "gate_level", "gate_frac", "crypto_gain", "short_bias",
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
-           "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim")
+           "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
+           "w_wash", "pump_frac")
 
 
 def preservation_ok(dev_new, dev_old):

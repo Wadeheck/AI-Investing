@@ -1,0 +1,183 @@
+{
+ "config": {
+  "w_field": 1.0,
+  "w_formula": 0.6,
+  "entry": 0.1,
+  "hop_decay": 0.6,
+  "max_hops": 3,
+  "stop_atr": 3.0,
+  "take_atr": 9.0,
+  "use_emotion": 1,
+  "emotion_gain": 0.4,
+  "use_manip": 0,
+  "use_figures": 0,
+  "figure_gain": 0.0,
+  "regime_gate": 1,
+  "gate_level": -0.25,
+  "gate_frac": 0.2,
+  "crypto_hodl": 0.2,
+  "crypto_gain": 0.6,
+  "tact_take": 0.12,
+  "tact_hold": 3,
+  "tact_short": 0,
+  "w_lsr": 0.0,
+  "w_oi": 0.0,
+  "crypto_gate": 0,
+  "short_bias": 0.0,
+  "w_fmom": 0.0,
+  "w_agree": 0.0,
+  "crypto_trend": 1,
+  "w_funding": 0.0,
+  "w_fng": 0.0,
+  "w_onchain": 0.0,
+  "w_etf": 0.0,
+  "w_stab": 0.0,
+  "w_dvol": 0.0,
+  "w_cot": 0.0,
+  "alt_trade": 0,
+  "w_wash": 0.0,
+  "pump_ride": 0,
+  "pump_frac": 0.2,
+  "pump_hold": 2,
+  "bear_exit": 1,
+  "bear_k": 2,
+  "hodl_trim": 0.96,
+  "trail_atr": 0.0,
+  "use_rel": 0,
+  "w_vix": 0.0,
+  "w_fx": 0.0,
+  "stock_core": 0.84,
+  "core_n": 12,
+  "core_reb": 21,
+  "core_dstop": 0.36
+ },
+ "metrics": {
+  "train": {
+   "stock": {
+    "cagr": 0.46,
+    "sharpe": 1.42,
+    "maxdd": -0.2191
+   },
+   "crypto": {
+    "cagr": 0.5121,
+    "sharpe": 2.59,
+    "maxdd": -0.0765
+   }
+  },
+  "holdout": {
+   "stock": {
+    "cagr": 0.1248,
+    "sharpe": 0.67,
+    "maxdd": -0.1692
+   },
+   "crypto": {
+    "cagr": 0.0748,
+    "sharpe": 0.77,
+    "maxdd": -0.0527
+   }
+  },
+  "train_holdout": {
+   "stock": {
+    "cagr": 0.5172,
+    "sharpe": 1.48,
+    "maxdd": -0.2191
+   },
+   "crypto": {
+    "cagr": 0.3425,
+    "sharpe": 2.17,
+    "maxdd": -0.0765
+   }
+  }
+ },
+ "provenance": "run7 adopted config (manipulation-aware rounds; R27 majors-only ADOPTED under fixed code, R29/R30 honestly rejected) + proven stock core (stock_core .84, core_dstop .36, take_atr 9). Seed-v22 nonlinear graph, regime-aware replay, crypto-enriched corpus. 2026-08-01.",
+ "supersedes": {
+  "config": {
+   "w_field": 1.0,
+   "w_formula": 0.6,
+   "entry": 0.1,
+   "hop_decay": 0.6,
+   "max_hops": 3,
+   "stop_atr": 3.0,
+   "take_atr": 9.0,
+   "use_emotion": 1,
+   "emotion_gain": 0.4,
+   "use_manip": 0,
+   "use_figures": 0,
+   "figure_gain": 0.0,
+   "regime_gate": 1,
+   "gate_level": -0.25,
+   "gate_frac": 0.2,
+   "crypto_hodl": 0.2,
+   "crypto_gain": 0.4,
+   "tact_take": 0.12,
+   "tact_hold": 3,
+   "tact_short": 0,
+   "w_lsr": 0.0,
+   "w_oi": 0.0,
+   "crypto_gate": 0,
+   "short_bias": 0.0,
+   "w_fmom": 0.0,
+   "w_agree": 0.0,
+   "crypto_trend": 1,
+   "w_funding": 0.0,
+   "w_fng": 0.0,
+   "w_onchain": 0.0,
+   "w_etf": 0.0,
+   "w_stab": 0.0,
+   "w_dvol": 0.0,
+   "w_cot": 0.0,
+   "alt_trade": 0,
+   "bear_exit": 1,
+   "bear_k": 2,
+   "hodl_trim": 0.8,
+   "trail_atr": 0.0,
+   "use_rel": 0,
+   "w_vix": 0.0,
+   "w_fx": 0.0,
+   "stock_core": 0.84,
+   "core_n": 12,
+   "core_reb": 21,
+   "core_dstop": 0.36
+  },
+  "metrics": {
+   "train": {
+    "stock": {
+     "cagr": 0.46,
+     "sharpe": 1.42,
+     "maxdd": -0.22
+    },
+    "crypto": {
+     "cagr": 0.464,
+     "sharpe": 2.32,
+     "maxdd": -0.08
+    }
+   },
+   "holdout": {
+    "stock": {
+     "cagr": 0.125,
+     "sharpe": 0.67,
+     "maxdd": -0.17
+    },
+    "crypto": {
+     "cagr": 0.06,
+     "sharpe": 0.66,
+     "maxdd": -0.05
+    }
+   },
+   "train_holdout": {
+    "stock": {
+     "cagr": 0.517,
+     "sharpe": 1.48,
+     "maxdd": -0.22
+    },
+    "crypto": {
+     "cagr": 0.311,
+     "sharpe": 1.95,
+     "maxdd": -0.08
+    }
+   }
+  },
+  "provenance": "run6 adopted config (nonlinear physics + Pareto guards) + proven stock core (stock_core .84, core_dstop .36, take_atr 9) + majors-only crypto book (alt_trade 0, evaluated under the fixed alts-leak code). Seed-v22 graph, regime-aware replay, v2 crypto-enriched corpus. 2026-08-01."
+ },
+ "note": "Lockbox NOT consumed."
+}
