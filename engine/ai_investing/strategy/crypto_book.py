@@ -71,6 +71,11 @@ class CryptoBook:
         self._state = self._load()
         b = self._state.get("broker")
         self.broker = PaperBroker.from_state(b) if b else PaperBroker(START_CASH)
+        try:                       # expectation ledger: claim -> outcome -> learn
+            from ai_investing.learning.expectations import ExpectationLedger
+            self.ledger = ExpectationLedger(settings)
+        except Exception:
+            self.ledger = None
 
     # -- persistence ---------------------------------------------------------
     def _load(self) -> dict:
@@ -159,12 +164,20 @@ class CryptoBook:
             entry = pos.avg_price
             pnl = (px - entry) * qty
             ret = (px / entry - 1.0) if entry else 0.0
+            settled = None
+            if self.ledger and held.get(sym, {}).get("kind") == "tact":
+                settled = self.ledger.settle("crypto_tact", sym, ret,
+                                             held_days=len([d for d in days
+                                                            if d >= held.get(sym, {}).get("day", today)]) - 1,
+                                             exit_reason=reason)
             self.broker.submit(Order(pos.asset, Side.SELL, qty, reason=reason), px)
             closed.append((sym, reason))
             self._log("sell", symbol=sym, qty=round(qty, 6), price=px, entry=round(entry, 6),
                       pnl=round(pnl, 2), ret=round(ret, 4), reason=reason,
                       kind=held.get(sym, {}).get("kind", "?"),
-                      held_days=len([d for d in days if d >= held.get(sym, {}).get("day", today)]) - 1)
+                      held_days=len([d for d in days if d >= held.get(sym, {}).get("day", today)]) - 1,
+                      **({"expected": settled["expected_move"], "ratio": settled["ratio"],
+                          "score": settled["score"]} if settled else {}))
             if notifier:
                 notifier.send(f"₿ *Crypto book — sold {sym}*: {reason} (pretend money).")
 
@@ -258,13 +271,16 @@ class CryptoBook:
                 if imp < ENTRY_MIN:
                     continue
                 bars = bars_by_sym.get(sym) or []
-                notional = GAIN * imp * eq * 0.4
+                trust = self.ledger.size_multiplier("crypto_tact") if self.ledger else 1.0
+                notional = GAIN * imp * eq * 0.4 * trust
+                rv_daily = 0.03
                 if len(bars) >= 21:                       # vol-targeted sizing (R32)
                     rets = [(bars[i].close / bars[i - 1].close - 1.0)
                             for i in range(-20, 0) if bars[i - 1].close]
                     mu = sum(rets) / max(1, len(rets))
                     rv = (sum((r - mu) ** 2 for r in rets) / max(1, len(rets) - 1)) ** 0.5
                     if rv > 1e-6:
+                        rv_daily = rv
                         notional *= max(0.3, min(2.0, VOL_TARGET / rv))
                 room = TACT_CAP * eq - tact_val
                 notional = min(notional, room, self.broker.get_cash() * 0.9)
@@ -279,7 +295,12 @@ class CryptoBook:
                     tact_val += notional
                     opened.append((sym, "tact", notional))
                     self._log("buy", symbol=sym, kind="tact", qty=round(o.filled_qty, 6),
-                              price=px, notional=round(notional, 2), impact=round(imp, 3))
+                              price=px, notional=round(notional, 2), impact=round(imp, 3),
+                              size_mult=round(trust, 3))
+                    if self.ledger:
+                        self.ledger.record("crypto_tact", sym, 1, imp, rv_daily,
+                                           HOLD_DAYS, driver="crypto_field",
+                                           notional=notional)
                     if notifier:
                         notifier.send(f"₿ *Crypto book — bought {sym}* ~${notional:,.0f} "
                                       f"(web signal {imp:+.2f}). Take +{TAKE:.0%}, "

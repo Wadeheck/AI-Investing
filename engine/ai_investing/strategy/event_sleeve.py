@@ -52,6 +52,11 @@ class EventSleeve:
         self._state = self._load()
         self.broker = PaperBroker.from_state(self._state.get("broker", {})) \
             if self._state.get("broker") else PaperBroker(START_CASH)
+        try:                       # the expectation ledger: claim -> outcome -> learn
+            from ai_investing.learning.expectations import ExpectationLedger
+            self.ledger = ExpectationLedger(settings)
+        except Exception:
+            self.ledger = None
 
     def _load(self) -> dict:
         try:
@@ -115,10 +120,16 @@ class EventSleeve:
                 pnl = (px - pos.avg_price) * pos.qty
                 self.broker.submit(Order(pos.asset, Side.SELL, abs(pos.qty),
                                          reason=f"event sleeve: {reason}"), px)
+                settled = (self.ledger.settle("event", pos.asset.symbol, move,
+                                              held_days=age, exit_reason=reason)
+                           if self.ledger else None)
                 self._log("sell", symbol=pos.asset.symbol, price=px,
                           entry=round(pos.avg_price, 6), pnl=round(pnl, 2),
                           ret=round(move, 4), held_days=age, reason=reason,
-                          shock=meta.get("shock"))
+                          shock=meta.get("shock"),
+                          **({"expected": settled["expected_move"],
+                              "ratio": settled["ratio"],
+                              "score": settled["score"]} if settled else {}))
                 held.pop(pos.asset.symbol, None)
                 closed.append((pos.asset.symbol, reason, move))
                 if notifier:
@@ -138,8 +149,9 @@ class EventSleeve:
                     continue
                 cands.append((im, sym, row))
             cands.sort(reverse=True)
+            trust = self.ledger.size_multiplier("event") if self.ledger else 1.0
             for im, sym, row in cands[:room]:
-                notional = min(eq / max(1, EVENT_N), self.broker.get_cash() * 0.9)
+                notional = min(eq * trust / max(1, EVENT_N), self.broker.get_cash() * 0.9)
                 if notional < 500:
                     continue
                 px = prices_by_sym[sym]
@@ -150,7 +162,13 @@ class EventSleeve:
                     held[sym] = {"entry": px, "opened_day": today, "shock": round(im, 4)}
                     opened.append((sym, im, notional))
                     self._log("buy", symbol=sym, price=px, notional=round(notional, 2),
-                              shock=round(im, 4), node=row.get("node", ""))
+                              shock=round(im, 4), node=row.get("node", ""),
+                              size_mult=round(trust, 3))
+                    if self.ledger:
+                        self.ledger.record("event", sym, 1, im,
+                                           float(row.get("vol_daily") or 0.02),
+                                           EVENT_HOLD_DAYS,
+                                           driver=row.get("node", ""), notional=notional)
                     if notifier:
                         notifier.send(
                             f"⚡️ *Event sleeve — bought {labels.get(sym, sym)}* ({sym}), "

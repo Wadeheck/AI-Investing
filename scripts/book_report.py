@@ -105,6 +105,33 @@ def main():
             print(f"  cash ${b.get('cash', 0):,.2f} | positions {len(b.get('positions', []))}")
         except (OSError, json.JSONDecodeError):
             pass
+    # --- the learning loop: expectation vs outcome, and what it changed ---
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings
+        from ai_investing.learning.expectations import ExpectationLedger, MIN_N
+        led = ExpectationLedger(Settings())
+        rep = led.report()
+        print("\n=== 🎓 LEARNING LOOP (expectation vs outcome) ===")
+        if not rep["policies"]:
+            print("  no settled claims yet — the loop starts with the first closed trade")
+        for pol, b in sorted(rep["policies"].items()):
+            n = b.get("n", 0)
+            state = "LEARNING" if n >= MIN_N else f"gathering ({n}/{MIN_N})"
+            print(f"  {pol:14} n={n:3} | calibration {b.get('ratio', 0):+.2f}x "
+                  f"| trust score {b.get('score', 0):+.2f} "
+                  f"-> size x{led.size_multiplier(pol):.2f}, "
+                  f"expectations x{led.calibration_gain(pol):.2f}  [{state}]")
+        drv = {k: v for k, v in rep["drivers"].items() if v.get("n", 0) >= 3}
+        if drv:
+            print("  by driver (which part of the web actually predicts):")
+            for d, b in sorted(drv.items(), key=lambda kv: -(kv[1].get("score") or 0))[:8]:
+                print(f"    {d:22} n={b['n']:3} score {b.get('score', 0):+.2f} "
+                      f"calib {b.get('ratio', 0):+.2f}x")
+        print(f"  open claims awaiting outcome: {rep['open_claims']}")
+    except Exception as exc:
+        print(f"\n  [learning loop unavailable: {type(exc).__name__}]")
+
     print("\nNote: paper money. Books never reset — this record accumulates.")
 
 
