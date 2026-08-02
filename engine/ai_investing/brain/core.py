@@ -104,6 +104,11 @@ class Brain:
                                                         decay=cfg.decay,
                                                         regime=self._regime_dials())
         self.field.defer(deferred, now)
+        # FRESH SHOCK (event sleeve, 2026-08-02): what TODAY's news alone says,
+        # before it is absorbed into the accumulated field. The other books
+        # trade the field (conviction that builds); the event sleeve trades
+        # this — the same brain read at a faster clock.
+        self._shock_assets = self.graph.asset_impacts(impacts) if impacts else {}
         # persistent field: today's ripple lands on top of what's still ringing
         self.field.absorb(impacts)
         asset_impacts = self.graph.asset_impacts(self.field.activations)
@@ -213,6 +218,7 @@ class Brain:
                            "headlines_new": len(new_heads), "backlog": backlog}
         state["circular_financing"] = self.graph.detect_circular_financing()
         state["integrity_flags"] = getattr(self, "_integrity", {})
+        state["shock_assets"] = getattr(self, "_shock_assets", {})   # fresh-shock read for the event sleeve
         state["calibration"] = self.calibration_summary   # proof-of-reflexes status
         if emotions:
             state["emotion_field"] = dict(sorted(

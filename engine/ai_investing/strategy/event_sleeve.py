@@ -1,0 +1,148 @@
+"""The event-reaction sleeve — the THIRD policy (adopted R35, 2026-08-02).
+
+The trading book trades the accumulated field (conviction that builds over
+days). The investing book trades 6-month theses. This sleeve trades the FRESH
+SHOCK: what today's news alone says, propagated on its own with no history and
+no decay (`brain.think()` -> state["shock_assets"]).
+
+Same brain, faster clock. Own capital, own book file, own rules:
+  - enter when |fresh shock| >= EVENT_MIN (0.05 = the measured p90 of the
+    shock distribution; p99 is 0.11)
+  - at most EVENT_N concurrent positions, equal slices of the sleeve's equity
+  - exit after EVENT_HOLD trading days, or on the user's 10% hard stop
+  - LONG ONLY and UNLEVERED: the gauntlet rejected shorts (R37) and leverage
+    (R36) on their own merits — do not re-enable without re-testing
+  - exits never ask permission; entries respect the same approval setting as
+    the other books when TRADE_APPROVAL is on (handled by the caller)
+
+Backtest evidence (train window): +6.4% on its own capital, Sharpe 0.66,
+-7.1% dd, ~32 trades; adding it lifted the blended holdout objective from
+-0.060 to +0.029 — the first positive holdout objective on record. Its LIVE
+edge should be better than the backtest can show, because the replay can only
+react on daily bars while this reacts within a cycle of the event.
+"""
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime, timezone
+
+from ai_investing.brokers.paper import PaperBroker
+from ai_investing.models import Asset, AssetClass, Order, Side
+
+EVENT_MIN = float(os.environ.get("EVENT_MIN", "0.05"))
+EVENT_N = int(os.environ.get("EVENT_N", "3"))
+EVENT_HOLD_DAYS = int(os.environ.get("EVENT_HOLD_DAYS", "2"))
+HARD_STOP = 0.10          # USER HARD RULE: max 10% loss on any position
+START_CASH = float(os.environ.get("EVENT_START_CASH", "100000"))
+
+
+def _asset(sym: str, exchange: str) -> Asset:
+    if "/" in sym:
+        return Asset(sym, AssetClass.CRYPTO, exchange=exchange)
+    return Asset(sym, AssetClass.STOCK)
+
+
+class EventSleeve:
+    def __init__(self, settings):
+        self.settings = settings
+        data_dir = os.path.dirname(os.path.abspath(settings.state_path))
+        self.path = os.path.join(data_dir, "event_state.json")
+        self._state = self._load()
+        self.broker = PaperBroker.from_state(self._state.get("broker", {})) \
+            if self._state.get("broker") else PaperBroker(START_CASH)
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path) as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save(self) -> None:
+        self._state["broker"] = self.broker.state()
+        self._state["ts"] = datetime.now(timezone.utc).isoformat()
+        try:
+            with open(self.path, "w") as fh:
+                json.dump(self._state, fh, indent=1)
+        except OSError:
+            pass
+
+    def _equity(self, prices: dict) -> float:
+        eq = self.broker.get_cash()
+        for p in self.broker.get_positions().values():
+            px = prices.get(p.asset.symbol, 0.0)
+            if px > 0:
+                eq += p.qty * px
+        return eq
+
+    # -- one pass per engine cycle -------------------------------------------
+    def cycle(self, shock_assets: dict, prices_by_sym: dict, notifier=None,
+              labels: dict | None = None) -> dict:
+        """shock_assets: brain state["shock_assets"] — FRESH impacts only."""
+        labels = labels or {}
+        opened, closed = [], []
+        held = self._state.setdefault("held", {})     # sym -> {entry, opened_iso, bars}
+        today = datetime.now(timezone.utc).date().isoformat()
+        days = self._state.setdefault("seen_days", [])
+        if today not in days:
+            days.append(today)
+            self._state["seen_days"] = days[-30:]
+
+        # 1) exits first — clock or hard stop; never gated by anything
+        for sym, pos in list(self.broker.get_positions().items()):
+            px = prices_by_sym.get(pos.asset.symbol, 0.0)
+            meta = held.get(pos.asset.symbol, {})
+            if px <= 0 or pos.qty == 0:
+                continue
+            move = (px - pos.avg_price) / pos.avg_price
+            age = len([d for d in days if d >= meta.get("opened_day", today)]) - 1
+            reason = None
+            if move <= -HARD_STOP:
+                reason = f"hard stop {move*100:+.1f}%"
+            elif age >= EVENT_HOLD_DAYS:
+                reason = f"clock {age}d {move*100:+.1f}%"
+            if reason:
+                self.broker.submit(Order(pos.asset, Side.SELL, abs(pos.qty),
+                                         reason=f"event sleeve: {reason}"), px)
+                held.pop(pos.asset.symbol, None)
+                closed.append((pos.asset.symbol, reason, move))
+                if notifier:
+                    notifier.send(f"⚡️ *Event sleeve — closed {labels.get(pos.asset.symbol, pos.asset.symbol)}*"
+                                  f" ({pos.asset.symbol}): {reason} (pretend money).")
+
+        # 2) entries — biggest fresh shocks above the floor, long only
+        open_n = len(self.broker.get_positions())
+        room = max(0, EVENT_N - open_n)
+        if room:
+            eq = self._equity(prices_by_sym)
+            cands = []
+            for sym, row in (shock_assets or {}).items():
+                im = float(row.get("impact", 0.0))
+                px = prices_by_sym.get(sym, 0.0)
+                if im < EVENT_MIN or px <= 0 or sym in self.broker.get_positions():
+                    continue
+                cands.append((im, sym, row))
+            cands.sort(reverse=True)
+            for im, sym, row in cands[:room]:
+                notional = min(eq / max(1, EVENT_N), self.broker.get_cash() * 0.9)
+                if notional < 500:
+                    continue
+                px = prices_by_sym[sym]
+                o = self.broker.submit(
+                    Order(_asset(sym, self.settings.crypto_exchange), Side.BUY,
+                          notional / px, reason=f"event sleeve: fresh shock {im:+.3f}"), px)
+                if o.filled_qty:
+                    held[sym] = {"entry": px, "opened_day": today, "shock": round(im, 4)}
+                    opened.append((sym, im, notional))
+                    if notifier:
+                        notifier.send(
+                            f"⚡️ *Event sleeve — bought {labels.get(sym, sym)}* ({sym}), "
+                            f"~${notional:,.0f} on a fresh news shock of {im:+.2f} "
+                            f"via {row.get('node','the web')}. Out in {EVENT_HOLD_DAYS} days "
+                            f"or on a 10% stop — whichever comes first (pretend money).")
+        self._save()
+        return {"opened": opened, "closed": closed,
+                "equity": round(self._equity(prices_by_sym), 2),
+                "cash": round(self.broker.get_cash(), 2),
+                "positions": len(self.broker.get_positions())}

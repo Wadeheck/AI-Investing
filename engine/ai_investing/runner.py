@@ -278,6 +278,20 @@ class Runner:
         elif breaker.reason:
             print(f"  (no new positions — {breaker.reason})")
 
+        # 4b) The ⚡ event sleeve (third policy): trade TODAY's fresh news shock,
+        # time-boxed, own capital. Exits never wait; entries are its own book.
+        if context.get("brain") and context["brain"].get("shock_assets"):
+            try:
+                from ai_investing.strategy.event_sleeve import EventSleeve
+                px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+                ev_res = EventSleeve(self.settings).cycle(
+                    context["brain"]["shock_assets"], px_by_sym, self.notifier)
+                if ev_res["opened"] or ev_res["closed"]:
+                    print(f"  [event sleeve] +{len(ev_res['opened'])} "
+                          f"-{len(ev_res['closed'])} | equity ${ev_res['equity']:,.0f}")
+            except Exception as exc:
+                print(f"  [event sleeve] skipped: {type(exc).__name__}: {exc}")
+
         # 5) Learn from trades that just closed.
         self._learn(prices, features_by_key)
 
