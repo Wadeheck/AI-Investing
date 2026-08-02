@@ -408,6 +408,19 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             pump_hold=2,                    # max days to ride a pump before forced exit
             core_gate=0,                    # stock-core winter gate: trim the core in equity bears
             core_trim=0.5,                  # fraction of each core position sold when gated
+            # ---- THIRD POLICY: event-reaction sleeve (2026-08-02) ----
+            # The books above trade the ACCUMULATED field (conviction that
+            # builds over days). This sleeve trades the FRESH SHOCK: today's
+            # news impulses propagated on their own, no decay, no history.
+            # Same brain, different clock — the honest daily-bar proxy for
+            # "react fast to a credible event". Own capital, own objective.
+            event_sleeve=0,                 # 1 = run the sleeve
+            event_min=0.05,                 # |fresh asset impact| to act (p90 of the
+                                            # measured shock distribution; p99=0.11)
+            event_n=3,                      # max concurrent event positions
+            event_hold=3,                   # trading days held, then out
+            event_lev=1.0,                  # leverage on the sleeve's own equity
+            event_short=0,                  # allow shorting bad-news shocks
             core_ma=100,                    # SPY moving-average lookback for the gate
             core_band=0.0,                  # hysteresis: enter winter below ma*(1-band), exit above ma
             core_defensive="",              # R34: where winter proceeds shelter — ""=cash,
@@ -542,7 +555,10 @@ def run_replay(ds, cfg, i0, i1):
     pending: list[dict] = []                # stock orders awaiting next open
     rel: dict[str, float] = {}              # learned per-symbol trust (trailing)
     cbook = {"cash": 100_000.0, "hodl": {}, "tact": {}}
-    curve, ccurve, tcurve = [], [], []      # combined stock / crypto / tactical-only
+    ebook = {"cash": 100_000.0, "pos": {}}  # event-reaction sleeve (third policy)
+    ev_on = bool(cfg.get("event_sleeve", 0))
+    ev_trades = 0
+    curve, ccurve, tcurve, ecurve = [], [], [], []  # stock / crypto / tactical / event
     hwm = {"tb": None, "cb": None}         # monthly high-water marks (user ratchet)
     mclose = {"tb": None, "cb": None}
     cur_month = None
@@ -654,6 +670,7 @@ def run_replay(ds, cfg, i0, i1):
         impulses = {}
         for k, v in ds["news"].get(dstr, {}).items():
             impulses[k] = v * manip_disc
+        news_today = dict(impulses)          # fresh shock only — the sleeve's input
         if cfg["use_emotion"] and ds["risk_node"] and abs(fac.get("emotion", 0)) > 0.05:
             e = cfg["emotion_gain"] * fac["emotion"]
             impulses[ds["risk_node"]] = max(impulses.get(ds["risk_node"], 0.0), e, key=abs)
@@ -1097,6 +1114,53 @@ def run_replay(ds, cfg, i0, i1):
             dv = float(ds["defensive"][kdef["sym"]].iloc[i])
             if dv == dv:
                 keq += kdef["qty"] * dv
+        # ---- event-reaction sleeve: fresh shock in, time-boxed out --------
+        if ev_on:
+            # exits first: clock expired or the 10% hard rule (user mandate)
+            for s2 in list(ebook["pos"]):
+                p2, v2 = ebook["pos"][s2], px[s2]
+                if np.isnan(v2):
+                    continue
+                mv = (v2 / p2["entry"] - 1.0) * (1 if p2["qty"] > 0 else -1)
+                if mv <= -HARD_STOP or i - p2["ei"] >= int(cfg["event_hold"]):
+                    d_ = 1 if p2["qty"] > 0 else -1
+                    ebook["cash"] += p2["qty"] * v2 * (1 - cost_frac(ds, s2, p2["qty"], v2, i) * d_)
+                    del ebook["pos"][s2]
+                    ev_trades += 1
+            # entries: propagate TODAY's news alone (no field, no decay) and
+            # act on the biggest fresh asset-level shocks
+            if news_today and len(ebook["pos"]) < int(cfg["event_n"]):
+                r_prev = field.get(ds["risk_node"], 0.0) if ds.get("risk_node") else 0.0
+                sh_imp, _, _ = g.propagate(news_today, max_hops=cfg["max_hops"],
+                                           decay=cfg["hop_decay"],
+                                           regime={"risk_appetite": r_prev,
+                                                   "fear": max(0.0, min(1.0, -r_prev))})
+                shock = g.asset_impacts(sh_imp)
+                eeq = eq_of(ebook, px)
+                cands = []
+                for s2 in symbols:
+                    if s2 in ebook["pos"] or np.isnan(px[s2]):
+                        continue
+                    im = shock.get(s2, {}).get("impact", 0.0)
+                    if abs(im) < cfg["event_min"]:
+                        continue
+                    if im < 0 and not cfg["event_short"]:
+                        continue
+                    cands.append((abs(im), im, s2))
+                cands.sort(reverse=True)
+                room = int(cfg["event_n"]) - len(ebook["pos"])
+                for _, im, s2 in cands[:room]:
+                    notional = min(cfg["event_lev"] * eeq / max(1, int(cfg["event_n"])),
+                                   ebook["cash"] * 0.9)
+                    if notional < 500:
+                        continue
+                    d_ = 1 if im > 0 else -1
+                    qty = d_ * notional / px[s2]
+                    ebook["cash"] -= d_ * notional
+                    ebook["cash"] -= notional * cost_frac(ds, s2, qty, px[s2], i)
+                    ebook["pos"][s2] = {"qty": qty, "entry": px[s2], "ei": i}
+        ecurve.append(eq_of(ebook, px) if ev_on else 100_000.0)
+
         tcurve.append(eq)
         curve.append(eq + keq)
         ccurve.append(eq_of(cbook, px))
@@ -1104,7 +1168,7 @@ def run_replay(ds, cfg, i0, i1):
     import pandas as pd
     idx = close.index[i0:i1]
     out = {}
-    for name, cv in (("stock", curve), ("crypto", ccurve)):
+    for name, cv in (("stock", curve), ("crypto", ccurve), ("event", ecurve)):
         c = pd.Series(cv, index=idx)
         r = c.pct_change().dropna()
         yrs = len(c) / 252
@@ -1112,6 +1176,8 @@ def run_replay(ds, cfg, i0, i1):
                      "cagr": round(float((c.iloc[-1] / c.iloc[0]) ** (1 / yrs) - 1), 4),
                      "sharpe": round(float(r.mean() / (r.std() + 1e-12) * math.sqrt(252)), 2),
                      "maxdd": round(float(((c / c.cummax()) - 1).min()), 4)}
+    out["event"]["active"] = bool(ev_on and ev_trades > 0)
+    out["event_trades"] = ev_trades
     out["trades"] = total
     out["win_rate"] = round(wins / max(1, total), 3)
     out["precision5d"] = round(graded / max(1, total), 3)
@@ -1136,13 +1202,23 @@ def bench_metrics(ds, i0, i1):
 
 def objective(m):
     """Capital preservation first: drawdowns beyond the limit are disqualifying;
-    inside the limit, growth counts and drawdown still subtracts."""
+    inside the limit, growth counts and drawdown still subtracts.
+
+    The event sleeve joins the score ONLY when it is switched on, so every
+    number from runs before it existed stays directly comparable."""
     s, c = m["stock"], m["crypto"]
+    books = [s, c]
+    core = s["cagr"] + 0.5 * c["cagr"]
+    e = m.get("event")
+    if e and e.get("active"):
+        books.append(e)
+        core += 0.5 * e["cagr"]
     pen = 0.0
-    for b in (s, c):
+    for b in books:
         if abs(b["maxdd"]) > MAX_DD_LIMIT:
             pen += 3.0 * (abs(b["maxdd"]) - MAX_DD_LIMIT)
-    return s["cagr"] + 0.5 * c["cagr"] - 2.0 * (abs(s["maxdd"]) + abs(c["maxdd"])) / 2 - pen
+    dd = sum(abs(b["maxdd"]) for b in books) / len(books)
+    return core - 2.0 * dd - pen
 
 
 def book_objective(b):
@@ -1161,7 +1237,10 @@ def pareto_ok(dev_new, dev_old) -> tuple[bool, str]:
     tolerance): improvements must be genuine, not cross-subsidised."""
     msgs = []
     ok = True
-    for book in ("stock", "crypto"):
+    books = ["stock", "crypto"]
+    if (dev_new.get("event") or {}).get("active") and (dev_old.get("event") or {}).get("active"):
+        books.append("event")          # only compare like with like
+    for book in books:
         o_old = book_objective(dev_old[book])
         o_new = book_objective(dev_new[book])
         msgs.append(f"{book} {o_old:+.3f}->{o_new:+.3f}")
@@ -1244,6 +1323,14 @@ ROUNDS = [
     ("R32 AHL vol-targeted sizing (position = target vol / realized vol — "
      "trade smaller when wild, larger when calm; the survival law)", {
         "vol_target": [0.02, 0.035]}),
+    ("R35 event-reaction sleeve (third policy: trade TODAY's fresh news shock, "
+     "time-boxed, own capital — the brain's information edge at a faster clock)", {
+        "event_sleeve": [1], "event_min": [0.05, 0.08], "event_hold": [2, 3]}),
+    ("R36 event sleeve leverage (user-approved: the sleeve's own equity geared "
+     "1.5-2x; preservation guard still vetoes any breach)", {
+        "event_lev": [1.5, 2.0]}),
+    ("R37 event sleeve shorts (react to bad-news shocks in both directions)", {
+        "event_short": [1]}),
     ("R33 stock-core winter gate (SPY under its 100d trims the core, recovery "
      "redeploys — the crypto machinery's equity mirror; requires stock_core>0 "
      "to matter)", {
@@ -1260,7 +1347,8 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "w_fmom", "w_agree", "stop_atr", "take_atr", "w_funding", "w_fng", "w_onchain",
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
            "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
-           "w_wash", "pump_frac", "w_mhm", "vol_target", "core_trim")
+           "w_wash", "pump_frac", "w_mhm", "vol_target", "core_trim",
+           "event_min", "event_lev")
 
 
 def plateau_ok(grid, keys, sweep, win_vals, incumbent_obj):

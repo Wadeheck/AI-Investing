@@ -49,7 +49,13 @@
   "stock_core": 0.84,
   "core_n": 12,
   "core_reb": 21,
-  "core_dstop": 0.36
+  "core_dstop": 0.36,
+  "event_sleeve": 1,
+  "event_min": 0.05,
+  "event_n": 3,
+  "event_hold": 2,
+  "event_lev": 1.0,
+  "event_short": 0
  },
  "metrics": {
   "train": {
@@ -62,6 +68,11 @@
     "cagr": 0.5121,
     "sharpe": 2.59,
     "maxdd": -0.0765
+   },
+   "event": {
+    "cagr": 0.056,
+    "sharpe": 0.64,
+    "maxdd": -0.04
    }
   },
   "holdout": {
@@ -74,6 +85,11 @@
     "cagr": 0.0748,
     "sharpe": 0.77,
     "maxdd": -0.0527
+   },
+   "event": {
+    "cagr": 0.029,
+    "sharpe": 1.62,
+    "maxdd": -0.0002
    }
   },
   "train_holdout": {
@@ -86,10 +102,15 @@
     "cagr": 0.3425,
     "sharpe": 2.17,
     "maxdd": -0.0765
+   },
+   "event": {
+    "cagr": 0.047,
+    "sharpe": 0.65,
+    "maxdd": -0.04
    }
   }
  },
- "provenance": "run7 adopted config (manipulation-aware rounds; R27 majors-only ADOPTED under fixed code, R29/R30 honestly rejected) + proven stock core (stock_core .84, core_dstop .36, take_atr 9). Seed-v22 nonlinear graph, regime-aware replay, crypto-enriched corpus. 2026-08-01.",
+ "provenance": "candidate + event-reaction sleeve (third policy, R35 adopted 2026-08-02). Sleeve: long-only, unlevered, |fresh shock| >= 0.05 (measured p90), max 3 concurrent, 2-day hold, 10% hard stop. Leverage (R36) and shorts (R37) REJECTED by the gauntlet. Adding the sleeve leaves stock/crypto untouched and lifts objectives: train +0.420->+0.520, holdout -0.060->+0.029 (first positive holdout objective on record), t+h +0.393->+0.488. Seed v25 calibrated graph, brief v1.5 corpus. Lockbox NOT re-consumed.",
  "supersedes": {
   "config": {
    "w_field": 1.0,
@@ -179,5 +200,5 @@
   },
   "provenance": "run6 adopted config (nonlinear physics + Pareto guards) + proven stock core (stock_core .84, core_dstop .36, take_atr 9) + majors-only crypto book (alt_trade 0, evaluated under the fixed alts-leak code). Seed-v22 graph, regime-aware replay, v2 crypto-enriched corpus. 2026-08-01."
  },
- "note": "Lockbox NOT consumed."
+ "note": "Three-policy config. Lockbox already burned on the two-book version; the sleeve's out-of-sample evidence is the holdout only \u2014 treat its live behaviour as unproven until the paper record speaks."
 }
