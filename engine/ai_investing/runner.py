@@ -117,6 +117,45 @@ class Runner:
         mkt = market_of_symbol(asset.symbol, asset.asset_class.value)
         return self._market_costs.get(mkt, self.costs)
 
+    def _mark_crypto_to_spot(self, prices: dict) -> None:
+        """Re-mark crypto to the live price before any risk decision.
+
+        Crypto runs 24/7 on daily bars, so overnight a position can be valued at
+        a close many hours old — and a 10% hard stop measured against a stale
+        mark is not a 10% stop. Only the MARK moves here: signals, sizing and
+        entries all still read the daily bars the gauntlet validated, so this
+        tightens protection without altering what the books choose to trade.
+
+        A tick more than 35% from the last close is treated as bad data, not as
+        a crash: the whole point is to make stops fire honestly, so a garbage
+        quote must never be the thing that fires one.
+        """
+        spot_fn = getattr(self.provider, "spot", None)
+        if not spot_fn:
+            return
+        crypto = [a for a in self.assets if a.asset_class is AssetClass.CRYPTO]
+        if not crypto:
+            return
+        try:
+            live = spot_fn([a.symbol for a in crypto])
+        except Exception as exc:
+            self.journal.record_event("spot_error", str(exc)[:200])
+            return
+        moved = 0
+        for a in crypto:
+            px = live.get(a.symbol)
+            prev = prices.get(a.key, 0.0)
+            if not px or px <= 0:
+                continue
+            if prev > 0 and abs(px - prev) / prev > 0.35:
+                self.journal.record_event(
+                    "spot_rejected", f"{a.symbol} spot {px:.2f} vs close {prev:.2f}")
+                continue
+            prices[a.key] = px
+            moved += 1
+        if moved:
+            self._spot_marked = moved
+
     def _build_watchlist(self) -> list[Asset]:
         stocks = [Asset(s, AssetClass.STOCK) for s in self.settings.stock_watchlist]
         crypto = [Asset(s, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
@@ -130,6 +169,7 @@ class Runner:
         self.engine.user_views = self.user_views
         bars_by_key = {a.key: self.provider.get_bars(a, limit=250) for a in self.assets}
         prices = {k: (b[-1].close if b else 0.0) for k, b in bars_by_key.items()}
+        self._mark_crypto_to_spot(prices)
         self._stats = build_market_stats(bars_by_key, lookback=20)
         self._last_prices = prices
 

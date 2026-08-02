@@ -276,6 +276,15 @@ class Settings:
         "https://www.theblock.co/rss.xml",                        # The Block (institutional/reg)
         "https://decrypt.co/feed",                                # Decrypt (broad crypto)
         "https://wublockchain.substack.com/feed",                 # Wu Blockchain (CN mining/exchange/reg)
+        # fast crypto-native tier — these break hours ahead of the wires, and
+        # they also carry the pump material; trust is scored low in
+        # brain/events.py SOURCE_TRUST so the chorus signature can use them
+        "https://www.dlnews.com/arc/outboundfeeds/rss/",          # DL News (DeFi/investigative)
+        "https://protos.com/feed/",                               # Protos (skeptical, scam-focused)
+        "https://cointelegraph.com/rss",                          # Cointelegraph (fast, hype-prone)
+        "https://bitcoinmagazine.com/feed",                       # Bitcoin Magazine (BTC-native)
+        "https://cryptobriefing.com/feed/",                       # Crypto Briefing (fast, low trust)
+        "https://ambcrypto.com/feed/",                            # AMBCrypto (altcoin chatter/pumps)
         "https://rss.panewslab.com/zh/tvsq/rss",                  # PANews (CN, zh crypto wire)
         "https://oilprice.com/rss/main",
         "https://www.mining.com/feed/",

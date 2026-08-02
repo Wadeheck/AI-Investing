@@ -97,6 +97,29 @@ def main() -> int:
         p = json.load(open(D("paper_state.json")))
         row("paper book", True, f"${p['cash']:,.0f} cash, {len(p['positions'])} positions")
 
+    # --- live perception quality ---
+    # The corpus digester was always audited; the tagger that actually runs in
+    # the engine was not, and it had been returning polarity 0 on 57% of events.
+    # Since impulse = polarity x magnitude x credibility, those events reached
+    # the graph as nothing: the brain was reading the news and discarding half
+    # of it. This row exists so that can never again be invisible.
+    try:
+        import sqlite3
+        con = sqlite3.connect(D("brain.db"))
+        since = (NOW - timedelta(days=2)).isoformat()
+        rows = list(con.execute(
+            "select polarity, nodes from events where ts >= ?", (since,)))
+        con.close()
+        if rows:
+            dead = sum(1 for p, n in rows
+                       if abs(p or 0) < 1e-9 and n not in ("[]", "", None))
+            pctd = 100.0 * dead / len(rows)
+            ok &= row("live tagger (unsigned)", pctd <= 15,
+                      f"{pctd:.0f}% of {len(rows)} events unsigned "
+                      f"(>15% means the brain is discarding what it reads)")
+    except Exception:
+        pass
+
     # --- backlog triggers ---
     try:
         import glob

@@ -145,6 +145,37 @@ class CcxtDataProvider(DataProvider):
                             float(o), float(h), float(low), float(c), float(v)))
         return bars
 
+    def spot(self, symbols: list[str]) -> dict[str, float]:
+        """Live last-traded price, for valuation and stops only.
+
+        Crypto trades around the clock but the books run on daily bars, so a
+        position could sit all night marked at yesterday's close: a 10% stop
+        measured off a stale mark is not a 10% stop. Signals deliberately keep
+        using the daily bars — those are what the walk-forward gauntlet
+        validated, and live spot must not quietly change what gets traded, only
+        what gets protected.
+        """
+        client = self._client_or_none()
+        if client is None or not symbols:
+            return {}
+        out: dict[str, float] = {}
+        try:
+            tickers = client.fetch_tickers(symbols)
+            for sym, t in (tickers or {}).items():
+                px = t.get("last") or t.get("close")
+                if px:
+                    out[sym] = float(px)
+        except Exception:
+            for sym in symbols:            # exchanges that reject bulk tickers
+                try:
+                    t = client.fetch_ticker(sym)
+                    px = t.get("last") or t.get("close")
+                    if px:
+                        out[sym] = float(px)
+                except Exception:
+                    continue
+        return out
+
 
 class CompositeDataProvider(DataProvider):
     """Routes stocks and crypto to the right underlying provider."""
@@ -157,6 +188,10 @@ class CompositeDataProvider(DataProvider):
     def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
         provider = self.crypto if asset.asset_class is AssetClass.CRYPTO else self.stock
         return provider.get_bars(asset, limit)
+
+    def spot(self, symbols: list[str]) -> dict[str, float]:
+        fn = getattr(self.crypto, "spot", None)
+        return fn(symbols) if fn else {}
 
 
 def get_provider(settings) -> DataProvider:

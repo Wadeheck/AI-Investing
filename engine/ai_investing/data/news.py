@@ -26,6 +26,9 @@ from xml.etree import ElementTree
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 BYTEPLUS_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions"
+# Models that 400 on response_format, learned at runtime so one bad request
+# doesn't cost every subsequent tagging cycle.
+_NO_JSON_MODE: set[str] = set()
 
 # local server availability is probed at most once per this many seconds
 _LOCAL_PROBE_TTL = 600.0
@@ -65,20 +68,44 @@ def _call_deepseek(prompt: str, settings, max_tokens: int = 1500) -> Optional[st
     return (choices[0].get("message") or {}).get("content", "").strip()
 
 
-def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500) -> Optional[str]:
-    body = json.dumps({
+def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500,
+                   json_mode: bool = False) -> Optional[str]:
+    payload_out: dict = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode()
-    req = urllib.request.Request(BYTEPLUS_URL, data=body, method="POST", headers={
-        "content-type": "application/json",
-        "authorization": f"Bearer {settings.byteplus_api_key}",
-    })
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        payload = json.loads(resp.read().decode())
-    choices = payload.get("choices") or [{}]
-    return (choices[0].get("message") or {}).get("content", "").strip()
+    }
+    # The event tagger demands strict JSON. Without this the model answers in
+    # prose, _extract_json returns None, and the cycle silently falls back to
+    # keyword matching — the same class of invisible degradation that let the
+    # unsigned-polarity bug run undetected.
+    if json_mode and model not in _NO_JSON_MODE:
+        payload_out["response_format"] = {"type": "json_object"}
+
+    def _post(p: dict) -> str:
+        body = json.dumps(p).encode()
+        req = urllib.request.Request(BYTEPLUS_URL, data=body, method="POST", headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {settings.byteplus_api_key}",
+        })
+        # generous: a 6k-token tagging response over a slow link outlasts 60s
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            payload = json.loads(resp.read().decode())
+        choices = payload.get("choices") or [{}]
+        return (choices[0].get("message") or {}).get("content", "").strip()
+
+    try:
+        return _post(payload_out)
+    except urllib.error.HTTPError as exc:
+        # Model support for response_format is per-model on this platform
+        # (seed-2-0-pro yes, seed-2-0-mini no) and a 400 here would otherwise
+        # take out the whole tagging cycle. Remember and retry without it —
+        # _extract_json already copes with a JSON object wrapped in prose.
+        if exc.code == 400 and "response_format" in payload_out:
+            _NO_JSON_MODE.add(model)
+            payload_out.pop("response_format", None)
+            return _post(payload_out)
+        raise
 
 
 def local_llm_available(settings) -> bool:
@@ -131,27 +158,51 @@ def llm_ready(settings) -> bool:
 
 def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
               json_mode: bool = False) -> Optional[str]:
-    """Cost-first routing: FREE local model whenever it's up (both tiers), then
-    Anthropic > BytePlus > DeepSeek. `tier` ('fast'|'smart') picks the BytePlus
-    model on the cloud path. A local failure falls through to the cloud chain."""
-    if settings.llm_prefer_local and local_llm_available(settings):
+    """Quality-first routing with a local safety net.
+
+    This used to prefer the free local model for everything, which is how a
+    qwen3:8b ended up as the brain's live perception layer while discarding 57%
+    of what it read (see scripts/audit_live_tagger.py). Reading the world is the
+    one job worth paying for, so the cloud goes first: Anthropic > BytePlus >
+    DeepSeek, with `tier` ('fast'|'smart') picking the BytePlus model.
+
+    The local model remains as a FALLBACK, not a preference. If the API is down
+    or the key is exhausted, a degraded brain still beats a blind one — and the
+    engine is expected to survive unattended, so it must never depend on a
+    network it cannot guarantee. Set LLM_PREFER_LOCAL=true to invert this and go
+    back to local-first (free, materially worse).
+    """
+    def _local():
+        if not local_llm_available(settings):
+            return None
         try:
-            out = _call_local(prompt, settings, max_tokens, tier, json_mode)
-            if out:
-                return out
+            return _call_local(prompt, settings, max_tokens, tier, json_mode)
         except Exception:
             _local_probe.update(ts=time.time(), ok=False)   # re-probe later
+            return None
+
+    if settings.llm_prefer_local:
+        out = _local()
+        if out:
+            return out
     try:
         if settings.anthropic_api_key:
-            return _call_claude(prompt, settings, max_tokens)
+            out = _call_claude(prompt, settings, max_tokens)
+            if out:
+                return out
         if settings.byteplus_api_key:
             model = settings.byteplus_model_smart if tier == "smart" else settings.byteplus_model_fast
-            return _call_byteplus(prompt, settings, model, max_tokens)
+            out = _call_byteplus(prompt, settings, model, max_tokens, json_mode)
+            if out:
+                return out
         if settings.deepseek_api_key:
-            return _call_deepseek(prompt, settings, max_tokens)
+            out = _call_deepseek(prompt, settings, max_tokens)
+            if out:
+                return out
     except Exception:
-        return None
-    return None
+        pass
+    # cloud unreachable: degraded is better than blind
+    return None if settings.llm_prefer_local else _local()
 
 
 def _extract_json(text: str) -> Optional[dict]:

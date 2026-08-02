@@ -44,6 +44,14 @@ SOURCE_TRUST = {
     "globaltimes": 0.45,
     "coindesk": 0.6, "theblock": 0.65, "decrypt": 0.5, "panewslab": 0.5,
     "wublock": 0.6,                       # matches wublockchain + wublock.substack.com
+    # Fast crypto-native tier. Trust is set LOW on purpose: they break stories
+    # hours before the wires, but they also carry the pump material. Low trust is
+    # not a penalty here, it is the instrument — the chorus signature in
+    # credibility() fires precisely when a story runs across many low-trust
+    # crypto feeds and NO trusted one, which is what a coordinated pump looks like.
+    "protos": 0.6,                        # investigative, skeptical house style
+    "dlnews": 0.6, "cointelegraph": 0.45, "bitcoinmagazine": 0.4,
+    "cryptobriefing": 0.35, "ambcrypto": 0.3,
     "binance.com": 0.7, "upbit.com": 0.7,  # primary-source exchange announcements
     # curated X handles (news_archive_x.jsonl capture) — listed BEFORE the
     # generic x.com fallback because first substring match wins
@@ -140,28 +148,43 @@ def credibility(event: dict, all_headlines: list[dict], settings=None) -> float:
     return max(0.0, min(1.0, score))
 
 
-def _prompt(headlines: list[dict], node_ids: list[str]) -> str:
-    def _line(h: dict) -> str:
-        s = f"- [{h.get('source', '?')}] {h['title']}"
+def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
+    def _line(i: int, h: dict) -> str:
+        s = f"{i}. [{h.get('source', '?')}] {h['title']}"
         extra = (h.get("body") or h.get("summary") or "").strip()
         if extra:                     # body/summary carries the WHO/HOW the
             s += f" — {extra[:400]}"  # deals & integrity extraction feed on
+        # Retrieval hint: alias-matching the text narrows 128 nodes to a handful.
+        # Picking the origin node out of the full list is the small model's
+        # weakest step, and most of its misses are nodes it simply never
+        # considered. The hint is a shortlist, NOT an answer — Hormuz never
+        # alias-matches oil_supply, so the model must stay free to overrule it.
+        if graph is not None:
+            try:
+                cand = [n for n in graph.match_text(f"{h['title']} {extra}")
+                        if graph.nodes[n].type != "asset"][:8]
+                if cand:
+                    s += f"\n   (mentions: {', '.join(cand)} — verify, may be wrong or incomplete)"
+            except Exception:
+                pass
         return s
-    lines = "\n".join(_line(h) for h in headlines[:100])
+    lines = "\n".join(_line(i, h) for i, h in enumerate(headlines[:100], 1))
     return f"""You are the macro brain of an automated trading system. Extract structured
 EVENTS from these headlines. Markets are full of engineered noise — planted stories,
 pumps, hype. Judge each event skeptically.
 
-KNOWN GRAPH NODES (tag events ONLY with ids from this list):
-{", ".join(node_ids)}
+KNOWN GRAPH NODES (tag events ONLY with ids from this list). Each node is a
+MEASURABLE QUANTITY; the name in brackets is what it measures:
+{node_ids}
 
-HEADLINES:
+HEADLINES (numbered — you must account for EVERY number):
 {lines}
 
 Return ONLY JSON:
 {{
   "events": [
     {{
+      "n": <the HEADLINE NUMBER this event came from>,
       "summary": "<one line, what actually happened>",
       "headline": "<the headline this came from, verbatim>",
       "source": "<the [source] tag of that headline>",
@@ -170,9 +193,13 @@ Return ONLY JSON:
                  changed (a policy node, a factor, a commodity). Do NOT tag sectors or
                  themes that are merely AFFECTED downstream; the relationship graph
                  propagates those itself>"],
-      "polarity": <-1..1, direction of the named quantity on those origin nodes (up=+):
-                   a rate CUT is -1 on the rate node; tighter export controls are +1 on
-                   the controls node; escalating tension is +1 on the tension node>,
+      "direction": "<REQUIRED. Write it as words, not a number: 'more <the quantity
+                   the FIRST node measures>' or 'less <that quantity>'. Example for
+                   an OPEC output cut tagged oil_supply: 'less oil supply'. Example
+                   for a rouble crash tagged currency_stress: 'more currency stress'.
+                   Say MORE or LESS of the quantity — never 'good'/'bad'/'up'/'down'>",
+      "magnitude_signed": <0.05..1, how big the change in that quantity is. Always
+                   POSITIVE — "direction" already carries the sign>,
       "magnitude": <0..1, how big a deal this is if true>,
       "confidence": <0..1, how sure you are of the reading>,
       "manipulation_likelihood": <0..1, odds this is hype/planted/pump material rather
@@ -206,8 +233,53 @@ Return ONLY JSON:
           "why": "<short>"}}
       ]
     }}
-  ]
+  ],
+  "skipped": [<headline numbers you deliberately produced no event for: fluff,
+               sport, celebrity, lifestyle, or nothing that maps to a node>]
 }}
+
+COVERAGE — every headline number must appear EXACTLY ONCE, either as an event's
+"n" or in "skipped". Do not stop early, do not summarise a few and drop the rest.
+If two numbers are the same story, emit one event and put the other number in
+"skipped". A dropped number is a story the system never sees.
+
+SIGN CONVENTION — the single most important rule, and the easiest to get wrong.
+"direction" describes THE QUANTITY THE NODE MEASURES. It is NOT "is this good or
+bad news", and NOT which way prices move. The graph derives market consequences
+itself; pre-baking them into the direction makes it apply them twice and invert.
+
+BAD NEWS IS OFTEN "MORE". Most mistakes come from reading a grim headline and
+writing "less". Stress, tension, spreads, debt, defaults and controls all go UP
+in a crisis. Worked examples, the counter-intuitive ones first:
+
+  "Fitch strips US of AAA rating"           -> us_gov_debt      MORE US debt stress
+     NOT less. The rating fell, but the node measures STRESS, and stress rose.
+  "High-yield spreads blow past 500bp"      -> credit_spreads   MORE spread
+  "Private credit fund gates redemptions"   -> credit_stress    MORE stress
+  "Rouble crashes through 150 per dollar"   -> currency_stress  MORE stress
+  "SF office tower sells 70% below 2019"    -> cre_stress       MORE stress
+  "OPEC+ agrees surprise output CUT"        -> oil_supply       LESS supply
+     NOT more, though prices rise. The node measures SUPPLY, and supply fell.
+  "Fed cuts rates 25bp"                     -> us_policy_rate   LESS rate
+  "Tighter chip export controls announced"  -> export_controls  MORE controls
+  "French government loses confidence vote" -> political_stability LESS stability
+  "PBoC extends gold buying to 18th month"  -> cb_gold_demand   MORE demand
+  "Tankers halted in Strait of Hormuz"      -> oil_supply LESS, geopolitical_tension MORE
+
+Ask literally: "did the thing this node is NAMED AFTER go up or down?" — never
+"was this good or bad for markets".
+
+NEGATION AND DENIAL — read what the sentence actually asserts, not the words in
+it. "Iran DENIES it agreed to reopen Hormuz" is an ESCALATION (+1 tension), not a
+de-escalation, even though it contains "agreed" and "reopen". "Talks collapse",
+"deal falls through", "pauses the pause" all invert. A retraction of good news is
+bad news of similar size.
+
+ORIGIN NODES — tag where the shock LANDS FIRST, not what it will affect. A Hormuz
+blockage originates on oil_supply (and geopolitical_tension); it does NOT originate
+on airlines, inflation, or equities, however obviously it will reach them. Tagging
+a downstream node double-counts, because the graph will propagate there anyway.
+
 Merge duplicate headlines into ONE event. Skip celebrity/sports/fluff. Be aggressive
 flagging manipulation_likelihood on single-source hype, anonymous "sources", and
 promotional language.
@@ -227,23 +299,191 @@ money circles structurally, including multi-party circles no single headline
 reveals. Missing a deal record is losing a leg of a future circle."""
 
 
+# Headlines per LLM call. Measured, not guessed: at 25 the small model answers
+# for ~half the batch and drops the rest; at 10 recall is near-total. The live
+# loop sees ~40-100 headlines a cycle, so this costs a few extra local calls
+# every five minutes and buys back the half of the world that was going missing.
+_BATCH = 10
+
+_NEG_WORDS = re.compile(r"\b(cut|cuts|falls?|fell|drops?|plunge[sd]?|slump|sinks?|"
+                        r"halts?|halted|bans?|banned|sanction\w*|blocks?|collapse[sd]?|"
+                        r"crash\w*|default\w*|shrinks?|contract(?:s|ed|ion)|weaken\w*|"
+                        r"loses?|lost|miss(?:es|ed)?|deni\w+|reject\w+|scraps?)\b", re.I)
+_POS_WORDS = re.compile(r"\b(hikes?|raise[sd]?|rises?|rose|surge[sd]?|jumps?|rall(?:y|ies|ied)|"
+                        r"soars?|climbs?|expand\w*|grow\w*|boost\w*|approve[sd]?|beats?|"
+                        r"record|escalat\w*|tighten\w*|strengthen\w*|adds?|wins?)\b", re.I)
+
+
+def _attach_headline(events: list, chunk: list[dict]) -> list[dict]:
+    """Repair the `headline`/`source` fields from the batch index.
+
+    Small models paraphrase the headline they were told to copy verbatim, which
+    breaks every downstream join (dedup, corroboration, credibility). The
+    numbered index is far more reliable than the echoed text, so it wins.
+    """
+    out = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        try:
+            idx = int(ev.get("n", 0)) - 1
+        except (TypeError, ValueError):
+            idx = -1
+        if 0 <= idx < len(chunk):
+            ev["headline"] = chunk[idx].get("title", ev.get("headline", ""))
+            ev["source"] = chunk[idx].get("source", ev.get("source", ""))
+            for key in ("published", "ts_published"):
+                if chunk[idx].get(key):
+                    ev.setdefault("published", chunk[idx][key])
+        out.append(ev)
+    return out
+
+
+_MORE = re.compile(r"^\s*(more|higher|increase\w*|rise\w*|up)\b", re.I)
+_LESS = re.compile(r"^\s*(less|fewer|lower|decrease\w*|fall\w*|down|reduc\w*)\b", re.I)
+
+
+def _polarity_of(ev: dict) -> float:
+    """Prefer the WORDS over the number.
+
+    Asked for a signed number the small model reports sentiment — grim headline,
+    negative sign — which inverts every stress-type node (debt, spreads, tension:
+    all of which RISE in a crisis). Asked to write "more credit stress" or "less
+    oil supply" it gets the frame right far more often, because the sentence has
+    to name the quantity. So `direction` wins when present and the numeric field
+    only carries size.
+    """
+    d = str(ev.get("direction", "") or "")
+    mag = ev.get("magnitude_signed", ev.get("magnitude", 0.5))
+    try:
+        mag = abs(float(mag or 0.5))
+    except (TypeError, ValueError):
+        mag = 0.5
+    mag = max(0.05, min(1.0, mag))
+    if _MORE.match(d):
+        return mag
+    if _LESS.match(d):
+        return -mag
+    return max(-1.0, min(1.0, float(ev.get("polarity", 0.0) or 0.0)))
+
+
+def _keyword_sign(text: str) -> float:
+    """Last-resort direction from the headline's own verbs. Deliberately weak
+    (+/-0.4): a guessed sign should move the field less than a read one."""
+    neg, pos = bool(_NEG_WORDS.search(text or "")), bool(_POS_WORDS.search(text or ""))
+    if neg == pos:
+        return 0.0
+    return -0.4 if neg else 0.4
+
+
+def _resolve_unsigned(events: list[dict], graph, settings) -> list[dict]:
+    """Rescue events the fast model left directionless.
+
+    A polarity of 0 is not a reading, it is an abstention — and since impulse
+    multiplies by polarity, an abstention is indistinguishable from "this never
+    happened". So: ask the big model to commit to a sign, fall back to the
+    headline's own verbs, and if even that is mute, mark the event `unsigned`
+    so the rate is visible in the health check instead of vanishing.
+    """
+    stuck = [ev for ev in events
+             if isinstance(ev, dict)
+             and abs(float(ev.get("polarity", 0.0) or 0.0)) < 1e-9
+             and (ev.get("nodes") or [])]
+    if stuck and llm_ready(settings):
+        for i in range(0, len(stuck), _BATCH):
+            batch = stuck[i:i + _BATCH]
+            def _label(ev):
+                nid = (ev.get("nodes") or [""])[0]
+                node = graph.nodes.get(nid)
+                return getattr(node, "label", "") or nid
+
+            lines = "\n".join(
+                f"{j}. {ev.get('headline') or ev.get('summary', '')}\n"
+                f"   QUANTITY TO JUDGE: \"{_label(ev)}\" — did it go UP or DOWN?"
+                for j, ev in enumerate(batch, 1))
+            prompt = f"""For each item, say whether THE NAMED QUANTITY went up or down.
+Do NOT judge whether the news is good or bad, and do NOT judge prices.
+
+Bad news usually means MORE of a stress-type quantity:
+  "Fitch strips US of AAA" / quantity "US government debt stress"   -> more
+  "High-yield spreads blow past 500bp" / "Credit spreads"           -> more
+  "OPEC+ cuts output" / "Oil supply"                                -> less
+  "Fed cuts rates" / "US policy rate"                               -> less
+  "Iran denies it agreed to reopen Hormuz" / "Geopolitical tension" -> more
+     (a denial of de-escalation IS escalation)
+
+Answer "more" or "less" for EVERY item — never "unchanged". If the item is
+genuinely unrelated to its quantity, still answer, and set "weak": true.
+
+{lines}
+
+Return ONLY JSON: {{"signs": [{{"n": <number>, "direction": "more"|"less", "weak": <bool>}}]}}"""
+            raw = _call_llm(prompt, settings, max_tokens=1200, tier="smart",
+                            json_mode=True)
+            parsed = _extract_json(raw or "") or {}
+            for rec in (parsed.get("signs") or []):
+                try:
+                    ev = batch[int(rec.get("n", 0)) - 1]
+                except (TypeError, ValueError, IndexError):
+                    continue
+                d = str(rec.get("direction", "") or "")
+                pol = 1.0 if _MORE.match(d) else (-1.0 if _LESS.match(d) else 0.0)
+                if abs(pol) > 1e-9:
+                    # a rescued sign is a second opinion, not a first reading:
+                    # damp it, and damp it harder when the model called it weak
+                    ev["polarity"] = max(-1.0, min(1.0, pol)) * (0.4 if rec.get("weak") else 0.7)
+                    ev["sign_source"] = "escalated"
+
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        if abs(float(ev.get("polarity", 0.0) or 0.0)) < 1e-9 and (ev.get("nodes") or []):
+            guess = _keyword_sign(ev.get("headline") or ev.get("summary", ""))
+            if guess:
+                ev["polarity"] = guess
+                ev["sign_source"] = "keyword"
+            else:
+                ev["unsigned"] = True     # counted by scripts/daily_status.py
+    return events
+
+
 def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
     """LLM extraction with a keyword-matching fallback so the brain still works
-    offline (lower fidelity, marked as such)."""
+    offline (lower fidelity, marked as such).
+
+    Two failure modes measured on the golden set (scripts/audit_live_tagger.py)
+    shape this function:
+
+      * RECALL — handed 25+ headlines at once the small model answers for about
+        half and silently drops the rest, so headlines go out in small batches.
+      * UNSIGNED — it returns polarity 0 when unsure, and because
+        `impulse = polarity x magnitude x credibility` a 0 deletes the event.
+        Anything unsigned is escalated to the big model, then to keyword sign,
+        and only then given up on (counted, never silently dropped).
+    """
     if not headlines:
         return []
     events: Optional[list[dict]] = None
     if llm_ready(settings):
-        node_ids = [n.id for n in graph.nodes.values() if n.type != "asset"]
+        node_ids = ", ".join(
+            f"{n.id} [{n.label}]" if getattr(n, "label", "") else n.id
+            for n in graph.nodes.values() if n.type != "asset")
+        events = []
         # fast tier: this is the high-volume per-cycle job — locally that's the
         # small qwen; the big model is reserved for the daily deep briefing
-        raw = _call_llm(_prompt(headlines, node_ids), settings, max_tokens=6000,
-                        tier="fast", json_mode=True)
-        parsed = _extract_json(raw or "")
-        if parsed and isinstance(parsed.get("events"), list):
-            events = parsed["events"]
+        for i in range(0, len(headlines), _BATCH):
+            chunk = headlines[i:i + _BATCH]
+            raw = _call_llm(_prompt(chunk, node_ids, graph), settings, max_tokens=6000,
+                            tier="fast", json_mode=True)
+            parsed = _extract_json(raw or "")
+            if parsed and isinstance(parsed.get("events"), list):
+                events.extend(_attach_headline(parsed["events"], chunk))
+        if not events:
+            events = None
     if events is None:
         events = _fallback_extract(headlines, graph)
+    else:
+        events = _resolve_unsigned(events, graph, settings)
 
     now = datetime.now(timezone.utc).isoformat()
     threshold = settings.brain.credibility_threshold
@@ -253,7 +493,7 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
             continue
         ev.setdefault("summary", ev.get("headline", ""))
         ev["nodes"] = [n for n in (ev.get("nodes") or []) if n in graph.nodes]
-        ev["polarity"] = max(-1.0, min(1.0, float(ev.get("polarity", 0.0) or 0.0)))
+        ev["polarity"] = _polarity_of(ev)
         ev["magnitude"] = max(0.0, min(1.0, float(ev.get("magnitude", 0.0) or 0.0)))
         ev["confidence"] = max(0.0, min(1.0, float(ev.get("confidence", 0.5) or 0.5)))
         ev["credibility"] = round(credibility(ev, headlines, settings), 3)
