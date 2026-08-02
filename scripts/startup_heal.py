@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +46,20 @@ def run(script: str, why: str) -> None:
 
 
 def note_gap(hours: float) -> None:
-    """Write the blind window into each book's journal — an honest record."""
+    """Record the blind window: journals for the audit trail, and a machine-
+    readable window the learning spine uses to REFUSE to learn from trades
+    whose exits were delayed by the outage (a late stop is not a bad signal)."""
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=hours)).isoformat()
+    try:
+        wins = []
+        gp = DATA / "learning_gaps.json"
+        if gp.exists():
+            wins = json.loads(gp.read_text())
+        wins.append({"start": start, "end": now.isoformat(), "hours": round(hours, 2)})
+        gp.write_text(json.dumps(wins[-200:], indent=1))
+    except (OSError, json.JSONDecodeError):
+        pass
     entry = {"ts": datetime.now(timezone.utc).isoformat(), "event": "gap",
              "down_hours": round(hours, 2),
              "note": ("engine was down; stops and bear exits could not fire in this "

@@ -117,6 +117,25 @@ def test_degraded_policy_is_cut_and_flagged():
         assert sp.size_multiplier("rot") == SIZE_BOUNDS[0]
 
 
+def test_outage_tainted_outcomes_are_journalled_but_not_learned_from():
+    """A stop that fired late because the engine was down says nothing about
+    the SIGNAL — it must not move the posteriors."""
+    import json as _json
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        _run(sp, "p", 10, 0.05)
+        before = sp.size_multiplier("p")
+        n_before = sp.report()["policies"]["p"]["n"]
+        with open(os.path.join(tmp, "learning_gaps.json"), "w") as fh:
+            _json.dump([{"start": "2000-01-01T00:00:00+00:00",
+                         "end": "2099-01-01T00:00:00+00:00", "hours": 6}], fh)
+        sp.record("p", "GAPPY", 1, 0.2, 0.02, 2)
+        out = sp.settle("p", "GAPPY", -0.30)          # a disaster, during an outage
+        assert out.get("gap_affected"), "the outcome must be tagged"
+        assert sp.report()["policies"]["p"]["n"] == n_before, "sample count must not grow"
+        assert sp.size_multiplier("p") == before, "an outage must not teach the learner"
+
+
 def test_regime_of_maps_the_three_states():
     assert regime_of(0.5) == "risk_on"
     assert regime_of(0.0) == "neutral"

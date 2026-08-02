@@ -136,11 +136,32 @@ class LearningSpine:
                "ratio": round(ratio, 3), "score": round(score, 3), "won": won,
                "held_days": held_days, "exit_reason": exit_reason,
                "driver": claim.get("driver", "")}
+        opened = claim["id"].split(":", 2)[-1]
+        if self._gap_affected(opened):
+            out["gap_affected"] = True         # journalled, but NOT learned from
+            self._append(out)
+            self._save()
+            return out
         self._append(out)
         self._update(policy, claim.get("driver", ""), claim.get("regime", "neutral"),
                      ratio, score, won)
         self._save()
         return out
+
+    def _gap_affected(self, opened_iso: str) -> bool:
+        """True if an outage overlapped this trade's life. A stop that fired
+        late because the engine was down says nothing about the SIGNAL, so it
+        must not move the posteriors."""
+        try:
+            gp = os.path.join(os.path.dirname(self.path), "learning_gaps.json")
+            with open(gp) as fh:
+                wins = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return False
+        for w in wins[-50:]:
+            if opened_iso <= w.get("end", "") and w.get("start", "") <= _now().isoformat():
+                return True
+        return False
 
     def _bucket(self, scope: str, key: str) -> dict:
         return self._s.setdefault(scope, {}).setdefault(
