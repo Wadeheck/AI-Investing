@@ -32,16 +32,26 @@ Measured baselines (2026-08-02, 50 golden items):
                         SEEN  UNSIGNED  SIGN  ORIGIN  USABLE
   qwen3:8b  as found     52%     52%     71%    24%     --
   qwen3:8b  after fixes 100%      4%     73%    44%    38%
-  seed-2-0-pro           94%      6%     66%    66%    52%   <- live
+  seed-2-0-pro           94%      6%     66%    66%    52%
+  DeepSeek-V3.2          94%      8%     65%    62%    48%   <- live
   Sonnet (corpus)         --      0%      --   100%     --
+
+DeepSeek-V3.2 trails seed-2-0-pro by 4 points of USABLE, which is 2 items out
+of 50 -- noise, not a quality difference. It is live because it carries a
+5,000,000 token/day free allowance against ~600k/day of measured use, so the
+tagging job is free at statistically equal quality. Revisit only if a larger
+golden set turns that 2-item gap into a real one.
 
 seed-2-0-pro has LOWER sign accuracy than qwen yet is decisively better,
 because it finds the right node far more often. That is the trap USABLE exists
 to close.
 
-DeepSeek (V3.2/V3.1/V3/R1) is authorized on the account but refuses every plain
-model id -- the reward-plan models must be called through their authorized
-access point. Re-run this script with --model <ep-id> once that id is known.
+Reward-plan models refuse every plain model id: they must be called through
+their authorized access point (an ep-... id from the console), which is what
+BYTEPLUS_LLM_FAST now holds. V3.2 also rejects response_format, handled at
+runtime in news.py rather than assumed. Compare any candidate with:
+
+  python3 scripts/audit_live_tagger.py --model <ep-id> --json
 """
 import argparse
 import json
