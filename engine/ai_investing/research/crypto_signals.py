@@ -97,7 +97,9 @@ def fetch_history(years: float = 3.2) -> dict:
     return d
 
 
-def refresh_live(max_age_hours: float = 6.0) -> dict:
+def refresh_live(max_age_hours: float = 1.0) -> dict:
+    # crypto trades 24/7 — a 6h cache meant the engine could act on a
+    # funding/F&G read a quarter of a day old. 1h (2026-08-02).
     """Cheap top-up of the latest points, for the live engine's cycles."""
     d = _load()
     stamp = d.get("_refreshed", 0)

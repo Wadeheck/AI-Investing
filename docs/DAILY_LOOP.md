@@ -14,6 +14,10 @@ session, see §3).*
   numbers, daily — stablecoin supply (DefiLlama), Fear&Greed, BTC/ETH ETF
   flows (Farside), DVOL (Deribit), CFTC COT, Guardian archive top-up. Free
   sources only, no keys. Log: `data/market_refresh_cron.log`.
+- `11 * * * *` — `scripts/refresh_crypto_live.py`: HOURLY crypto inputs
+  (funding rates, Fear&Greed, on-chain activity, Binance long/short ratio +
+  open interest). Crypto trades 24/7, so these cannot sit on the equity
+  clock. Log: `data/crypto_refresh_cron.log`.
 - The GDELT crypto crawler (`gdelt_crypto_fetch --loop`) is long-running and
   resumable; restart it in any session if dead:
   `cd engine && python3 -m ai_investing.research.gdelt_crypto_fetch --loop`

@@ -60,6 +60,15 @@ def main() -> int:
     a = age_h(D("news_archive_x.jsonl"))
     ok &= row("X capture (daily)", a is not None and a < 30,
               f"last capture {a:.1f}h ago" if a else "missing")
+    a = age_h(D("crypto_signals.json"))
+    ok &= row("crypto signals (hourly)", a is not None and a < 3,
+              f"funding/F&G {a:.1f}h ago" if a else "missing")
+    a = age_h(D("crypto_positioning.json"))
+    ok &= row("crypto positioning (daily)", a is not None and a < 30,
+              f"LSR/OI {a:.1f}h ago" if a else "missing")
+    a = age_h(D("macro_cache.json"))
+    ok &= row("macro anchors (6h)", a is not None and a < 8,
+              f"VIX/DXY/FRED {a:.1f}h ago" if a else "missing")
     g_last = last_day(D("news_archive_gdelt_crypto.jsonl"))
     gd_run = subprocess.run(["pgrep", "-f", "gdelt_crypto_fetch"],
                             capture_output=True).returncode == 0
