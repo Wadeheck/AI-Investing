@@ -28,6 +28,19 @@ if [ ! -f data/state.json ]; then
   ( cd engine && "$PY" -m ai_investing.main --once --no-news >/dev/null 2>&1 ) || true
 fi
 
+# SELF-HEAL: cron does not catch up on jobs missed while the machine was off,
+# and crypto trades through the gap. Refresh anything stale BEFORE the engine
+# makes its first decision, and record the blind window in the journals.
+# SINGLETON GUARD: two engines on one set of books corrupts the record.
+if pgrep -f "ai_investing.main" >/dev/null 2>&1; then
+  say "An engine is ALREADY running (pgrep ai_investing.main)."
+  say "Stop it first, or use the dashboard alone. Refusing to start a second."
+  exit 1
+fi
+
+say "Self-healing after downtime (refreshing anything stale)"
+"$PY" scripts/startup_heal.py || say "self-heal had problems — continuing anyway"
+
 say "Starting engine loop + dashboard  —  Ctrl-C stops everything"
 ( cd engine && exec "$PY" -m ai_investing.main ) &
 ENGINE=$!

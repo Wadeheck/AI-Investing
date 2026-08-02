@@ -64,6 +64,25 @@ wave-digestion backlog trigger. Do only what it flags.
 7. Watch the wave trigger: >250 undigested GDELT days ⇒ schedule an
    amendment wave (`data/digest_v2/crypto_backfill/README.md`).
 
+## 2b. Recovery after a shutdown (automatic)
+
+Nothing needs remembering. Cron does not catch up on jobs missed while the
+machine was off, and crypto trades through the gap — so recovery is built in:
+
+- `@reboot` (crontab) runs `scripts/boot_start.sh` 90s after boot: heals, then
+  starts the engine. Log: `data/boot.log`.
+- `make run` heals first too (`scripts/startup_heal.py`), so a manual start is
+  identical to a boot start.
+- **Self-heal** measures the downtime from the heartbeat, refreshes whatever
+  went stale (crypto signals first — they rot fastest), writes a `gap` entry
+  into `data/crypto_journal.jsonl` recording the blind window honestly, and
+  prints the healed status.
+- **Books persist** (`paper_state`, `crypto_state`, `event_state`,
+  `invest_state`) and every holding is re-judged on the first cycle back —
+  hard stops evaluated FIRST, against current prices.
+- **Singleton guard**: both `run.sh` and `boot_start.sh` refuse to start a
+  second engine. Two engines on one set of books would corrupt the record.
+
 ## 3. Re-arming after a session restart
 
 The AI routine is scheduled via the session's CronCreate (dies with the
