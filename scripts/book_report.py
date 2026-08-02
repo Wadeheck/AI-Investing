@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""The forward record — every book, graded on its own trades.
+
+This is the cross-check the system runs against ITSELF: not backtest numbers,
+but what the live paper books actually did. It answers, per policy:
+
+  - is it making money, and with how much drawdown
+  - which EXIT reasons pay and which bleed (take vs clock vs stop vs flip)
+  - does entry conviction actually predict the outcome (the honesty test:
+    if strong signals don't beat weak ones, the signal isn't a signal)
+  - how long the system was blind (gap entries from downtime)
+
+Run any time:  python3 scripts/book_report.py [--days 30]
+"""
+import json
+import os
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+D = lambda *p: os.path.join(ROOT, "data", *p)
+
+
+def load(path):
+    rows = []
+    try:
+        for line in open(path):
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    except OSError:
+        pass
+    return rows
+
+
+def pct(x):
+    return f"{x*100:+.2f}%"
+
+
+def grade(name, rows, since):
+    sells = [r for r in rows if r.get("event") == "sell" and r.get("ts", "") >= since]
+    marks = [r for r in rows if r.get("event") == "mark" and r.get("ts", "") >= since]
+    gaps = [r for r in rows if r.get("event") == "gap" and r.get("ts", "") >= since]
+    print(f"\n=== {name} ===")
+    if marks:
+        eq = [m["equity"] for m in marks]
+        peak, dd = eq[0], 0.0
+        for e in eq:
+            peak = max(peak, e)
+            dd = min(dd, e / peak - 1.0)
+        print(f"  equity {eq[0]:,.0f} -> {eq[-1]:,.0f} ({pct(eq[-1]/eq[0]-1)}) "
+              f"over {len(marks)} marked days | worst drawdown {pct(dd)}")
+    if gaps:
+        print(f"  BLIND WINDOWS: {len(gaps)} outages, "
+              f"{sum(g.get('down_hours', 0) for g in gaps):.1f}h total — stops could not fire")
+    if not sells:
+        print("  no closed trades yet — nothing to grade")
+        return
+    wins = [s for s in sells if s.get("pnl", 0) > 0]
+    pnl = sum(s.get("pnl", 0) for s in sells)
+    print(f"  closed {len(sells)} trades | win rate {len(wins)/len(sells):.0%} | "
+          f"net P&L ${pnl:,.2f} | avg hold {sum(s.get('held_days',0) for s in sells)/len(sells):.1f}d")
+
+    by_reason = defaultdict(list)
+    for s in sells:
+        key = (s.get("reason", "?").split()[0] + " " + s.get("reason", "").split()[1]
+               if s.get("reason", "").startswith("hard") else s.get("reason", "?").split()[0])
+        by_reason[key].append(s)
+    print("  by exit reason:")
+    for k, v in sorted(by_reason.items(), key=lambda kv: -sum(x.get("pnl", 0) for x in kv[1])):
+        p = sum(x.get("pnl", 0) for x in v)
+        w = sum(1 for x in v if x.get("pnl", 0) > 0)
+        print(f"    {k:16} n={len(v):3}  win {w/len(v):3.0%}  P&L ${p:>10,.2f}")
+
+    # the honesty test: does conviction predict outcome?
+    conv = [(s.get("shock") or 0, s.get("ret", 0)) for s in sells if s.get("shock")]
+    if len(conv) >= 6:
+        conv.sort()
+        half = len(conv) // 2
+        lo = sum(r for _, r in conv[:half]) / half
+        hi = sum(r for _, r in conv[half:]) / (len(conv) - half)
+        verdict = "signal HOLDS" if hi > lo else "signal DOES NOT hold — investigate"
+        print(f"  conviction check: weak-half avg {pct(lo)} vs strong-half {pct(hi)} -> {verdict}")
+
+
+def main():
+    days = 3650
+    if "--days" in sys.argv:
+        days = int(sys.argv[sys.argv.index("--days") + 1])
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    print(f"FORWARD RECORD (live paper) — trailing {days}d, as of "
+          f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}")
+    grade("₿ crypto book", load(D("crypto_journal.jsonl")), since)
+    grade("⚡ event sleeve", load(D("event_journal.jsonl")), since)
+
+    # trading + investing books from their state files (journal.db has the fills)
+    for label, f in (("📈 trading book", "paper_state.json"),
+                     ("🏛 investing book", "invest_state.json")):
+        try:
+            st = json.load(open(D(f)))
+            b = st.get("broker", st)
+            print(f"\n=== {label} ===")
+            print(f"  cash ${b.get('cash', 0):,.2f} | positions {len(b.get('positions', []))}")
+        except (OSError, json.JSONDecodeError):
+            pass
+    print("\nNote: paper money. Books never reset — this record accumulates.")
+
+
+if __name__ == "__main__":
+    main()

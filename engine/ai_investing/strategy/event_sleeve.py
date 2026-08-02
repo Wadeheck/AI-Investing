@@ -48,6 +48,7 @@ class EventSleeve:
         self.settings = settings
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.path = os.path.join(data_dir, "event_state.json")
+        self.journal = os.path.join(data_dir, "event_journal.jsonl")
         self._state = self._load()
         self.broker = PaperBroker.from_state(self._state.get("broker", {})) \
             if self._state.get("broker") else PaperBroker(START_CASH)
@@ -65,6 +66,14 @@ class EventSleeve:
         try:
             with open(self.path, "w") as fh:
                 json.dump(self._state, fh, indent=1)
+        except OSError:
+            pass
+
+    def _log(self, event: str, **kw) -> None:
+        try:
+            with open(self.journal, "a") as fh:
+                fh.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                     "event": event, **kw}) + "\n")
         except OSError:
             pass
 
@@ -103,8 +112,13 @@ class EventSleeve:
             elif age >= EVENT_HOLD_DAYS:
                 reason = f"clock {age}d {move*100:+.1f}%"
             if reason:
+                pnl = (px - pos.avg_price) * pos.qty
                 self.broker.submit(Order(pos.asset, Side.SELL, abs(pos.qty),
                                          reason=f"event sleeve: {reason}"), px)
+                self._log("sell", symbol=pos.asset.symbol, price=px,
+                          entry=round(pos.avg_price, 6), pnl=round(pnl, 2),
+                          ret=round(move, 4), held_days=age, reason=reason,
+                          shock=meta.get("shock"))
                 held.pop(pos.asset.symbol, None)
                 closed.append((pos.asset.symbol, reason, move))
                 if notifier:
@@ -135,12 +149,19 @@ class EventSleeve:
                 if o.filled_qty:
                     held[sym] = {"entry": px, "opened_day": today, "shock": round(im, 4)}
                     opened.append((sym, im, notional))
+                    self._log("buy", symbol=sym, price=px, notional=round(notional, 2),
+                              shock=round(im, 4), node=row.get("node", ""))
                     if notifier:
                         notifier.send(
                             f"⚡️ *Event sleeve — bought {labels.get(sym, sym)}* ({sym}), "
                             f"~${notional:,.0f} on a fresh news shock of {im:+.2f} "
                             f"via {row.get('node','the web')}. Out in {EVENT_HOLD_DAYS} days "
                             f"or on a 10% stop — whichever comes first (pretend money).")
+        eqnow = self._equity(prices_by_sym)
+        if self._state.get("last_mark") != today:
+            self._state["last_mark"] = today
+            self._log("mark", equity=round(eqnow, 2), cash=round(self.broker.get_cash(), 2),
+                      positions=len(self.broker.get_positions()))
         self._save()
         return {"opened": opened, "closed": closed,
                 "equity": round(self._equity(prices_by_sym), 2),

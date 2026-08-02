@@ -156,9 +156,15 @@ class CryptoBook:
                         if p.asset.symbol == sym), None)
             if pos is None or qty <= 0:
                 return
+            entry = pos.avg_price
+            pnl = (px - entry) * qty
+            ret = (px / entry - 1.0) if entry else 0.0
             self.broker.submit(Order(pos.asset, Side.SELL, qty, reason=reason), px)
             closed.append((sym, reason))
-            self._log("sell", symbol=sym, qty=round(qty, 6), price=px, reason=reason)
+            self._log("sell", symbol=sym, qty=round(qty, 6), price=px, entry=round(entry, 6),
+                      pnl=round(pnl, 2), ret=round(ret, 4), reason=reason,
+                      kind=held.get(sym, {}).get("kind", "?"),
+                      held_days=len([d for d in days if d >= held.get(sym, {}).get("day", today)]) - 1)
             if notifier:
                 notifier.send(f"₿ *Crypto book — sold {sym}*: {reason} (pretend money).")
 
