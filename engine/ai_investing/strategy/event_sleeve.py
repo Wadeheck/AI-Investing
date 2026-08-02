@@ -53,8 +53,8 @@ class EventSleeve:
         self.broker = PaperBroker.from_state(self._state.get("broker", {})) \
             if self._state.get("broker") else PaperBroker(START_CASH)
         try:                       # the expectation ledger: claim -> outcome -> learn
-            from ai_investing.learning.expectations import ExpectationLedger
-            self.ledger = ExpectationLedger(settings)
+            from ai_investing.learning.spine import LearningSpine
+            self.ledger = LearningSpine(settings)
         except Exception:
             self.ledger = None
 
@@ -92,7 +92,7 @@ class EventSleeve:
 
     # -- one pass per engine cycle -------------------------------------------
     def cycle(self, shock_assets: dict, prices_by_sym: dict, notifier=None,
-              labels: dict | None = None) -> dict:
+              labels: dict | None = None, regime: str = "neutral") -> dict:
         """shock_assets: brain state["shock_assets"] — FRESH impacts only."""
         labels = labels or {}
         opened, closed = [], []
@@ -149,7 +149,7 @@ class EventSleeve:
                     continue
                 cands.append((im, sym, row))
             cands.sort(reverse=True)
-            trust = self.ledger.size_multiplier("event") if self.ledger else 1.0
+            trust = self.ledger.size_multiplier("event", regime) if self.ledger else 1.0
             for im, sym, row in cands[:room]:
                 notional = min(eq * trust / max(1, EVENT_N), self.broker.get_cash() * 0.9)
                 if notional < 500:
@@ -167,7 +167,7 @@ class EventSleeve:
                     if self.ledger:
                         self.ledger.record("event", sym, 1, im,
                                            float(row.get("vol_daily") or 0.02),
-                                           EVENT_HOLD_DAYS,
+                                           EVENT_HOLD_DAYS, regime=regime,
                                            driver=row.get("node", ""), notional=notional)
                     if notifier:
                         notifier.send(

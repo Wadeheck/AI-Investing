@@ -109,25 +109,30 @@ def main():
     try:
         sys.path.insert(0, os.path.join(ROOT, "engine"))
         from ai_investing.config import Settings
-        from ai_investing.learning.expectations import ExpectationLedger, MIN_N
-        led = ExpectationLedger(Settings())
-        rep = led.report()
-        print("\n=== 🎓 LEARNING LOOP (expectation vs outcome) ===")
+        from ai_investing.learning.spine import LearningSpine
+        sp = LearningSpine(Settings())
+        rep = sp.report()
+        print("\n=== 🎓 LEARNING SPINE (docs/LEARNING.md) ===")
         if not rep["policies"]:
             print("  no settled claims yet — the loop starts with the first closed trade")
         for pol, b in sorted(rep["policies"].items()):
-            n = b.get("n", 0)
-            state = "LEARNING" if n >= MIN_N else f"gathering ({n}/{MIN_N})"
-            print(f"  {pol:14} n={n:3} | calibration {b.get('ratio', 0):+.2f}x "
-                  f"| trust score {b.get('score', 0):+.2f} "
-                  f"-> size x{led.size_multiplier(pol):.2f}, "
-                  f"expectations x{led.calibration_gain(pol):.2f}  [{state}]")
+            print(f"  {pol:22} n={b['n']:3} skill {b['skill']:.2f} "
+                  f"(conf {b['confidence']:.2f}) calib {b['calibration']:+.2f}x "
+                  f"-> size x{b['size_x']:.2f}  [{b['status']}]")
+        if rep["budgets"]:
+            print("  capital allocation (weekly, rate-limited):")
+            for k, v in sorted(rep["budgets"].items(), key=lambda kv: -kv[1]):
+                label = "unallocated (cash)" if k == "_unallocated" else k
+                print(f"    {label:22} {v:6.1%}")
         drv = {k: v for k, v in rep["drivers"].items() if v.get("n", 0) >= 3}
         if drv:
-            print("  by driver (which part of the web actually predicts):")
+            print("  by driver (which parts of the web actually predict):")
             for d, b in sorted(drv.items(), key=lambda kv: -(kv[1].get("score") or 0))[:8]:
                 print(f"    {d:22} n={b['n']:3} score {b.get('score', 0):+.2f} "
                       f"calib {b.get('ratio', 0):+.2f}x")
+        if rep["regime_break"]:
+            print("  ⚠️  REGIME BREAK: every graded policy is degrading at once — "
+                  "this is a changed world, not six bugs. Offline revalidation due.")
         print(f"  open claims awaiting outcome: {rep['open_claims']}")
     except Exception as exc:
         print(f"\n  [learning loop unavailable: {type(exc).__name__}]")

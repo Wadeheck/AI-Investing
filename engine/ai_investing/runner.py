@@ -301,8 +301,11 @@ class Runner:
             try:
                 from ai_investing.strategy.event_sleeve import EventSleeve
                 px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+                from ai_investing.learning.spine import regime_of
+                ra = ((context.get("brain") or {}).get("regime") or {}).get("risk_appetite")
                 ev_res = EventSleeve(self.settings).cycle(
-                    context["brain"]["shock_assets"], px_by_sym, self.notifier)
+                    context["brain"]["shock_assets"], px_by_sym, self.notifier,
+                    regime=regime_of(ra))
                 if ev_res["opened"] or ev_res["closed"]:
                     print(f"  [event sleeve] +{len(ev_res['opened'])} "
                           f"-{len(ev_res['closed'])} | equity ${ev_res['equity']:,.0f}")

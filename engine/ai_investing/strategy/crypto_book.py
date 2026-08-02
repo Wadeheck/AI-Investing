@@ -72,8 +72,8 @@ class CryptoBook:
         b = self._state.get("broker")
         self.broker = PaperBroker.from_state(b) if b else PaperBroker(START_CASH)
         try:                       # expectation ledger: claim -> outcome -> learn
-            from ai_investing.learning.expectations import ExpectationLedger
-            self.ledger = ExpectationLedger(settings)
+            from ai_investing.learning.spine import LearningSpine
+            self.ledger = LearningSpine(settings)
         except Exception:
             self.ledger = None
 
@@ -153,6 +153,11 @@ class CryptoBook:
             self._state["days"] = days[-60:]
         n_bear, why = self.bear_evidence(bars_by_sym)
         bear = n_bear >= BEAR_K
+        try:
+            from ai_investing.learning.spine import regime_of
+            regime = regime_of(None, bear=bear)
+        except Exception:
+            regime = "neutral"
         opened, closed = [], []
 
         def sell(sym, qty, px, reason):
@@ -271,7 +276,7 @@ class CryptoBook:
                 if imp < ENTRY_MIN:
                     continue
                 bars = bars_by_sym.get(sym) or []
-                trust = self.ledger.size_multiplier("crypto_tact") if self.ledger else 1.0
+                trust = self.ledger.size_multiplier("crypto_tact", regime) if self.ledger else 1.0
                 notional = GAIN * imp * eq * 0.4 * trust
                 rv_daily = 0.03
                 if len(bars) >= 21:                       # vol-targeted sizing (R32)
@@ -299,8 +304,8 @@ class CryptoBook:
                               size_mult=round(trust, 3))
                     if self.ledger:
                         self.ledger.record("crypto_tact", sym, 1, imp, rv_daily,
-                                           HOLD_DAYS, driver="crypto_field",
-                                           notional=notional)
+                                           HOLD_DAYS, regime=regime,
+                                           driver="crypto_field", notional=notional)
                     if notifier:
                         notifier.send(f"₿ *Crypto book — bought {sym}* ~${notional:,.0f} "
                                       f"(web signal {imp:+.2f}). Take +{TAKE:.0%}, "
