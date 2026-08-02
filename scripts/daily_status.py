@@ -120,6 +120,27 @@ def main() -> int:
     except Exception:
         pass
 
+    # --- LLM free-allowance budget ---
+    # Each authorized endpoint has a free daily token allowance. Crossing it
+    # starts costing money with no error and no signal, so it is metered.
+    try:
+        cap = 5_000_000
+        u = json.load(open(D("llm_usage.json")))
+        if u.get("day") == today:
+            worst = 0.0
+            parts = []
+            for model, tok in sorted(u.get("by_model", {}).items(),
+                                     key=lambda kv: -kv[1]):
+                frac = 100.0 * tok / cap
+                worst = max(worst, frac)
+                parts.append(f"{model[-5:]}={tok / 1000:.0f}k({frac:.1f}%)")
+            ok &= row("LLM free allowance", worst < 80,
+                      f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each")
+        else:
+            row("LLM free allowance", True, "no calls yet today")
+    except (OSError, json.JSONDecodeError):
+        pass
+
     # --- backlog triggers ---
     try:
         import glob

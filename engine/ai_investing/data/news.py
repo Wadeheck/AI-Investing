@@ -15,10 +15,12 @@ cache, so polling every 5 minutes costs ~zero bandwidth when nothing changed.
 from __future__ import annotations
 
 import json
+import os
 import re as _re
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from itertools import zip_longest
 from typing import Optional
 from xml.etree import ElementTree
@@ -29,6 +31,10 @@ BYTEPLUS_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions"
 # Models that 400 on response_format, learned at runtime so one bad request
 # doesn't cost every subsequent tagging cycle.
 _NO_JSON_MODE: set[str] = set()
+# An endpoint that just failed is benched briefly instead of being retried every
+# call, so a dead access point costs one timeout rather than one per cycle.
+_ENDPOINT_COOLDOWN: dict[str, float] = {}
+_COOLDOWN_S = 300.0
 
 # local server availability is probed at most once per this many seconds
 _LOCAL_PROBE_TTL = 600.0
@@ -68,6 +74,74 @@ def _call_deepseek(prompt: str, settings, max_tokens: int = 1500) -> Optional[st
     return (choices[0].get("message") or {}).get("content", "").strip()
 
 
+def _usage_path(settings) -> str:
+    return os.path.join(os.path.dirname(settings.state_path), "llm_usage.json")
+
+
+def _record_usage(settings, model: str, tokens: int) -> None:
+    """Meter tokens per endpoint per day.
+
+    Each authorized access point carries a free daily allowance; crossing it
+    starts costing real money with no error and no signal. Metering makes the
+    spend visible in the health check before the bill does.
+    """
+    if not tokens:
+        return
+    try:
+        path = _usage_path(settings)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = {}
+        if os.path.exists(path):
+            with open(path) as fh:
+                data = json.load(fh)
+        if data.get("day") != day:
+            data = {"day": day, "by_model": {}}
+        data.setdefault("by_model", {})
+        data["by_model"][model] = data["by_model"].get(model, 0) + int(tokens)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=1)
+        os.replace(tmp, path)
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+
+
+def _byteplus_chain(settings, tier: str) -> list[str]:
+    """Endpoints to try, in order, for this tier."""
+    chain = list(settings.byteplus_chain_smart if tier == "smart"
+                 else settings.byteplus_chain_fast)
+    primary = (settings.byteplus_model_smart if tier == "smart"
+               else settings.byteplus_model_fast)
+    if primary and primary not in chain:
+        chain.insert(0, primary)
+    return chain
+
+
+def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
+                         json_mode: bool) -> Optional[str]:
+    """Try each authorized endpoint until one answers.
+
+    An endpoint that just failed is skipped for a few minutes rather than
+    retried on every call, so a dead or exhausted access point costs one
+    timeout rather than one per cycle.
+    """
+    now = time.time()
+    last_exc: Optional[Exception] = None
+    for model in _byteplus_chain(settings, tier):
+        if now - _ENDPOINT_COOLDOWN.get(model, 0.0) < _COOLDOWN_S:
+            continue
+        try:
+            out = _call_byteplus(prompt, settings, model, max_tokens, json_mode)
+            if out:
+                return out
+        except Exception as exc:                       # noqa: BLE001 - try next
+            last_exc = exc
+            _ENDPOINT_COOLDOWN[model] = now
+    if last_exc is not None:
+        raise last_exc
+    return None
+
+
 def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500,
                    json_mode: bool = False) -> Optional[str]:
     payload_out: dict = {
@@ -91,6 +165,7 @@ def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500,
         # generous: a 6k-token tagging response over a slow link outlasts 60s
         with urllib.request.urlopen(req, timeout=180) as resp:
             payload = json.loads(resp.read().decode())
+        _record_usage(settings, model, (payload.get("usage") or {}).get("total_tokens", 0))
         choices = payload.get("choices") or [{}]
         return (choices[0].get("message") or {}).get("content", "").strip()
 
@@ -191,8 +266,7 @@ def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
             if out:
                 return out
         if settings.byteplus_api_key:
-            model = settings.byteplus_model_smart if tier == "smart" else settings.byteplus_model_fast
-            out = _call_byteplus(prompt, settings, model, max_tokens, json_mode)
+            out = _call_byteplus_chain(prompt, settings, tier, max_tokens, json_mode)
             if out:
                 return out
         if settings.deepseek_api_key:

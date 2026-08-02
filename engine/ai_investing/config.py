@@ -225,6 +225,18 @@ class Settings:
     byteplus_api_key: str = field(default_factory=lambda: _get("BYTEPLUS_API_KEY", ""))
     byteplus_model_smart: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_SMART", "seed-2-0-pro-260328"))
     byteplus_model_fast: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_FAST", "seed-2-0-mini-260428"))
+    # Failover chains of authorized access points, tried in order. This is what
+    # lets the local GPU be retired: one endpoint dying no longer means the brain
+    # stops reading, because two more answer the same call. Each carries its own
+    # free daily allowance, so the chain is also a budget overflow path.
+    byteplus_chain_fast: list[str] = field(
+        default_factory=lambda: _get_list("BYTEPLUS_CHAIN_FAST", []))
+    byteplus_chain_smart: list[str] = field(
+        default_factory=lambda: _get_list("BYTEPLUS_CHAIN_SMART", []))
+    # Free tokens/day per authorized endpoint. Crossing it starts costing money
+    # silently, so usage is metered and surfaced in scripts/daily_status.py.
+    llm_daily_free_tokens: int = field(
+        default_factory=lambda: _get_int("LLM_DAILY_FREE_TOKENS", 5_000_000))
     news_rss: list[str] = field(default_factory=lambda: _get_list("NEWS_RSS", [
         # global markets / macro
         "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
