@@ -10,7 +10,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 PY="$(pwd)/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
-if pgrep -f "ai_investing.main" >/dev/null 2>&1; then
+if bash scripts/engine_pid.sh >/dev/null; then
   echo "[boot] engine already running — nothing to do"
   exit 0
 fi

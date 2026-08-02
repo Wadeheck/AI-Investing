@@ -89,8 +89,10 @@ def main() -> int:
     # --- live engine ---
     st = D("state.json")
     a = age_h(st)
-    eng = a is not None and a < 1
-    row("paper engine", True, f"cycle {a:.2f}h ago" if a else "not run")
+    eng = a is not None and a < 1.0
+    ok &= row("paper engine", eng,
+              (f"cycle {a:.2f}h ago" if a else "never run") +
+              ("" if eng else "  <-- STALLED: restart with `make run`"))
     if os.path.exists(D("paper_state.json")):
         p = json.load(open(D("paper_state.json")))
         row("paper book", True, f"${p['cash']:,.0f} cash, {len(p['positions'])} positions")

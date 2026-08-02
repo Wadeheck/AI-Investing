@@ -32,8 +32,8 @@ fi
 # and crypto trades through the gap. Refresh anything stale BEFORE the engine
 # makes its first decision, and record the blind window in the journals.
 # SINGLETON GUARD: two engines on one set of books corrupts the record.
-if pgrep -f "ai_investing.main" >/dev/null 2>&1; then
-  say "An engine is ALREADY running (pgrep ai_investing.main)."
+if bash scripts/engine_pid.sh >/dev/null; then
+  say "An engine is ALREADY running (pid $(bash scripts/engine_pid.sh))."
   say "Stop it first, or use the dashboard alone. Refusing to start a second."
   exit 1
 fi
