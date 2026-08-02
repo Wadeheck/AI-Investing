@@ -33,6 +33,14 @@ class RiskManager:
         self.day_start_equity: Optional[float] = None
         self.peak_equity: Optional[float] = None
         self.halted = False
+        # symbol -> 0..1 decayed integrity/distress severity, refreshed each
+        # cycle by the runner from brain/integrity.py (see set_name_risk)
+        self._name_risk: dict[str, float] = {}
+
+    def set_name_risk(self, flags: dict) -> None:
+        """Per-name danger charge: tightens stops on longs and blocks adds."""
+        self._name_risk = {sym: float(f.get("severity", 0.0))
+                           for sym, f in (flags or {}).items()}
 
     # --- kill switch --------------------------------------------------------
     def mark_day_start(self, equity: float) -> None:
@@ -69,6 +77,15 @@ class RiskManager:
                 atr_frac = ms.atr / pos.avg_price
                 stop_frac = self.cfg.atr_stop_mult * atr_frac
                 take_frac = self.cfg.atr_take_mult * atr_frac
+            # NAME RISK (2026-08-02): a holding under an active integrity /
+            # distress flag gets a TIGHTER leash — up to half the normal stop
+            # at full severity. The lockbox showed the stock book's drawdown is
+            # idiosyncratic; this is the position-level answer index gates
+            # could not give. Longs only: a flag is bearish, so a short's stop
+            # (which triggers on the price RISING) must not be tightened by it.
+            nr = self._name_risk.get(pos.asset.symbol, 0.0) if self._name_risk else 0.0
+            if nr > 0.1 and pos.qty > 0:
+                stop_frac *= max(0.5, 1.0 - 0.5 * min(1.0, nr))
             # hard rule: no position may lose more than max_loss_per_position
             stop_frac = min(stop_frac, self.cfg.max_loss_per_position)
 
@@ -148,6 +165,12 @@ class RiskManager:
 
             opening_new = key not in open_keys and target_w != 0
             if opening_new and len(open_keys) >= cfg.max_open_positions:
+                continue
+
+            # name risk: never ADD to a long under an active distress flag —
+            # exits and trims stay free (protection must never block getting out)
+            nr = self._name_risk.get(d.asset.symbol, 0.0)
+            if nr > 0.3 and delta > 0 and target_w > 0:
                 continue
 
             # scheduled-event throttle: fresh risk shrinks into earnings/FOMC

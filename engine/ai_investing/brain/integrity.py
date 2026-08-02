@@ -49,6 +49,28 @@ PATTERNS: list[tuple[re.Pattern, float, str]] = [
      re.I), 0.6, "'guaranteed returns' marketing"),
     (re.compile(r"\b(whistleblower|internal probe|cfo (?:resigns?|departs?) abruptly)\b", re.I),
      0.4, "whistleblower / abrupt CFO exit"),
+    # ---- NAME-RISK patterns (2026-08-02): company distress that is not fraud
+    # but IS idiosyncratic danger to a holding. The lockbox showed the stock
+    # book's drawdown is name-level (picks crash inside a rising index), and
+    # index gates cannot fix that — this channel can. Severities are lower
+    # than the fraud patterns: these are warnings, not indictments.
+    (re.compile(r"\b(going concern|bankruptcy protection|chapter 11|files? for "
+                r"(?:bankruptcy|administration)|insolven\w+)\b", re.I), 0.8, "solvency event"),
+    (re.compile(r"\b(covenant breach|misses? (?:a )?(?:debt|bond|coupon) payment|"
+                r"distressed (?:debt )?exchange|debt restructur\w+)\b", re.I),
+     0.7, "debt distress"),
+    (re.compile(r"\b(cuts? (?:full[- ]year |annual )?guidance|slashes? (?:its )?outlook|"
+                r"withdraws? (?:its )?guidance|profit warning)\b", re.I),
+     0.45, "guidance cut / profit warning"),
+    (re.compile(r"\b(emergency (?:capital|share) (?:raise|issue)|dilutive (?:offering|placement)|"
+                r"rescue (?:financing|rights issue)|suspends? (?:its )?dividend|"
+                r"cuts? (?:its )?dividend)\b", re.I), 0.5, "distress raise / payout cut"),
+    (re.compile(r"\b(recalls? (?:millions|its entire)|product recall|"
+                r"grounded (?:fleet|aircraft)|halts? production)\b", re.I),
+     0.4, "operational failure"),
+    (re.compile(r"\b(loses? (?:its )?(?:biggest|largest|key) customer|"
+                r"contract (?:cancel\w+|terminated)|licen[cs]e revoked)\b", re.I),
+     0.45, "lost franchise/customer"),
 ]
 
 

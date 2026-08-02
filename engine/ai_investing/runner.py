@@ -237,6 +237,14 @@ class Runner:
             self._finish(prices, [], context, halted=True)
             return {"halted": True, "reason": breaker.reason, "equity": equity}
 
+        # name risk: refresh per-symbol integrity/distress charges BEFORE stops
+        # so a flagged holding gets its tightened leash this very cycle
+        try:
+            from ai_investing.brain.integrity import current_flags
+            self.risk.set_name_risk(current_flags(self.settings))
+        except Exception:
+            pass
+
         # 2) Protective exits always run (even at caps / bad data); never blocked by slippage.
         for o in self.risk.stop_orders(portfolio, prices, market=self._stats):
             executed.append(self._execute(o, prices, guard_slippage=False))

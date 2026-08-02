@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 23
+SEED_VERSION = 25
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -798,6 +798,9 @@ SEED_NODES = [
      "aliases": ["card networks", "interchange", "payment processing", "digital payments"]},
     {"id": "us_retail", "type": "theme", "label": "US retail",
      "aliases": ["big box", "retailer earnings", "same-store sales", "holiday shopping"]},
+    {"id": "tokenization", "type": "theme", "label": "Tokenization / real-world assets (RWA)",
+     "aliases": ["rwa", "real-world assets", "tokenized treasuries", "tokenised",
+                 "asset tokenization", "on-chain funds", "代币化"]},
     {"id": "china_semis", "type": "theme", "label": "China domestic semiconductors",
      "aliases": ["domestic substitution", "china chipmakers", "china foundry",
                  "semiconductor self-sufficiency", "国产替代", "國產替代"]},
@@ -1111,30 +1114,54 @@ SEED_EDGES = [
     {"src": "doge", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
      "note": "meme beta: rides the tide with no fundamental anchor — sentiment IS the asset"},
     {"src": "render", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
-    {"src": "tao", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
-    {"src": "fet", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "tao", "dst": "crypto_majors", "type": "member_of", "weight": 0.3,
+     "note": f"calibrated 2026-08-02 on the 7k-event corpus: membership transmission CONTRADICTED (n=29, t=-2.0) — "
+             "AI-token beta runs on its own narrative, not the majors' tide"},
+    {"src": "fet", "dst": "crypto_majors", "type": "member_of", "weight": 0.3,
+     "note": f"calibrated 2026-08-02 on the 7k-event corpus: membership CONTRADICTED (n=29, t=-1.9)"},
     {"src": "akt", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
     # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
     # Direct edges rather than a new crypto_ai theme node, so the digester's §7
     # taggable set (brief v1.4) stays untouched; promote to a proper theme at
     # the next brief version bump.
-    {"src": "ai_capex_cycle", "dst": "render", "type": "influences", "sign": 1, "weight": 0.3,
-     "note": "GPU-compute demand narrative reprices decentralized-GPU tokens"},
+    {"src": "ai_capex_cycle", "dst": "render", "type": "influences", "sign": 1, "weight": 0.4,
+     "note": "GPU-compute demand narrative reprices decentralized-GPU tokens — "
+             f"calibrated 2026-08-02 on the 7k-event corpus: SUPPORTED (n=66, hit 58%, t=+1.9); weight 0.3->0.4"},
     {"src": "ai_capex_cycle", "dst": "tao", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "ai_capex_cycle", "dst": "fet", "type": "influences", "sign": 1, "weight": 0.3},
-    {"src": "ai_capex_cycle", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "ai_capex_cycle", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.4,
+     "note": f"calibrated 2026-08-02 on the 7k-event corpus: SUPPORTED (n=66, hit 54%, t=+2.1)"},
     {"src": "ai_datacenter", "dst": "render", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "ai_datacenter", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.3,
      "note": "datacenter compute scarcity is the bull case for decentralized compute"},
     # exchange-token and enforcement wiring
-    {"src": "custody_risk", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.5,
-     "note": "exchange tokens are the epicenter of custody scares — the FTT lesson"},
+    {"src": "custody_risk", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.2,
+     "note": "exchange tokens are the epicenter of custody scares (FTT lesson) — "
+             f"calibrated 2026-08-02 on the 7k-event corpus: CONTRADICTED (n=83, t=-2.0). True in a true blowup, not for "
+             "routine custody headlines; weight cut 0.5->0.2"},
     {"src": "crypto_regulation", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.4,
      "note": "enforcement waves hit exchanges first"},
     {"src": "crypto_regulation", "dst": "xrp", "type": "influences", "sign": -1, "weight": 0.4,
      "note": "the SEC-suit asset: regulatory shifts reprice it hardest in both directions"},
-    {"src": "crypto_liquidity", "dst": "doge", "type": "influences", "sign": 1, "weight": 0.5,
-     "note": "retail liquidity floods memecoins last and loudest"},
+    # ---- tokenization / RWA wiring (seed v24): earned nodehood on corpus
+    # evidence (528 mentions across 160 distinct days, 2023-07 -> 2026-07).
+    # Mechanism differs from generic crypto_adoption: it is TradFi assets
+    # moving on-chain, which pays the rails (issuers/exchanges/custodians)
+    # and settles mostly on Ethereum. Prior weights — calibrator will verdict.
+    {"src": "crypto_adoption", "dst": "tokenization", "type": "influences", "sign": 1, "weight": 0.4,
+     "note": "institutional adoption is the tide tokenization rides"},
+    {"src": "crypto_regulation", "dst": "tokenization", "type": "influences", "sign": -1, "weight": 0.3,
+     "note": "clarity enables tokenized issuance; enforcement freezes it"},
+    {"src": "tokenization", "dst": "crcl", "type": "influences", "sign": 1, "weight": 0.4,
+     "note": "tokenized money/treasuries are Circle's core business"},
+    {"src": "tokenization", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "custody + trading rails for tokenized assets"},
+    {"src": "tokenization", "dst": "eth", "type": "influences", "sign": 1, "weight": 0.25,
+     "note": "most RWA issuance settles on Ethereum — fee/demand channel"},
+    {"src": "crypto_liquidity", "dst": "doge", "type": "influences", "sign": 1, "weight": 0.15,
+     "note": "retail liquidity floods memecoins last and loudest — calibrated 2026-08-02 on the 7k-event corpus: "
+             "CONTRADICTED at 5d (n=46, hit 26%, t=-4.1). The 'last and loudest' "
+             "lag is real but far longer than 5 days; weight cut 0.5->0.15"},
     # ---- stocks <-> crypto coupling (seed v22) — modeled NONLINEARLY ----
     # These are deliberately NOT plain linear edges. Both ride the graph's
     # existing regime machinery, and both carry prior-grade weights for the
@@ -1216,9 +1243,15 @@ SEED_EDGES = [
     {"src": "ganfeng", "dst": "ev_supply_chain", "type": "member_of", "weight": 0.7},
     {"src": "lithium_price", "dst": "ganfeng", "type": "influences", "sign": 1, "weight": 0.6,
      "note": "the miner is the INVERSE of battery makers on lithium price"},
-    {"src": "geopolitical_tension", "dst": "tsmc", "type": "influences", "sign": -1, "weight": 0.4,
-     "note": "Taiwan-strait risk discount"},
-    {"src": "geopolitical_tension", "dst": "foxconn", "type": "influences", "sign": -1, "weight": 0.3},
+    {"src": "geopolitical_tension", "dst": "tsmc", "type": "influences", "sign": -1, "weight": 0.15,
+     "regime_gate": {"dial": "fear", "lo": 0.35, "hi": 1.0, "outside": "damp"},
+     "note": "Taiwan-strait risk discount — calibrated 2026-08-02 on the 7k-event corpus: CONTRADICTED at 5d "
+             "(n=579, hit 44%, t=-3.6). The tape ignores tension headlines day to "
+             "day and only prices Taiwan risk in acute fear; weight cut 0.4->0.15 "
+             "and fear-gated so it bites only in panic"},
+    {"src": "geopolitical_tension", "dst": "foxconn", "type": "influences", "sign": -1, "weight": 0.12,
+     "regime_gate": {"dial": "fear", "lo": 0.35, "hi": 1.0, "outside": "damp"},
+     "note": f"same verdict as the TSMC leg (n=576, t=-2.6)"},
     {"src": "us_china_tariffs", "dst": "hardware_chain", "type": "influences", "sign": -1,
      "weight": 0.4, "note": "tariffs tax every cross-strait component hop"},
     # robotics
@@ -1551,8 +1584,10 @@ SEED_EDGES = [
     {"src": "airbus", "dst": "europe_equities", "type": "member_of", "weight": 0.3},
     {"src": "boeing", "dst": "airbus", "type": "competes_with", "weight": 0.5,
      "note": "commercial-aircraft duopoly — one OEM's crisis is the other's order book"},
-    {"src": "uk_growth", "dst": "hsbc", "type": "influences", "sign": 1, "weight": 0.2,
-     "note": "kept weak: HSBC's earnings are mostly Asia, listing is UK"},
+    {"src": "uk_growth", "dst": "hsbc", "type": "influences", "sign": 1, "weight": 0.08,
+     "note": "HSBC earns in Asia, lists in the UK — calibrated 2026-08-02 on the 7k-event corpus: CONTRADICTED "
+             "(n=56, hit 38%, t=-2.5). Weight cut 0.2->0.08; the listing tie is "
+             "cosmetic, the earnings tie is China/HK (already wired)"},
     # ---- bill-of-materials wiring (seed v13) ----
     # BOM tier -> parent industry via `supplies` (flows BOTH ways: a tier shock
     # hits the industry, an industry demand shock flows back down to the tier).
@@ -1817,7 +1852,7 @@ SEED_EDGES = [
      "weight": 0.5, "note": "FTX mechanism: custody doubt -> withdrawal run -> forced selling"},
     {"src": "custody_risk", "dst": "crypto_adoption", "type": "influences", "sign": -1,
      "weight": 0.3, "note": "each custodial blowup sets institutional adoption back a cycle"},
-    {"src": "custody_risk", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.25,
+    {"src": "custody_risk", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.35,
      "note": "SIGN FLIPPED 2026-07-31: 3y calibration rejected the old negative sign "
              "(n=38, t=-5.2, hit 21%) and the mechanism agrees — custody scares at "
              "offshore venues drive flow TO the regulated US custodian (spot-ETF custody "
