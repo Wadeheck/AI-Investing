@@ -278,6 +278,23 @@ class Runner:
         elif breaker.reason:
             print(f"  (no new positions — {breaker.reason})")
 
+        # 4a) The ₿ crypto book: crypto traded on its OWN policy, every cycle,
+        # 24/7 — hard stops and the bear exit run even when stock markets are
+        # shut, because that is when crypto crashes.
+        try:
+            from ai_investing.strategy.crypto_book import CryptoBook
+            px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+            bars_by_sym = {a.symbol: bars_by_key.get(a.key, []) for a in self.assets}
+            b_assets = (context.get("brain") or {}).get("asset_impacts") or {}
+            cb = CryptoBook(self.settings).cycle(b_assets, bars_by_sym, px_by_sym,
+                                                 self.notifier)
+            if cb["opened"] or cb["closed"]:
+                print(f"  [crypto book] +{len(cb['opened'])} -{len(cb['closed'])} | "
+                      f"equity ${cb['equity']:,.0f} | "
+                      f"{'BEAR — in cash' if cb['bear'] else 'risk-on'}")
+        except Exception as exc:
+            print(f"  [crypto book] skipped: {type(exc).__name__}: {exc}")
+
         # 4b) The ⚡ event sleeve (third policy): trade TODAY's fresh news shock,
         # time-boxed, own capital. Exits never wait; entries are its own book.
         if context.get("brain") and context["brain"].get("shock_assets"):
