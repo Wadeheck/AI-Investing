@@ -23,6 +23,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from ai_investing.brokers.paper import PaperBroker
+from ai_investing.util import atomic
 from ai_investing.execution.approvals import ProposalBook
 from ai_investing.models import Asset, AssetClass, Order, Side
 
@@ -61,10 +62,40 @@ class Investor:
         except (OSError, json.JSONDecodeError):
             return {}
 
+    def _stamp_marks(self, prices: dict) -> None:
+        """Persist equity and per-position marks alongside the book.
+
+        Readers only get the state file. Cash alone is misleading once a book
+        holds shorts — short proceeds sit in cash that is still owed — so the
+        value has to be written by whoever has the prices, which is here.
+        """
+        b = self._state.get("broker") or {}
+        mv = 0.0
+        for pos in b.get("positions", []):
+            px = float(prices.get(pos.get("symbol"), 0.0) or 0.0)
+            if px > 0:
+                pos["price"] = round(px, 6)
+                pos["pnl"] = round((px - float(pos.get("avg_price", 0)))
+                                   * float(pos.get("qty", 0)), 2)
+                mv += float(pos.get("qty", 0)) * px
+        self._state["equity"] = round(float(b.get("cash", 0.0)) + mv, 2)
+        self._state["marked_at"] = datetime.now(timezone.utc).isoformat()
+
+    def mark(self, prices: dict) -> None:
+        """Value the book without trading it.
+
+        Valuation must not depend on whether the trading logic happened to run:
+        this book gates itself (once a day, or only on fresh shocks), so its
+        saved state could sit unmarked for hours while the positions moved. A
+        reader would then show a stale value, or fall back to cash and overstate
+        a book holding shorts.
+        """
+        self._stamp_marks(prices)
+        self._save()
+
     def _save(self) -> None:
         self._state["broker"] = self.broker.state()
-        with open(self.path, "w") as fh:
-            json.dump(self._state, fh, indent=1)
+        atomic.write_json(self.path, self._state, indent=1)
 
     # ------------------------------------------------------------------ core --
     def daily_manage(self, prices_by_symbol: dict[str, float], strat: dict,

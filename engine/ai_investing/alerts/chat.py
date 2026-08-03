@@ -280,6 +280,7 @@ class ChatBot:
         if comp:
             lines.append(f"you vs formula-only: ${comp.get('input_value', 0):+,.0f}")
         total_cash = float(s.get("cash", 0) or 0)
+        total_equity = float(s.get("equity", 0) or 0)
 
         # All four books, always. Reporting only two understated capital by
         # $103,333 and hid an event sleeve that had stopped trading. If a book
@@ -301,15 +302,27 @@ class ChatBot:
             note = ""
             if fname == "crypto_state.json" and book.get("bear_mode"):
                 note = "  🐻 bear mode"
-            lines.append(f"\n{icon} *{title}* — cash ${cash:,.0f}{note}")
+            eq = blob.get("equity", book.get("equity"))
+            head = f"equity *${float(eq):,.0f}*  cash ${cash:,.0f}" if eq is not None \
+                else f"cash ${cash:,.0f}"
+            total_equity += float(eq) if eq is not None else cash
+            lines.append(f"\n{icon} *{title}* — {head}{note}")
             for p in (book.get("positions") or [])[:15]:
                 direction = "long" if p["qty"] > 0 else "short"
-                lines.append(f"  {p['symbol']}: {direction} {abs(p['qty']):.4f} "
-                             f"@ ${p['avg_price']:,.2f}")
+                row = (f"  {p['symbol']}: {direction} {abs(p['qty']):.4f} "
+                       f"@ ${p['avg_price']:,.2f}")
+                if p.get("pnl") is not None:
+                    row += f" → pnl ${p['pnl']:,.0f}"
+                lines.append(row)
             if not book.get("positions"):
                 lines.append(f"  ({empty})")
 
-        lines.append(f"\n💰 *total cash across all books* ${total_cash:,.0f}")
+        # Equity is the headline, not cash. Short positions credit cash that is
+        # still owed, so a cash total OVERSTATES the portfolio — it read $409k
+        # against a real $400k. Cash is kept beside it because how much is
+        # uncommitted still matters, but it must not be the number in bold.
+        lines.append(f"\n💰 *total portfolio value* ${total_equity:,.0f}"
+                     f"   (cash ${total_cash:,.0f})")
         return "\n".join(lines)
 
     def _fmt_news(self) -> str:

@@ -157,6 +157,24 @@ class Runner:
         if moved:
             self._spot_marked = moved
 
+    def _mark_books(self, px_by_sym: dict) -> None:
+        """Mark every book to market, independent of its trading logic.
+
+        Each book decides for itself when to TRADE (daily, on shocks, always),
+        but they must all be VALUED every cycle or their persisted equity goes
+        stale. Failures are per-book and non-fatal: an unmarkable book must not
+        stop the others, and must never stop the engine.
+        """
+        from ai_investing.strategy.crypto_book import CryptoBook
+        from ai_investing.strategy.event_sleeve import EventSleeve
+        from ai_investing.strategy.investor import Investor
+        for name, cls in (("crypto", CryptoBook), ("event sleeve", EventSleeve),
+                          ("investor", Investor)):
+            try:
+                cls(self.settings).mark(px_by_sym)
+            except Exception as exc:                    # noqa: BLE001
+                print(f"  [mark:{name}] skipped: {type(exc).__name__}: {exc}")
+
     def _build_watchlist(self) -> list[Asset]:
         stocks = [Asset(s, AssetClass.STOCK) for s in self.settings.stock_watchlist]
         crypto = [Asset(s, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
@@ -263,6 +281,13 @@ class Runner:
 
         # Shadow "formula-only" portfolio — what the model would do ignoring your input.
         self._run_shadow(prices, context, bars_by_key, bad_data)
+
+        # Value EVERY book every cycle, whatever its trading logic did. The
+        # investing book gates to once a day and the sleeve only wakes on fresh
+        # shocks, so without this their saved value goes stale while positions
+        # move — and a reader falling back to cash overstates any book holding
+        # shorts (the portfolio read $409k against a real $400k).
+        self._mark_books({a.symbol: prices.get(a.key, 0.0) for a in self.assets})
 
         executed: list[Order] = []
 

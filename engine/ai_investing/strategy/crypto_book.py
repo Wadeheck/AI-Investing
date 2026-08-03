@@ -86,6 +86,40 @@ class CryptoBook:
         except (OSError, json.JSONDecodeError):
             return {}
 
+
+    def _stamp_marks(self, prices: dict) -> None:
+        """Record equity and per-position marks into the saved state.
+
+        Readers (the Telegram portfolio, any dashboard) only have the state
+        file. Without marks they can show cash but not VALUE — and cash alone
+        is actively misleading once a book holds shorts, because short proceeds
+        sit in cash that is still owed. The engine already has prices every
+        cycle; persisting them here means no reader ever needs to refetch.
+        """
+        b = self._state.get("broker") or {}
+        mv = 0.0
+        for p in b.get("positions", []):
+            px = float(prices.get(p.get("symbol"), 0.0) or 0.0)
+            if px > 0:
+                p["price"] = round(px, 6)
+                p["pnl"] = round((px - float(p.get("avg_price", 0))) * float(p.get("qty", 0)), 2)
+                mv += float(p.get("qty", 0)) * px
+        if any(p.get("price") for p in b.get("positions", [])) or not b.get("positions"):
+            self._state["equity"] = round(float(b.get("cash", 0.0)) + mv, 2)
+            self._state["marked_at"] = datetime.now(timezone.utc).isoformat()
+
+    def mark(self, prices: dict) -> None:
+        """Value the book without trading it.
+
+        Valuation must not depend on whether the trading logic happened to run:
+        this book gates itself (once a day, or only on fresh shocks), so its
+        saved state could sit unmarked for hours while the positions moved. A
+        reader would then show a stale value, or fall back to cash and overstate
+        a book holding shorts.
+        """
+        self._stamp_marks(prices)
+        self._save()
+
     def _save(self) -> None:
         self._state["broker"] = self.broker.state()
         self._state["ts"] = datetime.now(timezone.utc).isoformat()
@@ -318,6 +352,7 @@ class CryptoBook:
             self._log("mark", equity=round(eq, 2), cash=round(self.broker.get_cash(), 2),
                       positions=len(self.broker.get_positions()),
                       bear=bool(bear), bear_signals=why)
+        self._stamp_marks(prices)
         self._save()
         return {"equity": round(eq, 2), "cash": round(self.broker.get_cash(), 2),
                 "positions": len(self.broker.get_positions()),

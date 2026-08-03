@@ -154,7 +154,31 @@ book is information; silence is not.**
   on a blanket feed failure. An unfired stop is recoverable; a phantom
   liquidation is not.
 
-### 4.6 Earlier failures, same shape
+### 4.6 The scorecard had never run — and then graded an accounting artefact *(2026-08-03)*
+
+- **What.** `SELECT id, ts, advice FROM advice_log`, but the table is declared
+  `(ts, advice)` — no `id`. Every cycle raised `OperationalError`, was swallowed
+  by the caller's `except`, and printed to a log nobody reads.
+- **Scale.** 195 advice lists logged since 2026-07-26, **0 ever graded**.
+  `update_reliability` had never run. Found only because the mark-to-market
+  work put a fresh eye on the engine log.
+- **Then it got worse.** Fixed (`rowid AS id`), it immediately graded the FX
+  migration as real: 1211.HK "fell" from 94.15 to 12.19 overnight — a unit
+  change, not a move. **72 of 170 outcomes (42%) were FX artefacts**, crediting
+  `short_or_avoid` calls with wins they never earned.
+- **Consequence.** The reported 30-day hit-rate was **0.689**. After restating
+  price history in USD and re-scoring, it is **0.404**. Twenty-eight points of
+  the brain's self-assessed skill were an accounting error — and the same
+  phantom crash had been pulsed into the graph as a genuine price shock via
+  `day_moves`.
+- **Fix.** `scripts/migrate_fx_history.py` restates pre-cutover history in USD
+  and clears contaminated outcomes for honest re-scoring.
+- **Lesson.** A unit change is indistinguishable from a price move to anything
+  reading the series. Any migration that alters recorded values must ask *who
+  else reads this history* — the same discipline as excluding outage-tainted
+  trades from the learning spine.
+
+### 4.7 Earlier failures, same shape
 
 | Failure | Consequence | Found by |
 |---|---|---|
@@ -201,6 +225,11 @@ below a file's `__main__` block never ran at all.
    consistent, and worth revisiting.
 7. **`$25/day` target.** Never demonstrated. No book has produced a verified
    profitable forward record.
+8. **Advice hit-rate is 0.404 over 30 days** — below a coin flip for
+   directional calls, on 170 graded outcomes. This is the first honest reading
+   the system has ever produced (see §4.6); it was 0.689 while contaminated.
+   Whether 0.404 reflects genuine skill deficit or a scoring definition that
+   mixes `long` with `short_or_avoid` has **not** been investigated yet.
 
 ## 6. Known limitations, deliberately not fixed
 

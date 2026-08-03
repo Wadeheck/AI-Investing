@@ -101,7 +101,13 @@ class Scorecard:
         """Score every advice call at least `horizon_days` old and not yet scored."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=horizon_days)).isoformat()
         rows = self.conn.execute(
-            "SELECT id, ts, advice FROM advice_log WHERE ts <= ? ORDER BY id", (cutoff,)).fetchall()
+            # advice_log is declared as (ts, advice) with no explicit id column,
+            # so `SELECT id` raised OperationalError on EVERY cycle and the whole
+            # scoring pass was swallowed by its caller's except. 195 advice lists
+            # were logged and none were ever graded. sqlite's implicit rowid is
+            # the stable key advice_outcomes.advice_id already refers to.
+            "SELECT rowid AS id, ts, advice FROM advice_log WHERE ts <= ? ORDER BY rowid",
+            (cutoff,)).fetchall()
         out: list[dict] = []
         now = datetime.now(timezone.utc).isoformat()
         for aid, ts, blob in rows:
