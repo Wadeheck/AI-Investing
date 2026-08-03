@@ -1,0 +1,9 @@
+[Unit]
+Description=AI-Investing daily corpus digestion (no AI session required)
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+# --catch-up 3 rather than a single day: a missed run must self-heal, and an
+# undigested day is silently read downstream as "nothing happened".
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/digest_day.py --catch-up 3
+TimeoutStartSec=3600

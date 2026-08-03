@@ -1,0 +1,8 @@
+[Unit]
+Description=Digest yesterday's headlines every morning
+[Timer]
+# 09:20 SGT — after the 4-hourly RSS pull has closed out the previous day
+OnCalendar=*-*-* 01:20:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
