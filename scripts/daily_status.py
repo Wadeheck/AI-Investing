@@ -134,8 +134,16 @@ def main() -> int:
                 frac = 100.0 * tok / cap
                 worst = max(worst, frac)
                 parts.append(f"{model[-5:]}={tok / 1000:.0f}k({frac:.1f}%)")
-            ok &= row("LLM free allowance", worst < 80,
-                      f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each")
+            # Project to end-of-day: 26% used at 10:00 UTC is on track for 62%,
+            # and knowing that BEFORE the cap is hit is the whole point. Total
+            # capacity is 3 endpoints x cap, and the chain rotates away from an
+            # exhausted one, so this warns rather than alarms.
+            elapsed_h = max(NOW.hour + NOW.minute / 60.0, 0.5)
+            proj = max((100.0 * t / cap) * 24.0 / elapsed_h
+                       for t in u.get("by_model", {}).values()) if u.get("by_model") else 0.0
+            ok &= row("LLM free allowance", proj < 100,
+                      f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
+                      f" — busiest projects to {proj:.0f}% by day end")
         else:
             row("LLM free allowance", True, "no calls yet today")
     except (OSError, json.JSONDecodeError):

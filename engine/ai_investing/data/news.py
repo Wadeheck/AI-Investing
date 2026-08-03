@@ -106,6 +106,29 @@ def _record_usage(settings, model: str, tokens: int) -> None:
         pass
 
 
+_FREE_BUDGET_USE = 0.90        # rotate away once an endpoint is 90% spent
+
+
+def _over_free_budget(settings, model: str) -> bool:
+    """Has this endpoint used up (most of) today's free allowance?
+
+    Deliberately fails OPEN: if usage cannot be read, the endpoint is treated as
+    available. Blocking a model because a metering file is unreadable would stop
+    the brain reading the news, which is far worse than an unmetered call.
+    """
+    cap = getattr(settings, "llm_daily_free_tokens", 0) or 0
+    if cap <= 0:
+        return False
+    try:
+        with open(_usage_path(settings)) as fh:
+            data = json.load(fh)
+        if data.get("day") != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            return False
+        return float(data.get("by_model", {}).get(model, 0)) >= cap * _FREE_BUDGET_USE
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return False
+
+
 def _byteplus_chain(settings, tier: str) -> list[str]:
     """Endpoints to try, in order, for this tier."""
     chain = list(settings.byteplus_chain_smart if tier == "smart"
@@ -127,7 +150,15 @@ def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
     """
     now = time.time()
     last_exc: Optional[Exception] = None
-    for model in _byteplus_chain(settings, tier):
+    chain = _byteplus_chain(settings, tier)
+    # Prefer endpoints with free allowance left. Crossing a free tier does not
+    # error -- the provider simply starts charging -- so failover-on-exception
+    # would never trigger and the spend would be silent. Measured volume is
+    # ~3.2M tokens/day against a 5M cap per endpoint, so this is live, not
+    # theoretical. Order is preserved among endpoints that still have room, so
+    # the best-scoring model is still preferred while it is free.
+    spare = [m for m in chain if not _over_free_budget(settings, m)]
+    for model in (spare or chain):
         if now - _ENDPOINT_COOLDOWN.get(model, 0.0) < _COOLDOWN_S:
             continue
         try:
