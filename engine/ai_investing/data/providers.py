@@ -194,6 +194,38 @@ class CompositeDataProvider(DataProvider):
         return fn(symbols) if fn else {}
 
 
+class UsdNormalizingProvider(DataProvider):
+    """Wraps a provider so every bar comes back priced in USD.
+
+    Placed at the data layer on purpose. The engine holds HK, KR, JP, TW, CN
+    and EU names alongside US ones and sums them into a single equity figure;
+    without this, 1,591,000 KRW read as $1,591,000 and the sizer bought a
+    thousandth of a share. Normalising here means signals, sizing, stops, P&L
+    and the learning spine all reason in one unit without knowing FX exists.
+    Fixing it only at display would have left the trading maths just as wrong.
+    """
+
+    name = "usd-normalized"
+
+    def __init__(self, inner: DataProvider, settings):
+        self.inner, self.settings = inner, settings
+
+    def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
+        bars = self.inner.get_bars(asset, limit)
+        if not bars:
+            return bars
+        from ai_investing.data import fx
+        rate = fx.rate_for(asset.symbol, self.settings, asset.asset_class.value)
+        if not rate or rate <= 0:
+            return bars
+        return [Bar(b.ts, b.open / rate, b.high / rate, b.low / rate,
+                    b.close / rate, b.volume) for b in bars]
+
+    def spot(self, symbols: list[str]) -> dict[str, float]:
+        fn = getattr(self.inner, "spot", None)
+        return fn(symbols) if fn else {}
+
+
 def get_provider(settings) -> DataProvider:
     """Build the provider stack from settings, with graceful fallbacks."""
     kind = (settings.data_provider or "synthetic").lower()
@@ -209,4 +241,5 @@ def get_provider(settings) -> DataProvider:
         stock = SyntheticDataProvider()
     crypto: DataProvider = (CcxtDataProvider(settings.crypto_exchange, tf)
                             if kind in ("ccxt", "yfinance", "stooq") else SyntheticDataProvider())
-    return CompositeDataProvider(stock, crypto)
+    # crypto pairs are already USD-quoted; only the stock leg needs converting
+    return CompositeDataProvider(UsdNormalizingProvider(stock, settings), crypto)

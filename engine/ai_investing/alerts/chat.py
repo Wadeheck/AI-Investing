@@ -279,14 +279,37 @@ class ChatBot:
             lines.append("  (no open positions)")
         if comp:
             lines.append(f"you vs formula-only: ${comp.get('input_value', 0):+,.0f}")
-        inv = self._read("invest_state.json").get("broker") or {}
-        if inv:
-            lines.append(f"\n🏛 *Investing book* — cash ${inv.get('cash', 0):,.0f}")
-            for p in inv.get("positions", [])[:15]:
+        total_cash = float(s.get("cash", 0) or 0)
+
+        # All four books, always. Reporting only two understated capital by
+        # $103,333 and hid an event sleeve that had stopped trading. If a book
+        # is idle that is information; silence is not.
+        for icon, title, fname, empty in (
+                ("🏛", "Investing book", "invest_state.json",
+                 "no positions yet — theses awaiting your approval"),
+                ("⚡", "Event sleeve", "event_state.json",
+                 "no fresh shocks above threshold"),
+                ("₿", "Crypto book", "crypto_state.json",
+                 "flat — in cash"),
+        ):
+            blob = self._read(fname)
+            book = blob.get("broker") if isinstance(blob.get("broker"), dict) else blob
+            if not book:
+                continue
+            cash = float(book.get("cash", 0) or 0)
+            total_cash += cash
+            note = ""
+            if fname == "crypto_state.json" and book.get("bear_mode"):
+                note = "  🐻 bear mode"
+            lines.append(f"\n{icon} *{title}* — cash ${cash:,.0f}{note}")
+            for p in (book.get("positions") or [])[:15]:
                 direction = "long" if p["qty"] > 0 else "short"
-                lines.append(f"  {p['symbol']}: {direction} {abs(p['qty']):.4f} @ ${p['avg_price']:,.2f}")
-            if not inv.get("positions"):
-                lines.append("  (no positions yet — theses awaiting your approval)")
+                lines.append(f"  {p['symbol']}: {direction} {abs(p['qty']):.4f} "
+                             f"@ ${p['avg_price']:,.2f}")
+            if not book.get("positions"):
+                lines.append(f"  ({empty})")
+
+        lines.append(f"\n💰 *total cash across all books* ${total_cash:,.0f}")
         return "\n".join(lines)
 
     def _fmt_news(self) -> str:
