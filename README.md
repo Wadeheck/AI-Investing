@@ -13,6 +13,13 @@ paper or live brokers. It also produces a **global briefing** to keep you inform
 > risk only what you can afford to lose. In Singapore, prefer MAS-regulated venues
 > (see below).
 
+> 📋 **Read [`docs/STATE_OF_THE_SYSTEM.md`](docs/STATE_OF_THE_SYSTEM.md) first.**
+> It is the honest status: what works, every defect found and how, and — most
+> importantly — what remains **unverified**. This README describes what the
+> system *does*; that document describes how much of it is *proven*. Headline:
+> no broker adapter has ever touched a funded account, and the learning spine
+> has 0 settled claims.
+
 ---
 
 ## What it does
@@ -30,7 +37,11 @@ paper or live brokers. It also produces a **global briefing** to keep you inform
 ### The signals (`engine/ai_investing/signals/`)
 - **momentum** — fast vs slow SMA trend, tempered by RSI extremes.
 - **mean_reversion** — fades statistical extremes (z-score vs a volatility band).
-- **sentiment** — per-asset news sentiment scored by an LLM (priority: Claude > BytePlus > DeepSeek, based on which API key is set).
+- **sentiment** — per-asset news sentiment scored by an LLM. Routing is
+  **quality-first with a local fallback**: three authorized BytePlus endpoints
+  in a failover chain (Seed-2.0-pro → DeepSeek-V3.2 → Seed-2.0-lite), each with
+  a free daily allowance. Reading the world is the one job worth paying for —
+  a local 8B model was doing it and was discarding 57% of what it read.
 - **political_hype** — **the anti-manipulation edge.** Detects sharp price+volume
   pumps, *especially* when they coincide with promotional or political news (a
   president/official hyping an asset, meme-coin launches), and returns a **negative
@@ -278,11 +289,13 @@ Four ways to run this, from quickest to most production-grade:
 2. **Local, production dashboard build** — `make run-prod` builds the dashboard
    (`next build && next start`) instead of running its dev server. Still one
    foreground process you keep open.
-3. **systemd (always-on, single host)** — `deploy/install.sh` installs three
-   units: `ai-investing-engine.service` (the loop), `ai-investing-dashboard.service`
-   (production dashboard), and `ai-investing-watchdog.timer` (runs `--watchdog`
-   every 5 min — the dead-man's switch described above). Requires `sudo`; review
-   the unit files in `deploy/` first. Survives reboots and crashes.
+3. **systemd user units (always-on, the supported path)** — the live setup.
+   `deploy/systemd/` holds `ai-investing.service` (engine, `Restart=always`),
+   `ai-investing-chat.service` (Telegram bot — its own lifecycle, it does *not*
+   restart with the engine), plus watchdog, backup and logrotate timers.
+   **`sudo loginctl enable-linger <user>` is required**, otherwise the services
+   stop the moment you log out — on a headless box they would only run while
+   you are SSH'd in. Full runbook: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 4. **Docker** — `docker compose up -d --build` builds and runs the engine and
    dashboard as containers (`engine/Dockerfile`, `dashboard/Dockerfile`,
    `docker-compose.yml`). `data/` and `.env` are bind-mounted from the repo so
