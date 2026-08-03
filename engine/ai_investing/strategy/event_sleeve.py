@@ -91,17 +91,19 @@ class EventSleeve:
     def mark(self, prices: dict) -> None:
         """Value the book without trading it.
 
-        Valuation must not depend on whether the trading logic happened to run:
-        this book gates itself (once a day, or only on fresh shocks), so its
-        saved state could sit unmarked for hours while the positions moved. A
-        reader would then show a stale value, or fall back to cash and overstate
-        a book holding shorts.
+        Valuation must not depend on whether the trading logic ran: this book
+        gates itself (once a day, or only on fresh shocks), so its saved state
+        could sit unmarked for hours while positions moved.
         """
-        self._stamp_marks(prices)
+        self._mark_prices = prices
         self._save()
 
     def _save(self) -> None:
         self._state["broker"] = self.broker.state()
+        # AFTER the refresh: broker.state() rebuilds the positions list, so
+        # marks written before this line are silently discarded.
+        if getattr(self, "_mark_prices", None):
+            self._stamp_marks(self._mark_prices)
         self._state["ts"] = datetime.now(timezone.utc).isoformat()
         try:
             atomic.write_json(self.path, self._state, indent=1)
@@ -214,7 +216,7 @@ class EventSleeve:
             self._state["last_mark"] = today
             self._log("mark", equity=round(eqnow, 2), cash=round(self.broker.get_cash(), 2),
                       positions=len(self.broker.get_positions()))
-        self._stamp_marks(prices_by_sym)
+        self._mark_prices = prices_by_sym
         self._save()
         return {"opened": opened, "closed": closed,
                 "equity": round(self._equity(prices_by_sym), 2),
