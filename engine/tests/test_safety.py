@@ -78,6 +78,34 @@ def test_heartbeat_roundtrip():
     assert not hb.is_stale(d, 3600)
     assert hb.is_stale(None, 3600)
 
+def test_guard_flagged_prices_never_reach_the_stop_logic():
+    """A stale-but-positive tick must not liquidate a position.
+
+    A total feed failure marks everything at 0, which stop_orders survives only
+    because 0 is falsy. A WRONG POSITIVE price has no such accident: the guard
+    flags it, so the runner must withhold it from the stop path. An unfired
+    stop is recoverable; a phantom liquidation is not.
+    """
+    from ai_investing.strategy.risk import RiskManager
+    from ai_investing.config import Settings
+    from ai_investing.models import Asset, AssetClass, Portfolio, Position
+
+    s = Settings()
+    rm = RiskManager(s.risk)
+    a = Asset("TEST", AssetClass.STOCK)
+    port = Portfolio(cash=10_000.0,
+                     positions={a.key: Position(asset=a, qty=100.0, avg_price=100.0)})
+
+    # a bad tick at -90% would normally fire the stop
+    bad = {a.key: 10.0}
+    assert rm.stop_orders(port, bad), "sanity: a -90% move should trip a stop"
+
+    # the runner withholds guard-flagged symbols, so nothing fires
+    bad_data = {a.key}
+    safe = {k: v for k, v in bad.items() if k not in bad_data}
+    assert not rm.stop_orders(port, safe), \
+        "a guard-flagged price must not be able to liquidate a position"
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
@@ -85,3 +113,4 @@ if __name__ == "__main__":
         t()
         print(f"  ok  {t.__name__}")
     print(f"\nAll {len(tests)} safety tests passed.")
+

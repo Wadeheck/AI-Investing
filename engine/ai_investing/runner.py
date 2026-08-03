@@ -286,7 +286,16 @@ class Runner:
             pass
 
         # 2) Protective exits always run (even at caps / bad data); never blocked by slippage.
-        for o in self.risk.stop_orders(portfolio, prices, market=self._stats):
+        # Stops must never act on a price the guard just rejected. A total feed
+        # failure marks every holding at 0 and only survives today because
+        # stop_orders happens to skip falsy prices; a STALE or absurd-but-
+        # POSITIVE tick would sail straight through and liquidate the book at a
+        # fabricated loss. Flagged symbols keep their stops until the data is
+        # trustworthy again -- an unfired stop is recoverable, a phantom
+        # liquidation is not.
+        safe_prices = ({k: v for k, v in prices.items() if k not in bad_data}
+                       if bad_data else prices)
+        for o in self.risk.stop_orders(portfolio, safe_prices, market=self._stats):
             executed.append(self._execute(o, prices, guard_slippage=False))
 
         # 2b) Exit any position you've blocked / de-focused (your input, applied).
