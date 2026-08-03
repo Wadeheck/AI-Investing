@@ -1,4 +1,8 @@
 # Training Record — The Web Learns to Trade
+> ⚠️ **ARCHIVED — not current.** Record of training rounds, but it stops before R22-R37 (the rounds that produced the current four-policy system). Incomplete rather than merely old.
+>
+> Kept because it records *why* a decision was made at the time. Do not use it to understand how the system works today; start at [`docs/status/STATE_OF_THE_SYSTEM.md`](../status/STATE_OF_THE_SYSTEM.md).
+
 
 *Covering 2026-07-26 → 2026-07-28. Every number here survived the anti-cheat
 protocol or is labeled as the failure it was. Latest state: see
@@ -219,7 +223,7 @@ ratchet path-dependence); the crypto book ≈ hodl's return at 8pts less DD
 and beats a flat BTC year +21% vs +6% on the holdout. Crypto's holdout-
 window DD of −25.4% breaches the 25% screen within-window (the continuous
 number passes). The lockbox remains UNSPENT. Next: Guardian re-digestion
-(79,924 headlines archived, all 1,123 days) through docs/DIGESTION_SPEC.md,
+(79,924 headlines archived, all 1,123 days) through docs/data-pipeline/DIGESTION_SPEC.md,
 then rounds R16–R25.
 
 ## 8b. v2.1/v2.2 (2026-07-28 afternoon): truer physics, the leverage bug, and the two-sleeve breakthrough

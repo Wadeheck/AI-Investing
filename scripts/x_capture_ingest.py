@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ingest a browser X-capture harvest into data/news_archive_x.jsonl.
 
-The browser session (docs/X_BROWSER_CAPTURE.md) runs the in-page harvester and
+The browser session (docs/data-pipeline/X_BROWSER_CAPTURE.md) runs the in-page harvester and
 gets back rows of {u, t, x} — status-url, ISO datetime, text. This script does
 everything after that, so the AI session only has to paste the harvest:
 

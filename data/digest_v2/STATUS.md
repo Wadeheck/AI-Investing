@@ -1,7 +1,7 @@
 # Digestion Status & Continuation Orders
 
 *Rewritten 2026-07-31 (night) — all six marching orders below are now
-COMPLETE. Read together with `docs/SONNET_DIGEST_BRIEF.md` (**v1.4** — the
+COMPLETE. Read together with `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` (**v1.4** — the
 operating instructions) and `data/digest_v2/README.md` (workspace layout +
 retention rules).*
 
@@ -116,7 +116,7 @@ rounds is still pending (next step below).
 - **Human review** of the proposed_edges/integrity backlog above before
   anything touches the graph.
 - **Event-study calibration (B2) and trainer rounds** — see
-  `docs/DIGESTION_SPEC.md` §B6.
+  `docs/data-pipeline/DIGESTION_SPEC.md` §B6.
 - **Edge re-weighting from data** — its own gated round
   (`DIGESTION_SPEC.md` B3/R21-learned-edges), code-side, not digester work.
 
@@ -126,7 +126,7 @@ rounds is still pending (next step below).
   events; superseded by the v1.4 amendment pass above, which layered
   additional node coverage on top without touching the originals).
 - Full backfill through 2026-07-28 completed by 9 parallel agents, merged
-  in commit `658444d` (`docs/NODE_GRAPH_GAP_ANALYSIS.md`).
+  in commit `658444d` (`docs/archive/NODE_GRAPH_GAP_ANALYSIS.md`).
 - 2026-07-31: v1.4 node-gap amendment pass (8 parallel date-chunk agents),
   asset-tag fix, sequential 2026-07-29/30 digestion, merge/rebuild, and the
   full YouTube dossier pass — all completed in one session.

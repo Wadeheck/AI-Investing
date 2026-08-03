@@ -227,7 +227,7 @@ SEED_NODES = [
      "equilibrium": "+1 = custodial integrity risk RISING (halts, reserve doubts, "
                     "own-token collateral) — the FTX/Celsius/Mt.Gox mechanism"},
     # ------------- node-graph gap analysis (seed v12) -------------
-    # Factors/themes promoted from docs/NODE_GRAPH_GAP_ANALYSIS.md — each backed
+    # Factors/themes promoted from docs/archive/NODE_GRAPH_GAP_ANALYSIS.md — each backed
     # by dated digestion evidence of stories skipped or force-tagged to a proxy.
     {"id": "political_stability", "type": "factor",
      "label": "Political instability (up = crises rising)",

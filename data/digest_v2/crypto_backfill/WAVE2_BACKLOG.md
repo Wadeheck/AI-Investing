@@ -668,6 +668,6 @@ Output: `events_amend_crypto/<date>.json`. After the wave: run
 - Most 2023-11 → 2025-11 entries are **thin days (1 headline)** — usually a
   single Wu Blockchain weekly post on a date GDELT hasn't fetched yet. Batch
   them cheaply (many days per agent); expect mostly `add_nodes`/skip outcomes.
-- The GDELT crawler is PAUSED; when resumed (docs/DAILY_LOOP.md §1) it will
+- The GDELT crawler is PAUSED; when resumed (docs/data-pipeline/DAILY_LOOP.md §1) it will
   fill 2024-2025 and this backlog will grow — regenerate this file by
   re-running `_stage.py` and the generator in git history, or just ask.

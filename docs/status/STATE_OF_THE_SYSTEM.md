@@ -55,7 +55,7 @@ correlation convergence, τ-delayed edges, per-type half-lives.
 | ⚡ event sleeve | 2 days | fresh shocks only, long-only, unlevered |
 | ₿ crypto | 24/7 | own bear-exit logic, HODL core + tactical |
 
-**The learning spine** (`docs/LEARNING.md`) — Beta posteriors over directional
+**The learning spine** (`docs/design/LEARNING.md`) — Beta posteriors over directional
 skill, conditioned on regime; sizing shrunk by sample count; weekly capital
 reallocation with floors, ceilings and a rate limit; drift and regime-break
 detection. The rule that matters: *the fast loop adjusts sizing and
@@ -220,13 +220,13 @@ below a file's `__main__` block never ran at all.
 
 ## 7. Operating it
 
-See **`docs/OPERATIONS.md`** for the runbook: systemd units, the watchdog,
+See **`docs/status/OPERATIONS.md`** for the runbook: systemd units, the watchdog,
 backups, the mini-PC migration, and the one command (`loginctl enable-linger`)
 without which none of the supervision survives a logout.
 
-Related: `docs/LEARNING.md` (the learning design and its reward contract),
-`docs/BRAIN.md` (graph semantics), `docs/SONNET_DIGEST_BRIEF.md` (corpus
-tagging spec), `docs/DAILY_LOOP.md` (data cadence).
+Related: `docs/design/LEARNING.md` (the learning design and its reward contract),
+`docs/design/BRAIN.md` (graph semantics), `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` (corpus
+tagging spec), `docs/data-pipeline/DAILY_LOOP.md` (data cadence).
 
 ## 8. The one thing to remember
 

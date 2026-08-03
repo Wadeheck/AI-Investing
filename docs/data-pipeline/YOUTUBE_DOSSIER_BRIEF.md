@@ -1,6 +1,6 @@
 # Operational Briefing — YouTube Transcript Dossier Pass (Claude Sonnet 5)
 
-*Version 1.0, 2026-07-31. Companion to `docs/SONNET_DIGEST_BRIEF.md` (v1.4).
+*Version 1.0, 2026-07-31. Companion to `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` (v1.4).
 This is a SEPARATE, ONE-TIME pass over `data/youtube_transcripts/` — it is
 NOT news digestion, and its output is never events or impulses.*
 

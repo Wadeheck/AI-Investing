@@ -1630,7 +1630,7 @@ def use_v2_digest() -> None:
 
 def preflight_data() -> bool:
     """The replay's edge lives in the digested news (price-only = no edge,
-    see docs/TRAINING_RECORD.md Stage 0). Refuse to train without it rather
+    see docs/archive/TRAINING_RECORD.md Stage 0). Refuse to train without it rather
     than silently producing non-comparable numbers on a data-less checkout."""
     missing = [str(p) for p in (ARCHIVE, IMPULSES) if not p.exists()]
     if missing:

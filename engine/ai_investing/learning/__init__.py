@@ -1,6 +1,6 @@
 """The adaptive learning engine: a parametric decision formula whose weights (theta)
 are curated offline (walk-forward ridge fit) and matured online (regularized RLS on
-realized P&L). See docs/FORMULA.md for the math."""
+realized P&L). See docs/design/FORMULA.md for the math."""
 from ai_investing.learning.features import FEATURE_NAMES, FeatureExtractor
 from ai_investing.learning.formula import FormulaModel
 from ai_investing.learning.online import RLSLearner

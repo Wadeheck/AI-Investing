@@ -40,7 +40,7 @@ try:
 except FileNotFoundError:
     pass
 
-# Curated-X browser captures (see docs/X_BROWSER_CAPTURE.md) — day-records
+# Curated-X browser captures (see docs/data-pipeline/X_BROWSER_CAPTURE.md) — day-records
 try:
     for line in open(os.path.join(DATA, "news_archive_x.jsonl")):
         r = json.loads(line)

@@ -5,7 +5,7 @@
     target_wt  = deadzone(conviction, τ) · size_scale     ∈ [−1, 1]
 
 θ (the `weights`) and the scalar hyperparameters below are the "decision variables"
-the learning engine curates and matures. See docs/FORMULA.md.
+the learning engine curates and matures. See docs/design/FORMULA.md.
 """
 from __future__ import annotations
 

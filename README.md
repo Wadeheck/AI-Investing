@@ -13,7 +13,8 @@ paper or live brokers. It also produces a **global briefing** to keep you inform
 > risk only what you can afford to lose. In Singapore, prefer MAS-regulated venues
 > (see below).
 
-> 📋 **Read [`docs/STATE_OF_THE_SYSTEM.md`](docs/STATE_OF_THE_SYSTEM.md) first.**
+> 📋 **Read [`docs/status/STATE_OF_THE_SYSTEM.md`](docs/status/STATE_OF_THE_SYSTEM.md) first**
+> (full doc index: [`docs/README.md`](docs/README.md)).
 > It is the honest status: what works, every defect found and how, and — most
 > importantly — what remains **unverified**. This README describes what the
 > system *does*; that document describes how much of it is *proven*. Headline:
@@ -137,7 +138,7 @@ Docs: [moomoo](https://openapi.moomoo.com/moomoo-api-doc/en/) ·
 
 ---
 
-## The adaptive formula (see `docs/FORMULA.md`)
+## The adaptive formula (see `docs/design/FORMULA.md`)
 Decisions come from a learned formula `conviction = tanh(gain · θ·φ)` whose weights `θ`
 are **curated offline** (walk-forward ridge fit + champion/challenger) and **matured
 online** (regularized RLS from realized P&L). It targets long-run Sharpe, not last-trade
@@ -295,7 +296,7 @@ Four ways to run this, from quickest to most production-grade:
    restart with the engine), plus watchdog, backup and logrotate timers.
    **`sudo loginctl enable-linger <user>` is required**, otherwise the services
    stop the moment you log out — on a headless box they would only run while
-   you are SSH'd in. Full runbook: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+   you are SSH'd in. Full runbook: [`docs/status/OPERATIONS.md`](docs/status/OPERATIONS.md).
 4. **Docker** — `docker compose up -d --build` builds and runs the engine and
    dashboard as containers (`engine/Dockerfile`, `dashboard/Dockerfile`,
    `docker-compose.yml`). `data/` and `.env` are bind-mounted from the repo so

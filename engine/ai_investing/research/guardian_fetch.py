@@ -1,7 +1,7 @@
 """Guardian Open Platform historical backfill: market-grade headlines for
 every calendar day of the replay window, to fill/replace the wiki-thin days.
 
-Design (lessons from the GDELT scars in docs/TRAINING_RECORD.md):
+Design (lessons from the GDELT scars in docs/archive/TRAINING_RECORD.md):
   - RESUMABLE: skips days already recorded; safe to re-run any time.
   - HONEST: a throttled/failed request is NEVER recorded as a quiet news day —
     only HTTP-200 status:ok responses are written.

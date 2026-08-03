@@ -1,7 +1,7 @@
 # The Pipeline — global news → nodes → ripple → 10 trades
 
 **Status: design, agreed direction.** This is the target architecture for turning
-the Brain (docs/BRAIN.md) into the full loop the project is aiming at:
+the Brain (docs/design/BRAIN.md) into the full loop the project is aiming at:
 
 > ingest global information continuously → digest each item ONCE and remember it
 > locally → feed the relevant nodes → propagate through the field → rank and

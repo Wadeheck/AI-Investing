@@ -6,7 +6,7 @@ one bar when a new 5m bar closes, and write data/scalp_state.json for the
 dashboard (/scalp).
 
 The 2026-08-01 backtest killed all four families on the holdout (see
-data/scalp_backtest.json + docs/SCALP_MODEL.md). The paper book therefore
+data/scalp_backtest.json + docs/research/SCALP_MODEL.md). The paper book therefore
 runs as a FORWARD TEST at minimal risk — the signals stay visible and every
 outcome is logged, but this earns promotion only by building a live paper
 record, exactly like the main engine's scorecard philosophy.

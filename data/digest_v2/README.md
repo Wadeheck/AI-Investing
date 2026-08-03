@@ -2,8 +2,8 @@
 
 **This folder is the single working area for the v2 news digestion.**
 Everything the digester reads and writes lives here or is listed here.
-Governing documents: `docs/SONNET_DIGEST_BRIEF.md` (the digester's system
-prompt, authoritative) and `docs/DIGESTION_SPEC.md` (curriculum + formula
+Governing documents: `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` (the digester's system
+prompt, authoritative) and `docs/data-pipeline/DIGESTION_SPEC.md` (curriculum + formula
 plan).
 
 ## Layout

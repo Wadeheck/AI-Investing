@@ -1,4 +1,4 @@
-"""Four scalp strategy families from the six-doc synthesis (docs/SCALP_MODEL.md).
+"""Four scalp strategy families from the six-doc synthesis (docs/research/SCALP_MODEL.md).
 
 Each returns an order INTENT: dict(side=+1/-1, entry, stop, target, tag, ttl)
 or None. Entries are resting LIMITS (maker). Stops are structural but floored

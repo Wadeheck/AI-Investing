@@ -1,6 +1,6 @@
 # Crypto-backfill digestion campaign — orders for the Sonnet digester
 
-*Created 2026-08-01. Companion to `docs/SONNET_DIGEST_BRIEF.md` (v1.4 —
+*Created 2026-08-01. Companion to `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` (v1.4 —
 every rule there applies unchanged; this file only adds campaign-specific
 protocol, exactly as the node-gap amendment pass did). Operator context in
 `../STATUS.md`.*

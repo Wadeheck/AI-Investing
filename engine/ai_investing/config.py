@@ -145,7 +145,7 @@ class AltDataConfig:
 
 @dataclass
 class BrainConfig:
-    """The macro & relationship intelligence layer (see docs/BRAIN.md)."""
+    """The macro & relationship intelligence layer (see docs/design/BRAIN.md)."""
     enabled: bool = field(default_factory=lambda: _get_bool("BRAIN_ENABLED", True))
     graph_path: str = field(default_factory=lambda: _get("BRAIN_GRAPH_PATH", str(PROJECT_ROOT / "data" / "knowledge_graph.json")))
     regime_path: str = field(default_factory=lambda: _get("BRAIN_REGIME_PATH", str(PROJECT_ROOT / "data" / "macro_regime.json")))

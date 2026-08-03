@@ -1,4 +1,8 @@
 # Node Graph Gap Analysis
+> ⚠️ **ARCHIVED — not current.** Drove the seed expansion from 173 nodes. The graph is now 321 nodes / 690 edges at seed v25, so the specific gaps listed here are mostly closed and the counts are wrong.
+>
+> Kept because it records *why* a decision was made at the time. Do not use it to understand how the system works today; start at [`docs/status/STATE_OF_THE_SYSTEM.md`](../status/STATE_OF_THE_SYSTEM.md).
+
 
 *Compiled 2026-07-29, updated continuously as digestion proceeds past
 2023-08-09. Every gap below is backed by specific stories that were skipped
@@ -999,7 +1003,7 @@ Not a node gap, but directly relevant to trusting the `proposed_edges`
 mechanism I'm asked to use sparingly (§12 of the brief) — worth flagging
 since it affects how much weight to put on that feature going forward.
 
-Both `docs/DIGESTION_SPEC.md` (§A10: *"Proposals are queued for
+Both `docs/data-pipeline/DIGESTION_SPEC.md` (§A10: *"Proposals are queued for
 human/trainer review, never auto-applied"*) and `SONNET_DIGEST_BRIEF.md`
 (§12: *"Proposals are reviewed by humans; they are never auto-applied"*)
 describe a review queue. **The actual code has no queue** —
@@ -2013,7 +2017,7 @@ tagging any event, check each candidate node's polarity convention
 independently; only share a single polarity value across nodes when their
 conventions are confirmed to move in the same direction for this event
 type, otherwise split into parallel event objects. This should be added to
-`docs/DIGESTION_SPEC.md` as a named rule, since it will recur any time a
+`docs/data-pipeline/DIGESTION_SPEC.md` as a named rule, since it will recur any time a
 single story touches both a sentiment/tension node and a priced-commodity-
 supply node (e.g. future Taiwan Strait-China tension stories touching
 `semis`/chip supply would have the same shape).
@@ -2172,7 +2176,7 @@ weapons-pause threat materializing into an actual halt (05-08), and the
 China EV tariff threat becoming a formal 100% tariff (05-14). This
 3-for-14-days rate suggests 0.7-0.8 is filling a real gap between "brand
 new story" and "routine update" — worth formalizing in
-`docs/DIGESTION_SPEC.md` as discussed in the 2024-04-13 methodology note.
+`docs/data-pipeline/DIGESTION_SPEC.md` as discussed in the 2024-04-13 methodology note.
 `geopolitical_tension` hit 48.4% (15/31) — effectively tying batch #26's
 record — driven by two simultaneous escalation ladders running in
 parallel for the first time: the Israel-Rafah offensive (accept
@@ -2294,7 +2298,7 @@ checklist item: *before finalizing any event with 2+ nodes, explicitly
 state each node's polarity direction in a scratch note and confirm they
 agree, or split.* Three occurrences across three different batches
 (04-13, 05-30, 06-07) is enough evidence this should go in
-`docs/DIGESTION_SPEC.md` as a named, mandatory check, not just documented
+`docs/data-pipeline/DIGESTION_SPEC.md` as a named, mandatory check, not just documented
 prose in this log that relies on remembering to re-read it.
 
 **New/reinforced macro storylines this batch**: France's snap election
@@ -2466,7 +2470,7 @@ remarks: three notable events**.
    between a macro/geopolitical node and a specific equity/sector node
    (previous four instances were all macro-vs-macro pairs: oil/geopolitics,
    Eurozone unemployment/US GDP, US jobs/fed-rate twice) — worth explicitly
-   generalizing the rule in `docs/DIGESTION_SPEC.md` to "any 2+ node tag,
+   generalizing the rule in `docs/data-pipeline/DIGESTION_SPEC.md` to "any 2+ node tag,
    regardless of node type," not just macro-factor pairs.
 
 4. **Renewed gap evidence — no UK/BoE-specific interest-rate node**: the
@@ -2554,7 +2558,7 @@ since 2022" selloff the very next day (07-24, on capex-ROI skepticism) —
 both tags were individually correct, but a reader scanning the ledger
 without the full narrative arc could mistake this for an inconsistency
 rather than a genuine overnight shift in market framing. Worth a
-`docs/DIGESTION_SPEC.md` note that same-story polarity reversals across
+`docs/data-pipeline/DIGESTION_SPEC.md` note that same-story polarity reversals across
 adjacent days are expected and should be left as-is rather than
 retroactively "smoothed."
 
@@ -2623,7 +2627,7 @@ market pattern rather than noise: investors are pricing Meta's AI capex
 as more credibly tied to an existing high-margin ad business, while
 Microsoft/Alphabet capex is read more skeptically as speculative
 cloud/search-defense spending. Worth a permanent note in
-`docs/DIGESTION_SPEC.md` that same-quarter AI-capex earnings across
+`docs/data-pipeline/DIGESTION_SPEC.md` that same-quarter AI-capex earnings across
 megacap tech should be expected to diverge in market reaction even when
 the underlying financials look similar — do not treat opposite-signed
 `ai_capex_cycle` tags across companies in the same week as a tagging
@@ -2745,7 +2749,7 @@ node both handle rapid sentiment reversal well.
 gains fully round-tripping) demonstrate that a single asset's polarity can
 legitimately flip sign within days without any tagging error. Recommend
 finally converting this from a recurring batch-summary footnote into an
-actual permanent rule in `docs/DIGESTION_SPEC.md`: *same-asset polarity
+actual permanent rule in `docs/data-pipeline/DIGESTION_SPEC.md`: *same-asset polarity
 reversals across adjacent days are expected market behavior, not evidence
 of a mistake — do not retroactively smooth them.*
 
@@ -2874,7 +2878,7 @@ corrections of an actual mistake), this is a case where the split was
 correct *by design* from the start — the two node conventions were never
 in tension, they simply measure different quantities that move in
 naturally opposite directions when supply increases. Worth codifying in
-`docs/DIGESTION_SPEC.md`: the mandatory split-check applies regardless of
+`docs/data-pipeline/DIGESTION_SPEC.md`: the mandatory split-check applies regardless of
 *why* two nodes disagree in sign — mechanical/causal consistency between
 the two real-world quantities does not exempt the tagger from splitting,
 since the ledger format still only carries one polarity value per event

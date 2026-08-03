@@ -1,4 +1,8 @@
 # Upgrade Log — 2026-07-29/30 (seed v11 → v17)
+> ⚠️ **ARCHIVED — not current.** Log of one upgrade round. Kept for provenance; the changes it describes are long since merged.
+>
+> Kept because it records *why* a decision was made at the time. Do not use it to understand how the system works today; start at [`docs/status/STATE_OF_THE_SYSTEM.md`](../status/STATE_OF_THE_SYSTEM.md).
+
 
 One session, eleven layers. Everything below is implemented, wired into the
 live engine, and covered by the test suite (**126 tests passing**). All
@@ -141,7 +145,7 @@ composable for derived indicators.
   BTC/ETH core + 40% momentum tactical, 200d gate + 10%-off-20d-high brake +
   25% vol target → holdout +34%/yr at −23.5% DD vs BTC hodl +12% at −77%;
   bears 2018/covid/2022: −3.5%/−7.5%/−16.4%.
-- **Bear-profit short sleeve** (`docs/SHORT_STRATEGY.md`,
+- **Bear-profit short sleeve** (`docs/research/SHORT_STRATEGY.md`,
   `replay_crypto_short.py`): regime-locked bear-rally fade, 30% cap, squeeze
   stops → 2018 +22%, 2022 +19% standalone; combined book turns 2018 positive
   (+11.6%) for ~2.5pts/yr premium.

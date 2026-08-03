@@ -1,6 +1,6 @@
 """The learning spine: posteriors, regime conditioning, allocation, self-defence.
 
-These tests encode the DESIGN CONTRACT in docs/LEARNING.md. If one fails, the
+These tests encode the DESIGN CONTRACT in docs/design/LEARNING.md. If one fails, the
 learner is either not learning or learning dangerously.
 """
 import os

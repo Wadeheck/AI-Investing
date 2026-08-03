@@ -112,7 +112,7 @@ def main():
         from ai_investing.learning.spine import LearningSpine
         sp = LearningSpine(Settings())
         rep = sp.report()
-        print("\n=== 🎓 LEARNING SPINE (docs/LEARNING.md) ===")
+        print("\n=== 🎓 LEARNING SPINE (docs/design/LEARNING.md) ===")
         if not rep["policies"]:
             print("  no settled claims yet — the loop starts with the first closed trade")
         for pol, b in sorted(rep["policies"].items()):

@@ -1,6 +1,6 @@
 """The learning spine — one coherent learner for an unattended system.
 
-Design and rationale: docs/LEARNING.md. In brief:
+Design and rationale: docs/design/LEARNING.md. In brief:
 
   every decision writes a CLAIM        (policy, driver, regime, expected move)
   every exit settles it                (direction, calibration, cost-aware)
@@ -21,7 +21,7 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 
-# --- learning constants (documented in docs/LEARNING.md §4, §6) -------------
+# --- learning constants (documented in docs/design/LEARNING.md §4, §6) -------------
 N_HALF = 12.0             # sample count at which evidence carries half weight
 EDGE_GAIN = 0.8           # how hard proven edge moves size
 SIZE_BOUNDS = (0.5, 1.4)  # a bad policy shrinks; a good one cannot run away
@@ -119,7 +119,7 @@ class LearningSpine:
         signed = realized_move * (1 if claim["direction"] > 0 else -1)
         ratio = max(-RATIO_CLIP, min(RATIO_CLIP, signed / exp))
 
-        # SCORE (docs/LEARNING.md §3): direction is the only true mistake, and
+        # SCORE (docs/design/LEARNING.md §3): direction is the only true mistake, and
         # conviction makes being wrong worse. Costs must be cleared to count.
         conviction = max(0.2, min(1.0, float(claim.get("signal", 0.2)) * 5))
         if signed <= -cost_frac:
@@ -180,7 +180,7 @@ class LearningSpine:
             b["score"] = score if b["score"] is None else (1 - a) * b["score"] + a * score
             b["recent"] = (b.get("recent") or [])[-(DRIFT_WINDOW - 1):] + [round(ratio, 3)]
 
-    # -- posteriors (docs/LEARNING.md §4) ------------------------------------
+    # -- posteriors (docs/design/LEARNING.md §4) ------------------------------------
     @staticmethod
     def _posterior(b: dict) -> tuple[float, float]:
         """Beta(Jeffreys) mean for P(direction right) and its sample shrink."""
@@ -219,7 +219,7 @@ class LearningSpine:
         blended = 1.0 + shrink * (raw - 1.0)         # toward reality, gradually
         return max(GAIN_BOUNDS[0], min(GAIN_BOUNDS[1], blended))
 
-    # -- self-defence (docs/LEARNING.md §7) ----------------------------------
+    # -- self-defence (docs/design/LEARNING.md §7) ----------------------------------
     def status(self, policy: str) -> str:
         b = (self._s.get("policies") or {}).get(policy) or {}
         rec = b.get("recent") or []
@@ -239,7 +239,7 @@ class LearningSpine:
         graded = [p for p in pols if (self._s["policies"][p].get("n", 0) >= DRIFT_WINDOW)]
         return bool(graded) and all(self.status(p) == "degraded" for p in graded)
 
-    # -- capital allocation, weekly (docs/LEARNING.md §6) --------------------
+    # -- capital allocation, weekly (docs/design/LEARNING.md §6) --------------------
     def risk_budgets(self, policies: list[str]) -> dict:
         """Share of capital per policy: drifts toward demonstrated skill."""
         state = self._s.setdefault("budgets", {})

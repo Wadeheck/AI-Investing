@@ -1,5 +1,5 @@
 """Scalp indicators — everything computable from free Binance 1m klines
-(ts, o, h, l, c, vol, taker_buy_vol, n_trades). See docs/SCALP_MODEL.md.
+(ts, o, h, l, c, vol, taker_buy_vol, n_trades). See docs/research/SCALP_MODEL.md.
 
 delta = taker_buy - taker_sell = 2*taker_buy - vol  (order-flow proxy: who
 crossed the spread). CVD is its running sum. These are the free stand-ins

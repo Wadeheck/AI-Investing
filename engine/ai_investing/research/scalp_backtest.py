@@ -1,5 +1,5 @@
 """Scalp backtest — 60d of Binance 1m data, train 70% / holdout 30%, real
-maker/taker fees. Per docs/SCALP_MODEL.md the kill rule is pre-committed:
+maker/taker fees. Per docs/research/SCALP_MODEL.md the kill rule is pre-committed:
 a family ships only if holdout net > 0 AND daily Sharpe >= 0.5.
 
 Run: .venv/bin/python -m ai_investing.research.scalp_backtest [taker]
