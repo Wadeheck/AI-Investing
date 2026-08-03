@@ -107,6 +107,36 @@ def test_guard_flagged_prices_never_reach_the_stop_logic():
         "a guard-flagged price must not be able to liquidate a position"
 
 
+def test_a_blanket_feed_failure_serves_stale_bars_not_zero():
+    """yfinance throttles by returning empty for EVERY symbol at once. Passing
+    that through as 'no price' becomes price 0 downstream, which marks the book
+    at -100%. Reusing the last good bars keeps the mark honest and lets
+    DataGuard judge staleness on its own terms."""
+    from ai_investing.data.providers import LastGoodBarCache, DataProvider
+    from ai_investing.models import Asset, AssetClass, Bar
+    from datetime import datetime, timezone
+
+    class Flaky(DataProvider):
+        def __init__(self):
+            self.alive = True
+
+        def get_bars(self, asset, limit=200):
+            if not self.alive:
+                return []
+            return [Bar(datetime.now(timezone.utc), 10.0, 11.0, 9.0, 10.5, 1000.0)]
+
+    inner = Flaky()
+    cache = LastGoodBarCache(inner)
+    a = Asset("TEST", AssetClass.STOCK)
+    assert cache.get_bars(a)[-1].close == 10.5
+
+    inner.alive = False                      # the provider starts throttling
+    served = cache.get_bars(a)
+    assert served and served[-1].close == 10.5, \
+        "a throttled feed must not become a zero price"
+
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

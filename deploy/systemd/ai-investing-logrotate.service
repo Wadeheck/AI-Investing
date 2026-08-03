@@ -1,0 +1,6 @@
+[Unit]
+Description=Rotate AI-Investing logs
+[Service]
+Type=oneshot
+# copytruncate means the running engine keeps its open file handle; no restart
+ExecStart=/usr/sbin/logrotate -s /home/eugene/Projects/AI-Investing/data/.logrotate.state /home/eugene/Projects/AI-Investing/logrotate.conf

@@ -28,6 +28,7 @@ import os
 from datetime import datetime, timezone
 
 from ai_investing.brokers.paper import PaperBroker
+from ai_investing.util import atomic
 from ai_investing.models import Asset, AssetClass, Order, Side
 
 EVENT_MIN = float(os.environ.get("EVENT_MIN", "0.05"))
@@ -69,8 +70,7 @@ class EventSleeve:
         self._state["broker"] = self.broker.state()
         self._state["ts"] = datetime.now(timezone.utc).isoformat()
         try:
-            with open(self.path, "w") as fh:
-                json.dump(self._state, fh, indent=1)
+            atomic.write_json(self.path, self._state, indent=1)
         except OSError:
             pass
 

@@ -1,0 +1,27 @@
+[Unit]
+# The engine. Restart=always is the whole point: the 11.9h silent outage
+# happened because boot_start.sh only ran @reboot, so a process that died
+# without a reboot stayed dead until a human noticed.
+Description=AI-Investing engine (paper)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
+# Heal before trading: refresh whatever went stale while we were down and
+# journal the gap, so the learning spine refuses to learn from trades that
+# span it. Absolute path - the working directory is engine/, not the root.
+ExecStartPre=/home/eugene/Projects/AI-Investing/.venv/bin/python /home/eugene/Projects/AI-Investing/scripts/startup_heal.py
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.main
+Restart=always
+RestartSec=20
+# never give up: a crash loop that stops retrying is a silent outage again
+StartLimitBurst=0
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/engine.log
+StandardError=inherit
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

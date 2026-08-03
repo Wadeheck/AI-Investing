@@ -1,0 +1,7 @@
+[Unit]
+Description=Weekly log rotation for AI-Investing
+[Timer]
+OnCalendar=weekly
+Persistent=true
+[Install]
+WantedBy=timers.target

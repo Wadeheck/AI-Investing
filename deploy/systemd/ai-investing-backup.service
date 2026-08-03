@@ -1,0 +1,6 @@
+[Unit]
+Description=AI-Investing daily state snapshot
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/backup.py

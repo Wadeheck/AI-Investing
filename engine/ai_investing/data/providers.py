@@ -14,6 +14,7 @@ import io
 import random
 import urllib.request
 from abc import ABC, abstractmethod
+import time
 from datetime import datetime, timedelta, timezone
 
 from ai_investing.models import Asset, AssetClass, Bar
@@ -177,6 +178,48 @@ class CcxtDataProvider(DataProvider):
         return out
 
 
+class LastGoodBarCache(DataProvider):
+    """Serve the last good bars when the upstream feed returns nothing.
+
+    yfinance rate-limits by answering "possibly delisted; no price data found"
+    for EVERY symbol at once. When that happened the whole book marked at price
+    0: equity read as exactly cash, and only an accident of representation
+    (`if not px` treating 0.0 as falsy) stopped stops from liquidating
+    everything at a fabricated -100%.
+
+    A blanket empty response is far more likely to be the provider throttling
+    us than every holding delisting simultaneously, so the previous bars are
+    reused and the staleness is left for DataGuard to judge on its own terms.
+    Serving a slightly old price is strictly safer than serving no price:
+    downstream, "no price" silently becomes zero.
+
+    Genuinely delisted names age out via the guard's staleness check, so this
+    cannot hide a real problem indefinitely.
+    """
+
+    name = "last-good-cache"
+    MAX_AGE_S = 6 * 3600.0
+
+    def __init__(self, inner: DataProvider):
+        self.inner = inner
+        self._cache: dict[str, tuple[float, list[Bar]]] = {}
+
+    def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
+        bars = self.inner.get_bars(asset, limit)
+        now = time.time()
+        if bars:
+            self._cache[asset.key] = (now, bars)
+            return bars
+        hit = self._cache.get(asset.key)
+        if hit and now - hit[0] < self.MAX_AGE_S:
+            return hit[1]
+        return bars
+
+    def spot(self, symbols: list[str]) -> dict[str, float]:
+        fn = getattr(self.inner, "spot", None)
+        return fn(symbols) if fn else {}
+
+
 class CompositeDataProvider(DataProvider):
     """Routes stocks and crypto to the right underlying provider."""
 
@@ -242,4 +285,6 @@ def get_provider(settings) -> DataProvider:
     crypto: DataProvider = (CcxtDataProvider(settings.crypto_exchange, tf)
                             if kind in ("ccxt", "yfinance", "stooq") else SyntheticDataProvider())
     # crypto pairs are already USD-quoted; only the stock leg needs converting
-    return CompositeDataProvider(UsdNormalizingProvider(stock, settings), crypto)
+    # cache first (absorb blanket feed failures), then normalise to USD
+    return CompositeDataProvider(
+        UsdNormalizingProvider(LastGoodBarCache(stock), settings), crypto)

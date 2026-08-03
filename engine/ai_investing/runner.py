@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 
 from ai_investing.alerts import get_notifier
+from ai_investing.util import atomic
 from ai_investing.brokers import PaperBroker, get_broker
 from ai_investing.config import Settings
 from ai_investing.data import get_provider
@@ -445,8 +446,7 @@ class Runner:
                                               market=self._stats, model=self.model):
             self._shadow_fill(o, prices)
         try:   # persist in ALL modes: the A/B must survive engine restarts
-            with open(self._shadow_path, "w") as fh:
-                json.dump(b.state(), fh)
+            atomic.write_json(self._shadow_path, b.state())
         except OSError:
             pass
 
@@ -689,12 +689,10 @@ class Runner:
         data_dir = os.path.dirname(os.path.abspath(self.settings.state_path))
         try:
             os.makedirs(data_dir, exist_ok=True)
-            with open(self.settings.state_path, "w") as fh:
-                json.dump(state, fh, indent=2)
+            atomic.write_json(self.settings.state_path, state, indent=2)
             # the brain REMEMBERS its holdings: persist the paper book every cycle
             if not self.settings.live and isinstance(self.broker, PaperBroker):
-                with open(self._paper_path, "w") as fh:
-                    json.dump(self.broker.state(), fh)
+                atomic.write_json(self._paper_path, self.broker.state())
             self._append_history(data_dir, state)
             write_heartbeat(self.settings.heartbeat_path,
                             {"equity": state["equity"], "cash": state["cash"],

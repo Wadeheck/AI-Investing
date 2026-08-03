@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the AI-Investing watchdog every 15 minutes
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+# fire immediately after downtime instead of silently skipping the window --
+# cron does not do this, which is why a missed check used to mean no check
+Persistent=true
+[Install]
+WantedBy=timers.target

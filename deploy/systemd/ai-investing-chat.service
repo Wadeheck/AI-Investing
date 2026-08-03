@@ -1,0 +1,21 @@
+[Unit]
+# The Telegram bot runs as its OWN process and does NOT restart with the
+# engine — that is how it spent a day serving a stale portfolio format from
+# memory. Supervising it separately is the fix.
+Description=AI-Investing Telegram chat bot
+After=network-online.target ai-investing.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.main --chat
+Restart=always
+RestartSec=20
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/chat.log
+StandardError=inherit
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

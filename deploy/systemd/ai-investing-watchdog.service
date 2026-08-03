@@ -1,0 +1,8 @@
+[Unit]
+Description=AI-Investing watchdog (alerts on failure)
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/watchdog.py
+# a failing check is the POINT of this unit, not a unit failure
+SuccessExitStatus=0 1
