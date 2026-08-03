@@ -1,0 +1,10 @@
+[Unit]
+Description=Ask the user for pending inputs (twice a day, backoff handles the rest)
+[Timer]
+# 09:00 and 21:00 SGT. The per-item escalating backoff decides what is actually
+# mentioned, so a frequent timer does not mean frequent pings.
+OnCalendar=*-*-* 01:00:00 UTC
+OnCalendar=*-*-* 13:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

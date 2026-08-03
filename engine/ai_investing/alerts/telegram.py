@@ -50,10 +50,26 @@ class TelegramNotifier(Notifier):
             params["reply_markup"] = json.dumps({"inline_keyboard": [
                 [{"text": lbl, "callback_data": data[:64]} for lbl, data in row]
                 for row in buttons]})
-        data = urllib.parse.urlencode(params).encode()
-        try:
+        def _post(p: dict) -> bool:
+            data = urllib.parse.urlencode(p).encode()
             req = urllib.request.Request(url, data=data, method="POST")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status == 200
+
+        try:
+            return _post(params)
         except Exception:
-            return False
+            # Telegram 400s on unbalanced Markdown, and this system's alert text
+            # is FULL of underscores — node ids (geopolitical_tension), file
+            # paths (proposal_log.jsonl), scoring labels (short_or_avoid) — each
+            # of which reads as an italic marker. Returning False here silently
+            # DROPPED the alert: a notifier that loses the message it was built
+            # to deliver is the worst possible failure in this codebase, because
+            # every other safeguard reports through it. Retry as plain text:
+            # ugly beats undelivered.
+            try:
+                plain = dict(params)
+                plain["parse_mode"] = ""
+                return _post(plain)
+            except Exception:
+                return False

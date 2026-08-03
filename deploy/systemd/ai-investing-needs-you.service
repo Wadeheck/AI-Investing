@@ -1,0 +1,6 @@
+[Unit]
+Description=AI-Investing: ping the user for anything only they can do
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/needs_you.py

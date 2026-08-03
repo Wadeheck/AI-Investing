@@ -50,6 +50,50 @@ def test_aggregate_merges_available_only():
     assert aggregate([])["available"] is False
 
 
+def test_notifier_falls_back_to_plain_text_rather_than_dropping_the_message():
+    """Telegram 400s on unbalanced Markdown, and this system's alert text is full
+    of underscores: node ids (geopolitical_tension), file paths
+    (proposal_log.jsonl), scoring labels (short_or_avoid). The old send()
+    returned False and SILENTLY DROPPED the alert -- the worst failure in the
+    codebase, because every other safeguard reports through it.
+    """
+    from ai_investing.alerts.telegram import TelegramNotifier
+
+    n = TelegramNotifier("tok", "chat")
+    calls = []
+
+    def fake_post(params):
+        calls.append(params.get("parse_mode"))
+        if params.get("parse_mode") == "Markdown":
+            raise RuntimeError("400 Bad Request: can't parse entities")
+        return True
+
+    import urllib.request
+    real = urllib.request.urlopen
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=10):
+        body = req.data.decode()
+        mode = "Markdown" if "parse_mode=Markdown" in body else ""
+        calls.append(mode)
+        if mode == "Markdown":
+            raise RuntimeError("400 can't parse entities")
+        return _Resp()
+
+    urllib.request.urlopen = fake_urlopen
+    try:
+        ok = n.send("geopolitical_tension via proposal_log.jsonl and short_or_avoid")
+    finally:
+        urllib.request.urlopen = real
+    assert ok is True, "an unparseable-markdown alert must still be delivered"
+    assert calls == ["Markdown", ""], f"expected a plain-text retry, got {calls}"
+
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
