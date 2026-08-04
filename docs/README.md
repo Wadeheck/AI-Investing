@@ -9,7 +9,12 @@ Organised by **what you are trying to do**, not by when it was written.
 | Read | When |
 |---|---|
 | **[status/STATE_OF_THE_SYSTEM.md](status/STATE_OF_THE_SYSTEM.md)** | Always first. Current state, every defect found and how, and — the part that matters — what is still **unverified**. |
-| **[status/OPERATIONS.md](status/OPERATIONS.md)** | Running it. systemd units, watchdog, backups, mini-PC migration. |
+| **[status/OPERATIONS.md](status/OPERATIONS.md)** | Running it. Which host owns the books, the SSH develop→deploy loop, systemd units, watchdog, backups. |
+
+> **The books run on the ProDesk, not this machine.** `ssh -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103`.
+> `data/` on a dev box is a stale snapshot — never read the portfolio from it.
+> Deploy by committing here, pushing, and `git pull` there (needs `ssh -A`).
+> See OPERATIONS.md → *Developing against it over SSH*.
 
 Everything else explains *how a part works*. Those two explain *how much of it
 is proven* and *how to keep it alive*.
