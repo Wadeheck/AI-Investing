@@ -425,6 +425,48 @@ itself an action with consequences. Four restarts in twenty minutes triggered a
 provider rate limit, which then looked like a new failure. Verification is not
 free and not side-effect-free.
 
+### 4.13 The engine would have liquidated holdings it never opened *(2026-08-04)*
+
+Found while validating the Gemini adapter, not by a failure — nothing broke,
+because `LIVE_TRADING=false` meant the path could not run. It is recorded here
+because it was armed and waiting for the day that flag changed.
+
+- **What.** `CcxtBroker.get_positions()` turns **every non-zero balance** into a
+  `Position`. Pointed at a real Gemini account it reported **19 currencies**
+  (BTC, ETH, USDC, USDT, GALA, ANKR, AMP, FET, GRT, SUSHI, IMX, OXT, REN, SNX,
+  FIL, MIR, SLP, SGD, USD) against a `CRYPTO_WATCHLIST` of three symbols. The
+  engine would have believed it owned all of them.
+- **Why it was dangerous.** Two paths act on positions without asking where they
+  came from:
+  - the **de-focus exit** (`runner.py`, step 2b) sells anything
+    `user_views.is_allowed()` rejects, with `guard_slippage=False` and **no price
+    required**. `is_allowed` returns `not focus or symbol in focus` — so setting a
+    focus list, an ordinary-looking preference like *"focus on BTC and ETH"*,
+    market-sells every other holding in the account under
+    `reason="user blocked"`. Seventeen positions, one config line.
+  - **stop losses** run on every position, and the adapter has no cost basis to
+    give them — it substitutes the **last price** (`live.py:61`), so each stop
+    would be measured against a fabricated entry.
+- **Why it never fired.** `data/user_views.json` does not exist, so `focus` is
+  empty and everything is allowed. The stop path was safe for a *different*
+  reason: foreign symbols have no price (prices are built from the watchlist) and
+  `stop_orders` skips falsy prices. That is an accident, not a guarantee — the
+  same accident that made §4.7 survivable until it wasn't.
+- **Fix.** `runner.foreign_positions()` — a named function, not an inline
+  comprehension — and both exit paths gated on it, with a printed report of what
+  was left alone. Refusing to act can strand a position if a held symbol is
+  removed from the watchlist; that is the better of the two failures, and it is
+  reported rather than silent. `test_the_engine_never_trades_a_position_it_did_not_open`
+  covers the function *and* asserts both call sites still exist, verified by
+  removing the gate and watching the test fail.
+- **Lesson.** A paper broker only ever holds what the engine opened, so for the
+  entire life of the project "every position in the portfolio is mine" was true
+  and never had to be stated. A live adapter changes the meaning of
+  `get_positions()` without changing its signature. **When an interface starts
+  describing someone else's world, every assumption built on it needs re-reading**
+  — and the assumptions that hurt are the ones nobody wrote down because they
+  were free.
+
 ## 5. What is unverified or uncertain
 
 **Ranked by how much I would worry.**

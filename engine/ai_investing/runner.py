@@ -25,6 +25,25 @@ from ai_investing.strategy import (DecisionEngine, RegimeGate, RiskManager, User
                                    build_market_stats)
 
 
+def foreign_positions(position_keys, universe) -> set[str]:
+    """Positions this engine has no mandate over: present in the account, absent
+    from the watchlist it trades.
+
+    A paper broker only ever holds what the engine opened, so this is empty and
+    always has been. A LIVE exchange adapter is different in kind:
+    `CcxtBroker.get_positions()` turns every non-zero balance into a Position, so
+    the engine inherits the entire account — 19 currencies against a 3-symbol
+    watchlist, in the case that prompted this. It has no cost basis for them (the
+    adapter substitutes the last price), no thesis, and no instruction to hold
+    them.
+
+    Deliberately a function and not an inline set comprehension: this is the only
+    thing standing between a focus list and a liquidated account, so it gets a
+    name and a test rather than being mirrored in one.
+    """
+    return {k for k in position_keys if k not in universe}
+
+
 class Runner:
     def __init__(self, settings: Settings, use_news: bool = True):
         self.settings = settings
@@ -336,11 +355,40 @@ class Runner:
         # trustworthy again -- an unfired stop is recoverable, a phantom
         # liquidation is not. (safe_prices is built up at valuation time, because
         # equity needs exactly the same protection and needs it earlier.)
+        # FOREIGN HOLDINGS (2026-08-04). A live exchange adapter reports the whole
+        # account, not just what this engine opened: CcxtBroker.get_positions()
+        # turns EVERY non-zero balance into a Position. A real Gemini account here
+        # held 19 currencies against a 3-symbol watchlist. The engine must not
+        # trade what it did not open — it has no cost basis for it (the adapter
+        # substitutes the last price), no thesis for it, and no mandate over it.
+        #
+        # Nothing below is hypothetical: 2b executes with guard_slippage=False and
+        # does not require a price, so a focus list — an innocuous-looking
+        # preference like "focus on BTC and ETH" — would have market-sold every
+        # other holding in the account under reason="user blocked".
+        #
+        # 2a was safe only by accident: stop_orders skips falsy prices, and
+        # foreign symbols have no price because prices are built from the
+        # watchlist. Accident is not a guarantee, so both paths are gated here
+        # explicitly. Refusing to act strands a position the engine can no longer
+        # exit if you remove a held symbol from the watchlist — reported below, and
+        # the better failure of the two.
+        universe = {a.key for a in self.assets}
+        foreign = foreign_positions(portfolio.positions, universe)
+        if foreign:
+            print(f"  !! {len(foreign)} position(s) not in this engine's universe — "
+                  f"left untouched: {', '.join(sorted(foreign)[:8])}"
+                  f"{' ...' if len(foreign) > 8 else ''}")
+
         for o in self.risk.stop_orders(portfolio, safe_prices, market=self._stats):
+            if o.asset.key in foreign:
+                continue
             executed.append(self._execute(o, prices, guard_slippage=False))
 
         # 2b) Exit any position you've blocked / de-focused (your input, applied).
         for key, pos in list(self.broker.get_positions().items()):
+            if key not in universe:
+                continue          # re-checked against the universe, not the set
             if not self.user_views.is_allowed(pos.asset.symbol):
                 side = Side.SELL if pos.qty > 0 else Side.BUY
                 executed.append(self._execute(

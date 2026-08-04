@@ -269,6 +269,55 @@ def test_a_latched_halt_announces_once_not_every_cycle():
         assert not again.announce, "a latched halt must not re-announce"
 
 
+def test_the_engine_never_trades_a_position_it_did_not_open():
+    """A live exchange adapter hands over the WHOLE account, not the watchlist.
+
+    Verified against a real Gemini account on 2026-08-04: 19 non-zero balances
+    (BTC, ETH, USDC, GALA, ANKR, AMP, FET, GRT, SUSHI, IMX...) against a
+    CRYPTO_WATCHLIST of BTC/USD, ETH/USD, SOL/USD. CcxtBroker.get_positions()
+    reports all 19 as Positions with the LAST PRICE as cost basis, because
+    exchanges do not expose cost basis via a balance call.
+
+    The live hazard was the de-focus exit: it runs with guard_slippage=False and
+    needs no price, so setting a focus list — "focus on BTC and ETH", an ordinary
+    preference — would have market-sold the other seventeen holdings under
+    reason="user blocked". The stop path was safe only by accident (no price for a
+    foreign symbol, and stop_orders skips falsy prices); accident is not a
+    guarantee, so both paths are gated on this function.
+    """
+    from ai_investing.runner import foreign_positions
+
+    universe = {"crypto:BTC/USD", "crypto:ETH/USD", "crypto:SOL/USD"}
+    account = ["crypto:BTC/USD", "crypto:ETH/USD",        # ours
+               "crypto:GALA/USD", "crypto:ANKR/USD",      # the user's, never ours
+               "crypto:AMP/USD", "crypto:FET/USD"]
+
+    foreign = foreign_positions(account, universe)
+    assert foreign == {"crypto:GALA/USD", "crypto:ANKR/USD",
+                       "crypto:AMP/USD", "crypto:FET/USD"}
+    for held in ("crypto:BTC/USD", "crypto:ETH/USD"):
+        assert held not in foreign, f"{held} is in the watchlist — the engine owns it"
+
+    # a paper book only ever holds what the engine opened: nothing is foreign
+    assert foreign_positions(["crypto:BTC/USD"], universe) == set()
+    # and an empty universe must not make the whole account fair game by omission
+    assert foreign_positions(account, set()) == set(account)
+
+    # A correct helper nothing calls protects nobody, and the two callers are
+    # inline in a 700-line cycle that no test constructs. So assert the gate is
+    # actually wired into BOTH exit paths. If you refactor the runner, keep the
+    # guarantee and update the assertion — do not delete it.
+    import inspect
+    from ai_investing import runner as runner_mod
+    src = inspect.getsource(runner_mod.Runner)
+    assert "foreign_positions(" in src, \
+        "the runner no longer computes foreign positions — the gate is gone"
+    assert "if o.asset.key in foreign:" in src, \
+        "the stop-loss path is no longer gated on foreign positions"
+    assert "if key not in universe:" in src, \
+        "the de-focus exit is no longer gated — a focus list can liquidate the account"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
