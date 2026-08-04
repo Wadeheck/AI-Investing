@@ -329,6 +329,56 @@ curl -si localhost:4300 | head -1        # must be 401, not 200
 That last line is not optional. It is the only thing that distinguishes this
 from the state it was just in.
 
+### The live book: trading a slice of a big account
+
+The 📈 trading book routes to the Longbridge **paper** account as of 2026-08-04,
+bounded to **$10,000** by `LIVE_CAPITAL_BASE`. The other three books are
+untouched and still simulated — `LIVE_TRADING` only switches `self.broker`.
+
+```
+LIVE_TRADING=true
+LIVE_CAPITAL_BASE=10000            # the slice; 0 = the whole account
+SAFETY_MAX_NOTIONAL_PER_DAY=10000  # one full turnover a day, no more
+TRADE_APPROVAL=true                # entries still come to you on Telegram
+```
+
+Why the slice exists: the account holds USD 1,000,000, and every risk limit here
+is a *fraction of equity*. Attached raw, `RISK_MAX_POSITION_WEIGHT=0.15` means a
+$150,000 position and the daily breaker sits at −$50,000 — the whole stake could
+be lost several times over without a breaker firing. With the slice, the limits
+mean what they say:
+
+| | |
+|---|---|
+| max single position | **$1,500** |
+| max gross exposure | **$10,000** |
+| daily breaker halts at | **−$500** |
+| hard per-position loss cap | **$150** |
+
+Tradable universe is **48 USD-listed stocks** of the 85 in the watchlist. The 37
+non-USD listings are excluded because `cost_price` arrives in the listing currency
+while prices here are USD-normalised; crypto is excluded because the segregated
+Gemini account is empty.
+
+**Changing `LIVE_CAPITAL_BASE` re-bases the breaker's marks** and resets the
+per-day counters — announced on Telegram and in the log. That is deliberate: the
+marks describe a book, and you just changed the book. It does **not** clear a
+latched halt.
+
+To go back to pure paper: set `LIVE_TRADING=false` and restart. `paper_state.json`
+was never deleted, so the old $99,997 book is still there. The breaker re-bases
+back on the next cycle.
+
+Watch it with:
+```bash
+grep -E "=== cycle|LIVE BOOK|BREAKER|no new positions" data/engine.log | tail -20
+```
+
+**If it stops opening positions, read that grep before anything else.** It logs
+its own reason every cycle — `max notional/day reached`, `max trades/day`, a
+halt — and a book that had spent its notional budget sat idle for nine hours
+because nobody looked (§4.14).
+
 ### Backups exist on exactly one disk
 
 `scripts/backup.py` writes to `data/backups/` and nowhere else — no rsync, no

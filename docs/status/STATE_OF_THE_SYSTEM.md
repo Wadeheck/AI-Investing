@@ -467,6 +467,43 @@ because it was armed and waiting for the day that flag changed.
   — and the assumptions that hurt are the ones nobody wrote down because they
   were free.
 
+### 4.14 A change of book read as a 90% crash *(2026-08-04)*
+
+Caused by me, while enabling the $10,000 live slice. Included because the shape
+is the most repeated one in this register.
+
+- **What.** `LIVE_CAPITAL_BASE=10000` switched the 📈 book from a $100k paper
+  broker to a $10,000 slice of the Longbridge paper account. The breaker's marks
+  still described the old book, so the first honest reading — $10,000 — measured
+  as **`inception drawdown 90.0% >= 25%`** and latched within one cycle.
+- **Why it is §4.7 again.** There, a price stopped being a valuation. Here,
+  `day_start_equity` stopped describing the same book. Both are one mistake:
+  **comparing two numbers that no longer refer to the same thing.** The breaker
+  was not wrong; its inputs had quietly changed meaning underneath it.
+- **Damage.** None, and only by luck: the book was empty, so "flatten everything"
+  had nothing to sell. With positions open it would have market-sold the lot on a
+  fiction. That is the second time in one day that an empty book is the only
+  reason a phantom did no harm.
+- **Fix.** `CircuitBreaker.ensure_basis()` re-bases the marks when the book's
+  **declared** identity changes — `"paper"` → `"live:10000"`. Declared, never
+  inferred: *"equity moved a lot, so it must be a new book"* is precisely how a
+  safety system is taught to explain away a real crash. A latched halt is **not**
+  cleared by a basis change, so changing book size cannot launder a halt.
+- **And a second finding, from reading the log properly.** Per-day counters *are*
+  reset on a re-base, because they belong to the book that spent them — and that
+  matters more than it sounds. The breaker was carrying **$28,195 of
+  `notional_today`** spent by §4.7's phantom flatten, against a $20,000 daily cap.
+  The trading book had therefore been **unable to open a single position for nine
+  hours**, printing `(no new positions — max notional/day $20,000 reached)` every
+  five minutes into a log nobody was reading. I had told the user the book was
+  "flat and would re-enter when signals fire". It could not have.
+- **Lesson.** Two of them. **A reason logged is not a reason known** — the engine
+  explained itself correctly, on every cycle, to no one; this is `daily_status.py`
+  printing to an empty terminal all over again, and it is the exact failure mode
+  §4.3 was supposed to have ended. And: **when you change what a number means,
+  every stored comparison against it is now wrong** — including the ones inside
+  the safety layer that exist to protect you.
+
 ## 5. What is unverified or uncertain
 
 **Ranked by how much I would worry.**
