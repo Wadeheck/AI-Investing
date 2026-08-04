@@ -284,8 +284,28 @@ class Runner:
             detail = "; ".join(data_msgs)
             self.journal.record_event("data_anomaly", detail)
             print(f"!! DATA GUARD flagged: {detail}")
-            if self.settings.alerts.on_error:
-                self.notifier.send(f"⚠️ *DATA GUARD*: {detail}")
+        # ALERT ON THE CHANGE, NOT THE STATE (2026-08-05). This sent a Telegram on
+        # every cycle a symbol stayed flagged. 2800.HK went stale because yfinance
+        # has no 2026-08-03 bar for it and the current session's Close is NaN — a
+        # real upstream gap that will persist for hours or days, producing an
+        # identical alert every ~7 minutes until it clears.
+        #
+        # Exactly the §4.7 mistake in a second place: a latched CONDITION announced
+        # as if it were an EVENT, training you to ignore the channel every other
+        # safeguard reports through. The log line above still fires every cycle,
+        # because a log is free and a notification is not.
+        newly = bad_data - self._flagged_symbols
+        cleared = self._flagged_symbols - bad_data
+        if self.settings.alerts.on_error and (newly or cleared):
+            parts = []
+            if newly:
+                parts.append("⚠️ *DATA GUARD*: " +
+                             "; ".join(m for m in data_msgs
+                                       if any(s in m for s in newly)))
+            if cleared:
+                parts.append(f"✅ data recovered: {', '.join(sorted(cleared))}")
+            self.notifier.send("\n".join(parts))
+        self._flagged_symbols = set(bad_data)
 
         # Prices the guard did NOT reject. Valuation must use these, not the raw
         # feed: equity is the number the circuit breaker judges, and judging it
@@ -337,7 +357,13 @@ class Runner:
         # Once a day (SGT): plain-language overview — strongest ripples, the
         # standing 6-month strategy (challenged, not rewritten), then the ideas.
         if context.get("brain"):
-            px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+            # SAFE prices only. A guard-flagged tick stamped with today's date is
+            # worse than a missing one: 2800.HK is the HK/CN benchmark, so a frozen
+            # close gives every HK and CN call an excess return measured against a
+            # market that appears not to have moved — and unlike a MISSING benchmark,
+            # that fires no warning. The price history the scorecard grades against
+            # must contain only prices the guard accepted.
+            px_by_sym = {a.symbol: safe_prices.get(a.key, 0.0) for a in self.assets}
             # scorecard: snapshot prices, judge every call ≥5 days old, learn
             track = learn_notes = None
             try:
