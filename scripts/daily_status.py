@@ -133,9 +133,27 @@ def main() -> int:
     ok &= row("paper engine", eng,
               (f"cycle {a:.2f}h ago" if a else "never run") +
               ("" if eng else "  <-- STALLED: restart with `make run`"))
+    # WHICH BOOK IS ACTUALLY BEING TRADED. paper_state.json stopped being the
+    # trading book the moment LIVE_TRADING was enabled — it is now a frozen
+    # snapshot, and reporting it as "the book" is this project's oldest failure
+    # wearing yet another hat: the status tool confidently printing a number
+    # nobody is trading. Found 2026-08-04, minutes after the live switch, on the
+    # one line a person actually glances at to check the bot.
+    live_book = D("live_book.json")
+    if os.path.exists(live_book):
+        lb = json.load(open(live_book))
+        base = float(lb.get("base") or 0.0)
+        realized = float(lb.get("realized") or 0.0)
+        marks = lb.get("marks") or {}
+        row("LIVE book (traded)", True,
+            f"${base:,.0f} slice, realised ${realized:+,.2f}, "
+            f"{len(marks)} position(s) — orders go to a real broker")
     if os.path.exists(D("paper_state.json")):
         p = json.load(open(D("paper_state.json")))
-        row("paper book", True, f"${p['cash']:,.0f} cash, {len(p['positions'])} positions")
+        label = "paper book (FROZEN)" if os.path.exists(live_book) else "paper book"
+        note = "" if not os.path.exists(live_book) else "  <-- not traded while LIVE is on"
+        row(label, True,
+            f"${p['cash']:,.0f} cash, {len(p['positions'])} positions{note}")
 
     # --- live perception quality ---
     # The corpus digester was always audited; the tagger that actually runs in
