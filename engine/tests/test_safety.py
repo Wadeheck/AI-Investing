@@ -136,6 +136,61 @@ def test_a_blanket_feed_failure_serves_stale_bars_not_zero():
         "a throttled feed must not become a zero price"
 
 
+def test_a_zero_price_never_values_a_position_at_zero():
+    """The 2026-08-04 phantom, as a test.
+
+    A feed outage set every price to 0.0 (the runner builds prices as
+    `close if bars else 0.0`, so an outage writes 0.0 rather than omitting the
+    key). Twelve positions valued at zero made equity equal cash — short
+    proceeds and all — reading $116,027 against a true $99,997. That became the
+    day's opening mark, and the next honest cycle "lost" 13.8% against it.
+    """
+    from ai_investing.models import Asset, AssetClass, Portfolio, Position
+    a = Asset("SHORTY", AssetClass.STOCK)
+    # a short: cash is inflated by the sale proceeds, and the shares are OWED
+    port = Portfolio(cash=116_000.0, positions={"SHORTY": Position(a, -1_000.0, 16.0)})
+    assert port.equity({"SHORTY": 16.0}) == 100_000.0
+
+    for outage in ({"SHORTY": 0.0}, {"SHORTY": float("nan")},
+                   {"SHORTY": -3.0}, {"SHORTY": None}, {}):
+        eq = port.equity(outage)
+        assert eq == 100_000.0, (
+            f"outage {outage} valued the book at {eq} — a short priced at zero "
+            f"looks like a forgiven debt, and equity collapses to cash")
+        assert port.exposure(outage) == 16_000.0
+
+
+def test_breaker_refuses_an_unreadable_equity():
+    """NaN loses every comparison, so it does not trip the breaker — it walks
+    PAST it, overwriting the marks with garbage on the way. Five such cycles
+    went unvalued and unnoticed on 2026-08-03."""
+    cb = _cb(_tmp(), daily=0.05)
+    assert cb.check(100_000).allow_new
+    for junk in (float("nan"), float("inf"), 0.0, -5.0, None):
+        d = cb.check(junk)
+        assert not d.allow_new, f"{junk!r} must shut the gate"
+        assert not d.flatten, (
+            f"{junk!r} must NOT flatten — an absent valuation is not evidence "
+            f"of a loss")
+        assert cb.state["peak_equity"] == 100_000, \
+            f"{junk!r} corrupted peak_equity to {cb.state['peak_equity']}"
+        assert cb.state["day_start_equity"] == 100_000
+    assert cb.check(99_000).allow_new, "a good reading must still work after"
+
+
+def test_a_latched_halt_announces_once_not_every_cycle():
+    """A latched breaker returns flatten=True forever. Alerting on each one sent
+    an identical Telegram message every five minutes all night — which trains
+    you to ignore the channel every other safeguard reports through."""
+    cb = _cb(_tmp(), daily=0.05)
+    cb.check(100_000)
+    first = cb.check(94_000)
+    assert first.flatten and first.announce, "the latching cycle must announce"
+    for _ in range(5):
+        again = cb.check(94_000)
+        assert again.flatten, "still halted"
+        assert not again.announce, "a latched halt must not re-announce"
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

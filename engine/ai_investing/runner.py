@@ -201,8 +201,16 @@ class Runner:
             if self.settings.alerts.on_error:
                 self.notifier.send(f"⚠️ *DATA GUARD*: {detail}")
 
+        # Prices the guard did NOT reject. Valuation must use these, not the raw
+        # feed: equity is the number the circuit breaker judges, and judging it
+        # on a tick the guard just called absurd is how a data fault becomes a
+        # liquidation. Falling back to cost basis (Portfolio._px) makes an outage
+        # read as "no change" instead of as a 13.8% collapse.
+        safe_prices = ({k: v for k, v in prices.items() if k not in bad_data}
+                       if bad_data else prices)
+
         portfolio = self.broker.portfolio()
-        equity = portfolio.equity(prices)
+        equity = portfolio.equity(safe_prices)
         mode = "LIVE" if self.settings.live else "PAPER"
         print(f"\n=== cycle {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z  [{mode}]  "
               f"equity ${equity:,.0f}  cash ${portfolio.cash:,.0f}  "
@@ -295,10 +303,18 @@ class Runner:
         breaker = self.breaker.check(equity)
         if breaker.flatten:
             print(f"!! CIRCUIT BREAKER — {breaker.reason}. Flattening and halting.")
-            self.journal.record_event("circuit_breaker", breaker.reason)
-            if self.settings.alerts.on_kill:
-                self.notifier.send(f"🛑 *CIRCUIT BREAKER* — {breaker.reason}. "
-                                   f"Flattened & halted. equity ${equity:,.0f}")
+            # Journal the event once, on the latching cycle. A latched breaker
+            # reports flatten=True on every cycle forever; recording each one
+            # buried the actual moment of failure under hundreds of copies and
+            # sent an identical Telegram alert every five minutes overnight.
+            if breaker.announce:
+                self.journal.record_event("circuit_breaker", breaker.reason)
+                if self.settings.alerts.on_kill:
+                    self.notifier.send(
+                        f"🛑 *CIRCUIT BREAKER* — {breaker.reason}. "
+                        f"Flattened & halted. equity ${equity:,.0f}\n"
+                        f"Stays halted until reviewed: "
+                        f"`python3 scripts/breaker.py --status`")
             executed += self._flatten(prices)
             self._finish(prices, [], context, halted=True)
             return {"halted": True, "reason": breaker.reason, "equity": equity}
@@ -318,9 +334,8 @@ class Runner:
         # POSITIVE tick would sail straight through and liquidate the book at a
         # fabricated loss. Flagged symbols keep their stops until the data is
         # trustworthy again -- an unfired stop is recoverable, a phantom
-        # liquidation is not.
-        safe_prices = ({k: v for k, v in prices.items() if k not in bad_data}
-                       if bad_data else prices)
+        # liquidation is not. (safe_prices is built up at valuation time, because
+        # equity needs exactly the same protection and needs it earlier.)
         for o in self.risk.stop_orders(portfolio, safe_prices, market=self._stats):
             executed.append(self._execute(o, prices, guard_slippage=False))
 

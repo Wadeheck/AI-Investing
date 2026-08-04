@@ -57,7 +57,31 @@ systemctl --user restart ai-investing         # after a code change
 python3 scripts/daily_status.py               # full health, 14 channels
 python3 scripts/watchdog.py --test            # prove alerts still reach you
 python3 scripts/backup.py --list              # what snapshots exist
+python3 scripts/breaker.py                    # is the book halted, and should it be
 ```
+
+### If you get a 🛑 CIRCUIT BREAKER alert
+
+The engine halts and stays halted — deliberately. You now get the alert **once**,
+on the cycle that latches, not every five minutes (see STATE §4.7).
+
+```bash
+python3 scripts/breaker.py                    # status + cross-check vs the journal
+python3 scripts/breaker.py --repair-marks     # only if it reports POISONED MARKS
+python3 scripts/breaker.py --clear            # release, once you agree it was spurious
+```
+
+Read the cross-check before deciding anything. It compares the stored marks
+against every trustworthy equity row in `journal.db`, and reports `MARKS ARE
+POISONED` when a mark sits above the highest equity the book ever honestly
+recorded. That is the signature of a halt triggered by a data fault rather than a
+loss — and it must be repaired *before* clearing, because the poisoned mark
+survives the halt and will re-trip it, eventually on the trailing horizon, which
+needs a manual reset.
+
+Clearing does **not** reopen the closed positions. The engine re-decides from
+current signals, which is the right behaviour: reinstating positions the strategy
+did not choose today would be fabricating a decision.
 
 **After editing `chat.py` you must restart the chat service separately.** It is
 its own process and does not restart with the engine — that is how it spent a

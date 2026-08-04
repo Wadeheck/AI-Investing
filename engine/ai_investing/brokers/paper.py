@@ -51,8 +51,19 @@ class PaperBroker(BrokerAdapter):
             self._cash -= cost
             if pos:
                 total_qty = pos.qty + order.qty
-                pos.avg_price = (pos.avg_price * pos.qty + cost) / total_qty if total_qty else price
-                pos.qty = total_qty
+                # Buying back a SHORT to exactly flat lands here, not in the SELL
+                # branch — and only SELL cleaned up emptied positions. So closing
+                # a short left a qty=0.0 tombstone behind forever. get_positions()
+                # filters those, so equity was never wrong, but state() persisted
+                # them: after the 2026-08-04 flatten the book reported "10
+                # positions" while holding none, and a flat book whose equity
+                # equals its cash is exactly the signature the phantom-valuation
+                # detector looks for. Drop them at the source.
+                if abs(total_qty) < 1e-9:
+                    self._positions.pop(key, None)
+                else:
+                    pos.avg_price = (pos.avg_price * pos.qty + cost) / total_qty
+                    pos.qty = total_qty
             else:
                 self._positions[key] = Position(order.asset, order.qty, price)
         else:  # SELL
@@ -79,11 +90,14 @@ class PaperBroker(BrokerAdapter):
 
     # -- persistence (used by the shadow / formula-only portfolio) ----------
     def state(self) -> dict:
+        # Persist only LIVE positions: a zero-qty entry carries no information
+        # (the avg_price of a closed position is meaningless) and every reader
+        # that counts the list overstates what the book holds.
         return {"cash": self._cash, "positions": [
             {"symbol": p.asset.symbol, "asset_class": p.asset.asset_class.value,
              "exchange": p.asset.exchange, "quote": p.asset.quote,
              "qty": p.qty, "avg_price": p.avg_price}
-            for p in self._positions.values()]}
+            for p in self._positions.values() if abs(p.qty) > 1e-9]}
 
     @classmethod
     def from_state(cls, d: dict, allow_short: bool = False) -> "PaperBroker":

@@ -56,7 +56,17 @@ def note_gap(hours: float) -> None:
         gp = DATA / "learning_gaps.json"
         if gp.exists():
             wins = json.loads(gp.read_text())
-        wins.append({"start": start, "end": now.isoformat(), "hours": round(hours, 2)})
+        # EXTEND the open window rather than appending a new one. This runs on
+        # every start attempt, and heartbeat.json is not touched until the engine
+        # actually trades — so four failed starts wrote four near-identical
+        # windows for one outage. Harmless to the spine, but it inflates the
+        # outage count and buries the real events in the audit trail.
+        same = (wins and wins[-1].get("start", "")[:16] == start[:16])
+        rec = {"start": start, "end": now.isoformat(), "hours": round(hours, 2)}
+        if same:
+            wins[-1] = rec
+        else:
+            wins.append(rec)
         gp.write_text(json.dumps(wins[-200:], indent=1))
     except (OSError, json.JSONDecodeError):
         pass
@@ -74,6 +84,7 @@ def note_gap(hours: float) -> None:
 
 
 def main() -> int:
+    defer = "--defer-refresh" in sys.argv
     print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M}] startup self-heal", flush=True)
     gap = age_h(DATA / "heartbeat.json")
     if gap is None:
@@ -82,6 +93,29 @@ def main() -> int:
         print(f"  engine was down for ~{gap:.1f}h", flush=True)
         if gap >= 2.0:
             note_gap(gap)
+
+    # Only step 1 — journalling the gap — genuinely has to finish before the
+    # engine trades, because the spine needs the window on disk before any exit
+    # settles. The refreshes do not: the first cycle can read slightly stale
+    # numbers, and the timers refresh them regardless.
+    #
+    # Blocking on them was actively harmful. As ExecStartPre these calls can run
+    # for minutes on a cold network, systemd's TimeoutStartSec is 90s, and it
+    # killed the start four times in a row — turning "some data is stale" into
+    # eight extra minutes of NO ENGINE AT ALL. The safety net must not be able to
+    # outweigh the thing it protects.
+    if defer:
+        try:
+            subprocess.Popen(
+                [PY, str(Path(__file__).resolve())],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+            print("  refresh handed off to a detached process; engine may start now",
+                  flush=True)
+        except Exception as exc:
+            print(f"  could not detach refresh ({type(exc).__name__}) — "
+                  f"timers will catch it", flush=True)
+        return 0
 
     # crypto first: it trades 24/7, so it goes stalest fastest
     a = age_h(DATA / "crypto_signals.json")

@@ -14,6 +14,7 @@ emergency-flatten. `register_trade(notional)` feeds the per-day caps.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +25,13 @@ class BreakerDecision:
     allow_new: bool     # may open / add positions
     flatten: bool       # emergency: flatten everything and halt
     reason: str
+    # True only on the cycle that LATCHES the halt. A latched breaker returns
+    # flatten=True forever, and the runner alerted on every one of them: a halt
+    # at 02:43 became a Telegram message every five minutes, all night, all
+    # identical. That is worse than useless — it teaches you to swipe away the
+    # channel that every other safeguard reports through. Announce the event, not
+    # the state.
+    announce: bool = True
 
 
 class CircuitBreaker:
@@ -61,6 +69,17 @@ class CircuitBreaker:
 
     def check(self, equity: float) -> BreakerDecision:
         s = self.state
+        # An unusable equity reading must never move this state machine. Every
+        # threshold here is a comparison, and NaN loses every comparison, so a
+        # NaN equity does not trip the breaker — it walks past it, and on the way
+        # past it overwrites day_start_equity and peak_equity with garbage that
+        # then mismeasures every later cycle. Refuse the reading instead: hold
+        # the gate shut, do NOT flatten (there is no evidence of a loss, only an
+        # absence of evidence), and leave the marks alone until the feed is back.
+        if not (isinstance(equity, (int, float)) and math.isfinite(equity) and equity > 0):
+            return BreakerDecision(False, False,
+                                   f"equity unreadable ({equity!r}) — gate shut, "
+                                   f"marks untouched until the feed recovers")
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if s["day"] != today:
             s["day"] = today
@@ -89,7 +108,7 @@ class CircuitBreaker:
 
         if s["halted"]:                                   # latched (trailing/inception, or same-day daily)
             self._save()
-            return BreakerDecision(False, True, s["halt_reason"])
+            return BreakerDecision(False, True, s["halt_reason"], announce=False)
 
         inc = self._dd(s["inception_equity"], equity)
         if inc >= self.cfg.max_inception_drawdown:

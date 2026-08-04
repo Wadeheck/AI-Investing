@@ -1,6 +1,6 @@
 # State of the system
 
-*Honest engineering status as of 2026-08-03. Written to be read by someone who
+*Honest engineering status as of 2026-08-04. Written to be read by someone who
 has not been watching — including a future me. Where something is unproven it
 says so; where a number is soft it says why.*
 
@@ -21,17 +21,24 @@ evidence the system makes money with real money.
 
 ```
 GRAPH    321 nodes, 690 edges          (seed v25)
-BRAIN    2,951 articles, 702 events digested
-TAGGER   0.0% unsigned across 344 post-fix events   (was 57%)
+BRAIN    4,923 articles, 1,672 events tagged
+TAGGER   2% unsigned across 1,380 recent events     (was 57%)
 TESTS    24 suites, all green
-COMMITS  124
+COMMITS  131
 
-BOOKS            cash        positions
-  trading      $116,027         12
-  investing    $105,356          8
-  event sleeve  $87,671          3
-  crypto       $100,000          0   (bear mode, deliberately flat)
+BOOKS            equity      cash        positions
+  trading      $ 99,997    $ 99,997         0   (flat after §4.7; re-entering)
+  investing    $ 83,125    $105,356         8
+  event sleeve $100,479    $ 87,671         3
+  crypto       $100,000    $100,000         0   (bear mode, deliberately flat)
+  ----------------------------------------
+  TOTAL        $383,601
 ```
+
+Read **equity**, not cash. Three of these books hold shorts, whose sale proceeds
+sit in cash while the shares are still owed — which is why cash exceeds equity in
+the investing book, and why cash is never the portfolio's value. Conflating the
+two caused §4.4, and valuing a short at a zero price caused §4.7.
 
 **The learning spine has 0 settled claims.** It is armed and tested but has
 never actually adjusted anything, because no trade has closed through it yet.
@@ -178,7 +185,84 @@ book is information; silence is not.**
   else reads this history* — the same discipline as excluding outage-tainted
   trades from the learning spine.
 
-### 4.7 Earlier failures, same shape
+### 4.7 A feed outage faked a 13.8% crash and flattened a healthy book *(2026-08-04)*
+
+The most expensive failure so far, and the closest to a real-money disaster.
+
+- **What.** At 02:30 UTC, on the first cycle after an overnight gap, every price
+  came back `0.0`. The trading book held twelve **shorts**, so cash was inflated
+  by the sale proceeds ($116,027) while the shares were still owed. With every
+  position valued at zero, `equity` collapsed to exactly `cash`: **$116,027
+  reported against a true $99,997.** That reading became both `day_start_equity`
+  and the all-time `peak_equity`. At 02:43 prices returned, equity read honestly
+  at $99,997, and the circuit breaker measured a **13.8% daily drawdown** against
+  a number that never happened. It flattened all twelve positions and latched.
+- **Root cause.** `Portfolio.equity` fell back to cost basis only for a *missing*
+  key. The runner builds prices as `close if bars else 0.0`, so an outage writes
+  a **present-but-worthless** price, and `0.0` sailed through as a valuation. A
+  short priced at zero looks like a debt that has been forgiven.
+- **The silent precursor.** For five cycles the previous afternoon, equity was
+  recorded as `None`/NaN. NaN loses every comparison, so it did not trip the
+  breaker — it walked *past* it, overwriting the marks on the way. Hours of
+  unvalued book passed every safety check without a word.
+- **Why it stayed invisible for 9 hours.** A latched breaker returns
+  `flatten=True` on *every* cycle, and the runner alerted on each one — an
+  identical Telegram message every five minutes all night. The signal was there;
+  it had been made unreadable by repetition. The user's report was *"I keep
+  receiving circuit breaker news from telegram"*, not *"the engine halted"*.
+- **What it actually cost.** Almost nothing in P&L: the flatten executed at real
+  prices in the same cycle the feed recovered, so equity went $100,142 (true
+  peak) → $99,997, about **$3** plus a day of a flat, halted book. Pure luck. Had
+  prices returned one cycle later, it would have liquidated twelve positions at
+  zero.
+- **The landmine underneath.** Clearing the *daily* halt would not have fixed it.
+  `peak_equity` was still $116,027, so the book was permanently measured as 13.8%
+  underwater — **1.2 points from a latched, manual-reset-only trailing halt.**
+- **Fixes.**
+  - `Portfolio._px` treats any non-finite or non-positive price as *no price* and
+    falls back to cost basis, so an outage reads as "no change" — the honest
+    reading of "we cannot see the price".
+  - `CircuitBreaker.check` refuses an unreadable equity outright: gate shut, **no
+    flatten** (an absent valuation is not evidence of a loss), marks untouched.
+  - Equity is now valued from `safe_prices` — the same guard-filtered dict that
+    already protected the stops (§4.5). Valuation needed it *more*, and earlier.
+  - `BreakerDecision.announce` is true only on the latching cycle. Alert on the
+    event, never on the state.
+  - `scripts/breaker.py` — inspect, cross-check the marks against the journal,
+    repair, clear. It reconstructs trustworthy marks by discarding rows where
+    `positions > 0` and `equity == cash` to the cent (the phantom signature).
+  - Three regression tests in `test_safety.py`.
+- **Lesson.** Every threshold in the safety layer is a comparison against a
+  *stored mark*. A mark taken from a bad valuation is not a transient error, it
+  is permanent damage — every honest reading afterwards is measured against a
+  fiction. Guard what the marks are made of, and never let a safety mechanism
+  act on a number it cannot vouch for.
+
+### 4.8 Three defects found while fixing 4.7 *(2026-08-04)*
+
+Each was independently capable of causing a later incident.
+
+- **Closing a short left a tombstone.** Buying a short back to flat goes through
+  the BUY branch, which never removed the emptied position — only SELL did. After
+  the flatten the book persisted *"10 positions"* while holding none. Benign for
+  equity (`get_positions` filters them), but a flat book whose equity equals its
+  cash is exactly the phantom signature above — the tombstones would have made
+  the new repair tool discard a *good* mark. Fixed at the source, plus a test.
+- **The self-heal blocked trading behind up to 15 minutes of network calls.**
+  `startup_heal.py` ran as `ExecStartPre` with systemd's default 90s
+  `TimeoutStartSec`. It timed out and killed the start **four times in a row**,
+  turning "some data is stale" into eight extra minutes of *no engine at all*.
+  Only step 1 (journalling the outage window, so the learning spine excludes
+  trades spanning it) must finish before trading; the refreshes now hand off to a
+  detached process. **A safety net must never be able to outweigh the thing it
+  protects.**
+- **Automated digestion stopped one step short.** `digest_day.py` wrote
+  `events/2026-08-03.json` but nothing re-ran `_merge_amendments.py`, which
+  *derives* `news_impulses_v2.jsonl` from it. The training corpus silently ended a
+  day before the corpus it is built from. `digest_day.py` now derives impulses as
+  its final step. Automating a pipeline means automating *all* of it.
+
+### 4.9 Earlier failures, same shape
 
 | Failure | Consequence | Found by |
 |---|---|---|
@@ -230,6 +314,23 @@ below a file's `__main__` block never ran at all.
    the system has ever produced (see §4.6); it was 0.689 while contaminated.
    Whether 0.404 reflects genuine skill deficit or a scoring definition that
    mixes `long` with `short_or_avoid` has **not** been investigated yet.
+
+9. **The equity marks were repaired against the journal, not recovered.**
+   `scripts/breaker.py --repair-marks` rebuilt `peak_equity` ($100,142) and
+   `day_start_equity` ($99,997) from the trusted journal rows after §4.7. That is
+   a *reconstruction*: the true peak may have fallen between recorded cycles, and
+   the day's real opening mark was overwritten by the phantom before any honest
+   cycle ran. The repair deliberately errs low, so it can never manufacture
+   headroom the book did not have — but the marks are inferred, not observed.
+10. **The twelve positions closed by the phantom halt are gone.** Nothing
+    reopened them; the engine re-decides from current signals, which is correct
+    but means the forward record contains twelve exits that no strategy chose.
+    They cannot corrupt the learning spine, for two independent reasons: they
+    fall inside a journalled outage window (`gap_affected`), and the spine has
+    never opened a claim at all — neither `expectations.jsonl` nor
+    `learning_state.json` exists on disk. Checked, not assumed. The second reason
+    is the load-bearing one today, and it disappears the moment the spine starts
+    working, so the gap window is what must hold long-term.
 
 ## 6. Known limitations, deliberately not fixed
 

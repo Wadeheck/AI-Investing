@@ -13,8 +13,11 @@ WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
 # Heal before trading: refresh whatever went stale while we were down and
 # journal the gap, so the learning spine refuses to learn from trades that
 # span it. Absolute path - the working directory is engine/, not the root.
-ExecStartPre=/home/eugene/Projects/AI-Investing/.venv/bin/python /home/eugene/Projects/AI-Investing/scripts/startup_heal.py
+ExecStartPre=/home/eugene/Projects/AI-Investing/.venv/bin/python /home/eugene/Projects/AI-Investing/scripts/startup_heal.py --defer-refresh
 ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.main
+# Belt-and-braces: the heal now hands off its slow work and returns in under a
+# second, but a start must never again be killed for being slow.
+TimeoutStartSec=120
 Restart=always
 RestartSec=20
 # never give up: a crash loop that stops retrying is a silent outage again

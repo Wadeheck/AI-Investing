@@ -26,6 +26,7 @@ re-digesting anything this flags as low confidence.
 """
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -120,7 +121,36 @@ def digest(date: str, settings, graph, dry: bool) -> int:
     tagged = sum(1 for e in events if e.get("nodes"))
     print(f"  {date}: {len(events)} events written "
           f"({tagged} tagged, {signed} signed) -> {OUT_DIR.name}/{date}.json")
+    derive_impulses()
     return 0
+
+
+def derive_impulses() -> None:
+    """Re-derive news_impulses_v2.jsonl from the events just written.
+
+    events/*.json is the source of truth; the impulse file is DERIVED from it by
+    _merge_amendments.py (impulse = polarity x magnitude x novelty x confidence x
+    (1 - manipulation_likelihood), amendments applied). Automating the digest
+    without automating this step left the two out of step: events for 2026-08-03
+    existed while the impulse file still ended on 08-02, so the training corpus
+    silently stopped a day short of the corpus it is built from.
+
+    Cheap to re-run (it rebuilds the whole file deterministically) and safe on
+    failure: a stale impulse file is a known state, a half-written one is not.
+    """
+    merge = ROOT / "data" / "digest_v2" / "_merge_amendments.py"
+    if not merge.exists():
+        print("  (no _merge_amendments.py — impulses not re-derived)")
+        return
+    print("  re-deriving impulses from events ...", flush=True)
+    try:
+        r = subprocess.run([sys.executable, str(merge)], cwd=str(merge.parent),
+                           capture_output=True, text=True, timeout=900)
+        tail = [l for l in (r.stdout or "").splitlines() if "impulses_v2" in l]
+        print(f"    {tail[-1].strip() if tail else f'exit {r.returncode}'}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"    FAILED: {type(exc).__name__}: {str(exc)[:100]} — "
+              f"events are written; impulses stay at their last good state")
 
 
 def main() -> int:

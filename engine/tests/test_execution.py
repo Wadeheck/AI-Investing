@@ -12,6 +12,26 @@ def _asset():
     return Asset("X", AssetClass.STOCK)
 
 
+def test_closing_a_short_leaves_no_tombstone():
+    """Buying a short back to flat goes through the BUY branch, which used to
+    keep the emptied position at qty=0.0 forever (only SELL cleaned up). The
+    2026-08-04 flatten closed ten shorts and the book then persisted "10
+    positions" while holding none."""
+    b = PaperBroker(100_000, allow_short=True)
+    b.submit(Order(_asset(), Side.SELL, 100), 50.0)          # open a short
+    assert b.get_positions()["stock:X"].qty == -100
+
+    b.submit(Order(_asset(), Side.BUY, 100), 50.0)           # buy it back, flat
+    assert b.get_positions() == {}, "flat book must hold nothing"
+    assert b.state()["positions"] == [], \
+        "a zero-qty tombstone must never be persisted"
+    # partial closes must still behave
+    b.submit(Order(_asset(), Side.SELL, 100), 50.0)
+    b.submit(Order(_asset(), Side.BUY, 40), 50.0)
+    assert abs(b.get_positions()["stock:X"].qty + 60) < 1e-9
+    assert len(b.state()["positions"]) == 1
+
+
 def test_limit_buy_fills_within_limit():
     b = PaperBroker(10_000)
     o = Order(_asset(), Side.BUY, 10, order_type=OrderType.LIMIT, limit_price=105.0)

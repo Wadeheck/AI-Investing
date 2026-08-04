@@ -5,6 +5,7 @@ runs without installing anything.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -122,13 +123,45 @@ class Portfolio:
     cash: float
     positions: dict[str, Position] = field(default_factory=dict)
 
+    def _px(self, key: str, pos: Position, prices: dict[str, float]) -> float:
+        """The price to value `pos` at, or its cost basis if there isn't one.
+
+        A MISSING key already fell back to avg_price. The hole was a key that is
+        PRESENT and worthless: the runner builds prices as `b[-1].close if b else
+        0.0`, so a feed outage writes 0.0 rather than omitting the symbol, and
+        0.0 sailed straight through as a valuation. A short at price 0 looks like
+        a debt that has been forgiven, so equity silently collapses to cash.
+
+        That is not hypothetical. On 2026-08-03 every position valued at zero and
+        equity read $116,027 — the book's cash, short proceeds and all — against
+        a true $99,997. The reading became the day's opening mark, the next
+        honest cycle measured a 13.8% "drawdown" against it, and the circuit
+        breaker flattened twelve healthy positions and latched. NaN was worse
+        still: it propagated to equity, and every breaker comparison against NaN
+        is False, so hours of unvalued book passed every safety check in silence.
+
+        Cost basis is the right fallback because it is the one number that is
+        always known and never absurd. It makes an outage look like "no change",
+        which is the honest reading of "we cannot see the price".
+        """
+        px = prices.get(key)
+        if px is None:
+            return pos.avg_price
+        try:
+            px = float(px)
+        except (TypeError, ValueError):
+            return pos.avg_price
+        if not math.isfinite(px) or px <= 0.0:
+            return pos.avg_price
+        return px
+
     def equity(self, prices: dict[str, float]) -> float:
         total = self.cash
         for key, pos in self.positions.items():
-            total += pos.market_value(prices.get(key, pos.avg_price))
+            total += pos.market_value(self._px(key, pos, prices))
         return total
 
     def exposure(self, prices: dict[str, float]) -> float:
         """Gross exposure = sum of |position value|."""
-        return sum(abs(pos.market_value(prices.get(key, pos.avg_price)))
+        return sum(abs(pos.market_value(self._px(key, pos, prices)))
                    for key, pos in self.positions.items())
