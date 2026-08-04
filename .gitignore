@@ -12,8 +12,12 @@ env/
 # --- Secrets & data ---
 # NOTE: /data/ is anchored to the repo root so it only ignores the engine's OUTPUT
 # directory, NOT the engine/ai_investing/data/ source package.
-.env
-.env.local
+# Every .env variant, not just two names. `.env.before-live` — a full copy of
+# the file including broker tokens — sat untracked and UNIGNORED on the trading
+# box on 2026-08-04, one `git add -A` away from being published. Allow-list the
+# example instead of trying to enumerate the backups people will make.
+.env*
+!.env.example
 /data/
 *.db
 *.sqlite
