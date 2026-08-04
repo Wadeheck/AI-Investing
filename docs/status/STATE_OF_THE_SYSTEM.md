@@ -571,6 +571,61 @@ else's.
   while failing on the ProDesk. All three were caught by tests, not by review. A
   fix is a hypothesis until something executes it.
 
+### 4.16 I shipped a crash loop, and 27 green suites let me *(2026-08-05)*
+
+Reported by the user, not by a check: eighteen `AI-Investing started (LIVE) — θv1
+… θv18` messages in thirteen minutes, and *"its confusing to me as the end user
+to receive this kind of messages"*.
+
+- **What.** `AttributeError: 'Runner' object has no attribute '_flagged_symbols'`
+  on line 297 of the hot path. The engine exited every cycle; systemd restarted it;
+  it did that **18 times**. The books were untouched — it died before placing
+  anything — but the engine was effectively down for 13 minutes while appearing to
+  start successfully over and over.
+- **How I caused it.** The patch script that added the `__init__` line asserted on
+  a *later* edit in the same script, failed that assertion, and exited **before
+  writing the file**. I then "verified" with `grep -n "_flagged_symbols"`, saw
+  three hits, and shipped. All three were *uses*; none was the initialisation.
+- **Why the tests did not catch it.** Nothing in this repository had ever
+  constructed a `Runner` and called `run_cycle()`. Every suite tested a component.
+  **The main loop — the only code that runs in production every five minutes — had
+  zero coverage.** So an `AttributeError` in it shipped green, twice: locally and
+  on the box.
+- **Fix.** The missing initialiser, plus `test_runner_cycle.py`, which runs a real
+  cycle against synthetic data with every path redirected to a scratch directory,
+  runs a **second** cycle (state written at the end of one and read at the start of
+  the next is exactly where this class of bug lives), and asserts the alert
+  behaviour through a counting notifier. Confirmed by deleting the initialiser and
+  watching it reproduce.
+
+**Two more bugs the noise exposed**, both worse than the crash:
+
+- **The engine announced every restart.** A deploy bounce is not news, and here it
+  produced eighteen identical alerts that **buried the one message that mattered**
+  — the watchdog's `restarted 10x since last check — crash loop, not a blip`. The
+  noise did not merely annoy; it hid the diagnosis. Now it alerts only after being
+  down more than 15 minutes, judged from the heartbeat, and says how long. A
+  healthy restart is silent, because silence is the correct report for "nothing
+  happened".
+- **θ version was counting restarts, not learning.** `store.save()` incremented
+  `model.version` unconditionally and is called from `run_forever()`'s `finally`,
+  so every process exit advanced it — θv1 to θv21 in twenty minutes with **zero
+  trades learned from**, every number sent to the user and appended to the params
+  history as though the formula had matured. The version exists precisely so you can
+  watch θ mature; counting restarts makes it worse than useless, because it looks
+  like learning. Now it moves only when the weights actually differ from disk.
+
+- **Lesson.** §4.15 said nine of eleven defects were in code that had never been
+  executed. Within the hour I proved the point against myself by shipping a
+  reference to something that did not exist, into the one path with no test — and
+  my verification was a `grep` that confirmed the wrong thing. **A grep proves a
+  string is present, never that the code works.** The only check that would have
+  caught this is the one that runs it.
+- **Second lesson, for the user's benefit rather than mine.** Every alert this
+  system sends should answer *"what do I do about this?"*. "Started" answers
+  nothing. Three of the four noise incidents in this register are the same mistake
+  — announcing a state instead of an event — and each one buried something real.
+
 ---
 
 ## 4A. Open defects — known, NOT fixed
@@ -582,7 +637,9 @@ and the register had drifted **13 commits** behind reality.
 | Open | Detail | Risk today |
 |---|---|---|
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
-| **A third announce-the-state instance may exist** | Found this pattern twice in one day (breaker, data guard). No systematic sweep has been done for others. | Alert fatigue, which defeats every safeguard. |
+| **A fourth announce-the-state instance may exist** | Found three (breaker, data guard, engine-start) — the third only because the user complained. Still no systematic sweep. | Alert fatigue, which defeats every safeguard. |
+| **θ version is inflated to v21** | ~20 of those 21 increments were process exits during the §4.16 crash loop, not learning. The counter is now correct going forward but the historical number is wrong, and `journal.db` params rows recorded alongside it are duplicates of identical θ. | Cosmetic, but it misreports maturity. |
+| **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |

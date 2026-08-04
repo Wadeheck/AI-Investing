@@ -118,6 +118,36 @@ worse. Wait for the limit to reset; the books hold at cost until it does. Only
 investigate if the breaker halted, or if `stale_marks` stays non-zero for hours
 after the guard stops flagging.
 
+## What will actually message you
+
+Every alert must answer *"what do I do about this?"*. Anything that does not is
+noise, and noise is not harmless — three separate times it has buried a real
+diagnosis (STATE §4.7, §4.15/11, §4.16).
+
+| You get a message when | You do NOT get one when |
+|---|---|
+| A book halts (🛑 breaker) — **once**, on the latching cycle | ...on the 100 cycles it stays halted |
+| A symbol **starts** or **stops** being data-flagged | ...on every cycle in between |
+| The engine starts after being **down >15 min** | ...on a deploy restart or a quick bounce |
+| A trade fills above `ALERT_MIN_NOTIONAL` | ...for decisions it merely considered |
+| The watchdog sees a crash loop, a stall, or a dead channel | |
+| `needs_you.py` has a decision that is genuinely yours | |
+
+**If you get a burst of identical messages, that is a bug — report it.** It means
+something is announcing a *state* instead of an *event*, and it has happened three
+times. The engine's own start message was the third, and it took the user pointing
+at eighteen of them.
+
+**Silence is a report.** A healthy engine restarting says nothing on purpose. To
+check it is alive, don't wait for a message — ask:
+
+```bash
+systemctl --user show ai-investing -p ActiveState -p NRestarts
+.venv/bin/python scripts/daily_status.py | tail -5
+```
+
+`NRestarts` climbing on its own is the crash-loop signature. `0` is what you want.
+
 ## What is protected, and what is not
 
 | Failure | Response |
