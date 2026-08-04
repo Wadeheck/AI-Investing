@@ -119,6 +119,56 @@ def test_ten_of_each_asset_class_are_actually_watchable():
     assert len(lists.get("STOCK_WATCHLIST", [])) >= 10
 
 
+def test_the_watch_list_is_graded_and_kept_separate():
+    """Only `trades` was ever scored, so every call below the conviction floor
+    taught nothing. From 2026-08-04 the watch list is what guarantees >=10 stock
+    and >=10 crypto data points a round, so it must be graded — and tagged, so
+    low-conviction filler cannot move the number that decides real trades."""
+    import json
+    import tempfile
+    from datetime import datetime, timedelta, timezone
+
+    d = tempfile.mkdtemp()
+    os.environ["STATE_PATH"] = os.path.join(d, "state.json")
+    from ai_investing.config import Settings
+    from ai_investing.brain.scorecard import Scorecard
+
+    sc = Scorecard(Settings())
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+    sc.conn.execute("CREATE TABLE IF NOT EXISTS advice_log("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, advice TEXT)")
+    sc.conn.execute("INSERT INTO advice_log(ts, advice) VALUES(?,?)", (old_ts, json.dumps({
+        "trades": [{"symbol": "NVDA", "direction": "long", "market": "US"}],
+        "watch": [{"symbol": "ETH/USD", "direction": "long", "conviction": False},
+                  {"symbol": "DOGE/USD", "direction": "avoid", "conviction": False}]})))
+    day = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=6)).date().isoformat()
+    sc.conn.executemany("INSERT INTO price_history(date,symbol,price) VALUES(?,?,?)",
+                        [(day, "NVDA", 100.0), (day, "SPY", 500.0),
+                         (day, "ETH/USD", 2000.0), (day, "DOGE/USD", 0.10),
+                         (day, "BTC/USD", 60000.0)])
+    #                NVDA +10% (SPY flat) | ETH +20% vs BTC +5% | DOGE +1% vs BTC +5%
+    sc.snapshot_prices({"NVDA": 110.0, "SPY": 500.0, "ETH/USD": 2400.0,
+                        "DOGE/USD": 0.101, "BTC/USD": 63000.0})
+    by = {o["symbol"]: o for o in sc.score_due(horizon_days=5)}
+
+    assert set(by) == {"NVDA", "ETH/USD", "DOGE/USD"}, \
+        "the watch list must be scored, not silently dropped"
+    assert by["NVDA"]["conviction"] is True
+    assert by["ETH/USD"]["conviction"] is False
+
+    # crypto is judged against BTC, not an equity index
+    assert by["ETH/USD"]["bench"] == "BTC/USD"
+    assert by["ETH/USD"]["hit"] == 1, "ETH +20% while BTC did +5% is a good long"
+    assert by["DOGE/USD"]["hit"] == 1, "DOGE +1% while BTC did +5% — avoiding it was right"
+    assert by["DOGE/USD"]["hit_abs"] == 0, \
+        "absolute grading still calls that a miss, which is exactly the old bug"
+
+    rec = sc.track_record()
+    assert rec["market_relative"]["conviction"]["n"] == 1
+    assert rec["market_relative"]["coverage"]["n"] == 2
+    assert rec["by_class"]["crypto"]["n"] == 2 and rec["by_class"]["stock"]["n"] == 1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

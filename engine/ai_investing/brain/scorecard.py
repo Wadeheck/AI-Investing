@@ -134,7 +134,8 @@ class Scorecard:
                     "ALTER TABLE advice_outcomes ADD COLUMN bench_ret REAL",
                     "ALTER TABLE advice_outcomes ADD COLUMN excess_ret REAL",
                     "ALTER TABLE advice_outcomes ADD COLUMN hit_abs INTEGER",
-                    "ALTER TABLE advice_outcomes ADD COLUMN basis TEXT"):
+                    "ALTER TABLE advice_outcomes ADD COLUMN basis TEXT",
+                    "ALTER TABLE advice_outcomes ADD COLUMN is_conviction INTEGER"):
             try:
                 self.conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -199,9 +200,18 @@ class Scorecard:
         now = datetime.now(timezone.utc).isoformat()
         for aid, ts, blob in rows:
             try:
-                trades = (json.loads(blob) or {}).get("trades") or []
+                adv = json.loads(blob) or {}
             except json.JSONDecodeError:
                 continue
+            # Grade the WATCH list as well. It was never scored, so the only calls
+            # ever measured were the ones that cleared the conviction floor — and
+            # from 2026-08-04 the watch list is what guarantees >=10 stock and >=10
+            # crypto data points a round. An ungraded prediction teaches nothing.
+            # `conviction` keeps the two tiers separable so filler cannot flatter
+            # or depress the number that matters.
+            trades = [dict(t, _conv=True) for t in (adv.get("trades") or [])]
+            trades += [dict(t, _conv=bool(t.get("conviction")))
+                       for t in (adv.get("watch") or [])]
             issue_date = (datetime.fromisoformat(ts) + timedelta(hours=8)).date().isoformat()
             for t in trades:
                 sym, direction = t.get("symbol"), t.get("direction")
@@ -233,14 +243,17 @@ class Scorecard:
                 self.conn.execute(
                     "INSERT INTO advice_outcomes"
                     "(advice_id,symbol,direction,ts_issued,horizon_days,realized_ret,hit,"
-                    " scored_at,bench_symbol,bench_ret,excess_ret,hit_abs,basis)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " scored_at,bench_symbol,bench_ret,excess_ret,hit_abs,basis,"
+                    " is_conviction)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (aid, sym, direction, ts, horizon_days, round(ret, 5), hit, now,
                      bench, None if bench_ret is None else round(bench_ret, 5),
-                     None if excess is None else round(excess, 5), hit_abs, basis))
+                     None if excess is None else round(excess, 5), hit_abs, basis,
+                     int(bool(t.get("_conv")))))
                 out.append({"symbol": sym, "direction": direction, "ret": ret, "hit": hit,
                             "bench": bench, "bench_ret": bench_ret, "excess": excess,
-                            "hit_abs": hit_abs, "basis": basis})
+                            "hit_abs": hit_abs, "basis": basis,
+                            "conviction": bool(t.get("_conv"))})
         self.conn.commit()
         # A benchmark with no price history silently downgrades every call in that
         # market back to absolute grading — the exact failure this change exists to
@@ -303,8 +316,9 @@ class Scorecard:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         rows = self.conn.execute(
             "SELECT symbol, direction, realized_ret, hit, excess_ret, bench_symbol, "
-            "       COALESCE(basis,'absolute') FROM advice_outcomes "
-            "WHERE scored_at >= ? AND hit IS NOT NULL", (cutoff,)).fetchall()
+            "       COALESCE(basis,'absolute'), COALESCE(is_conviction,1) "
+            "FROM advice_outcomes WHERE scored_at >= ? AND hit IS NOT NULL",
+            (cutoff,)).fetchall()
 
         def rate(sel):
             g = [r for r in rows if sel(r)]
@@ -333,7 +347,16 @@ class Scorecard:
             # the numbers worth reading
             "market_relative": {**rate(lambda r: r[6] == "excess"),
                                 "long": rate(lambda r: r[6] == "excess" and r[1] == "long"),
-                                "avoid": rate(lambda r: r[6] == "excess" and r[1] == "avoid")},
+                                "avoid": rate(lambda r: r[6] == "excess" and r[1] == "avoid"),
+                                # what it would ACT on vs the coverage calls that
+                                # exist only to produce data points. Mixing them
+                                # would let filler flatter or depress the number
+                                # that actually decides trades.
+                                "conviction": rate(lambda r: r[6] == "excess" and r[7]),
+                                "coverage": rate(lambda r: r[6] == "excess" and not r[7])},
+            "by_class": {
+                "stock": rate(lambda r: r[6] == "excess" and "/" not in r[0]),
+                "crypto": rate(lambda r: r[6] == "excess" and "/" in r[0])},
             # the pre-2026-08-04 era, kept visible and kept separate
             "legacy_absolute": rate(lambda r: r[6] == "absolute"),
             "best": fmt(best),

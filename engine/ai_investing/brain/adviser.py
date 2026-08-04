@@ -276,10 +276,34 @@ def advise(settings, brain, log: bool = True) -> dict:
     # QUALITY FLOOR, not a quota: only ideas with real conviction are advised.
     # Some days that is zero — and saying so is honest, valuable advice.
     floor = settings.brain.advise_min_conviction
-    top = [r for r in rows if abs(r["score"]) >= floor][:settings.brain.advise_top_n]
-    watch = [r for r in rows if abs(r["score"]) < floor][:settings.brain.advise_top_n]
+    n = settings.brain.advise_top_n
+    top = [r for r in rows if abs(r["score"]) >= floor][:n]
     for i, r in enumerate(top, 1):
         r["rank"] = i
+        r["conviction"] = True
+
+    # COVERAGE, PER ASSET CLASS. `top` stays a pure conviction list — forcing
+    # filler into it would corrupt the number that matters. But learning needs
+    # data points on both sides of every market, so `watch` is topped up until
+    # EACH class carries at least `n` graded calls between the two lists.
+    #
+    # Without a per-class quota crypto never appeared: one global ranking, and a
+    # stock scores on three legs (field + formula + scenario) where a coin without
+    # a graph node has only the formula. All 13 coins had live scores from -0.35 to
+    # +0.34 and still lost every seat to stocks — invisible in `below_floor`, and
+    # nothing to learn from.
+    def _cls(r):
+        return "crypto" if "/" in r["symbol"] else "stock"
+
+    watch: list[dict] = []
+    for cls in ("stock", "crypto"):
+        have = sum(1 for r in top if _cls(r) == cls)
+        pool = [r for r in rows
+                if _cls(r) == cls and abs(r["score"]) < floor and r not in top]
+        for r in pool[:max(0, n - have)]:
+            r["conviction"] = False
+            watch.append(r)
+    watch.sort(key=lambda r: -abs(r["score"]))
 
     advice = {
         "ts": now.isoformat(),
