@@ -3,6 +3,7 @@
 These tests encode the DESIGN CONTRACT in docs/design/LEARNING.md. If one fails, the
 learner is either not learning or learning dangerously.
 """
+import json
 import os
 import sys
 import tempfile
@@ -141,6 +142,68 @@ def test_regime_of_maps_the_three_states():
     assert regime_of(0.0) == "neutral"
     assert regime_of(-0.5) == "risk_off"
     assert regime_of(0.9, bear=True) == "risk_off", "an explicit bear overrides"
+
+
+def test_a_second_claim_on_a_live_symbol_is_refused_not_swallowed():
+    """2026-08-04: the event sleeve's broken re-entry guard opened two USO claims
+    44 minutes apart. `open` is keyed policy:symbol, so the second REPLACED the
+    first — which was then never settled and remains a dangling `open` record in
+    expectations.jsonl forever.
+
+    The claim corpus is the one artefact here that cannot be rebuilt, so silent
+    corruption of it is the worst outcome. Refuse the duplicate, keep the claim the
+    position was actually opened on, and say so out loud.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        first = sp.record("event", "USO", 1, 0.0571, 0.02, 2, driver="uso")
+        again = sp.record("event", "USO", 1, 0.1090, 0.02, 2, driver="uso")
+
+        assert again == first, "the duplicate must resolve to the ORIGINAL claim id"
+        assert len(sp._s["open"]) == 1
+        assert sp._s["open"]["event:USO"]["id"] == first, \
+            "the first claim is the one the position was opened on; it must survive"
+        # the original expected_move must be intact — the exit is judged against it
+        assert abs(sp._s["open"]["event:USO"]["expected_move"] - 0.00162) < 1e-4
+
+        # and the refusal is on the record, not just printed
+        rows = [json.loads(l) for l in open(sp.ledger_path)]
+        assert any(r.get("state") == "rejected" for r in rows), \
+            "a refused claim must be journalled, not merely logged"
+        assert sum(1 for r in rows if r.get("state") == "open") == 1, \
+            "exactly one claim may be opened for one position"
+
+        # settling still works, and settles the surviving claim exactly once
+        out = sp.settle("event", "USO", -0.1006, exit_reason="hard stop")
+        assert out is not None and out["id"] == first
+        assert sp.settle("event", "USO", -0.05) is None, "nothing left to settle"
+
+
+def test_a_stop_out_is_punished_harder_than_a_scratch():
+    """The old score was blind to HOW wrong a call was: at equal conviction a -10%
+    stop-out and a -0.3% scratch scored identically (-0.772 in the real USO case).
+    For a system whose hard rule is a max loss per position, that is a blind spot
+    in exactly the place it matters.
+
+    Severity scales the penalty, bounded by RATIO_CLIP so one freak outcome still
+    cannot rewrite the model.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        scores = {}
+        for label, realized in (("scratch", -0.004), ("stop_out", -0.1006)):
+            sp = _spine(os.path.join(tmp, label))
+            sp.record("event", "USO", 1, 0.109, 0.02, 2, driver="uso")
+            scores[label] = sp.settle("event", "USO", realized)["score"]
+
+        assert scores["stop_out"] < scores["scratch"], (
+            f"a stop-out ({scores['stop_out']}) must cost more than a scratch "
+            f"({scores['scratch']})")
+        assert scores["stop_out"] >= -1.0, "the penalty stays bounded at -1"
+
+        # and a catastrophe far beyond the clip must not exceed the floor
+        sp = _spine(os.path.join(tmp, "catastrophe"))
+        sp.record("event", "USO", 1, 0.109, 0.02, 2, driver="uso")
+        assert sp.settle("event", "USO", -0.90)["score"] >= -1.0
 
 
 if __name__ == "__main__":

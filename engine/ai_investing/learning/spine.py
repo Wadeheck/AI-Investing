@@ -27,6 +27,11 @@ EDGE_GAIN = 0.8           # how hard proven edge moves size
 SIZE_BOUNDS = (0.5, 1.4)  # a bad policy shrinks; a good one cannot run away
 GAIN_BOUNDS = (0.25, 3.0)  # expectation-scaling limits
 RATIO_CLIP = 3.0          # one freak outcome must not rewrite the model
+# Severity of a loss, on top of the direction/conviction penalty. Referenced to the
+# risk budget: a loss that used the whole per-position allowance is the worst case
+# the design permits, so it earns the full extra cost and no more.
+SEVERITY_REF = 0.10       # fallback budget when risk config is unavailable
+SEVERITY_WEIGHT = 0.25    # max extra penalty; keeps score within [-1, 1]
 HIT_FRACTION = 0.5        # realized must reach this share of expected to score +1
 COST_FLOOR = 0.002        # a "win" inside 20bps of frictions is noise, not skill
 REGIME_MIN_N = 15         # samples before a regime-specific posterior is used
@@ -58,6 +63,11 @@ class LearningSpine:
         d = os.path.dirname(os.path.abspath(settings.state_path))
         self.ledger_path = os.path.join(d, "expectations.jsonl")
         self.path = os.path.join(d, "learning_state.json")
+        # The per-position risk allowance, so a loss can be scored against what the
+        # design actually permits rather than a constant guessed here.
+        self.loss_budget = abs(float(
+            getattr(getattr(settings, "risk", None), "max_loss_per_position", 0.0)
+            or SEVERITY_REF))
         self._s = self._load()
 
     # -- persistence ---------------------------------------------------------
@@ -95,6 +105,21 @@ class LearningSpine:
         gain = self.calibration_gain(policy)
         exp = self.expected_move(signal, vol_daily, horizon_days, gain)
         tid = f"{policy}:{symbol}:{_now().isoformat()}"
+        # Refuse BEFORE writing anything. The first version appended the "open" row
+        # and only then checked, leaving a refused claim recorded as open — the same
+        # dangling-record corruption the check exists to prevent.
+        book = self._s.setdefault("open", {})
+        key = f"{policy}:{symbol}"
+        if key in book:
+            self._append({"id": tid, "ts": _now().isoformat(), "state": "rejected",
+                          "policy": policy, "symbol": symbol,
+                          "reason": "already-open claim on this policy:symbol",
+                          "kept": book[key].get("id")})
+            print(f"  !! spine: {key} already has an open claim "
+                  f"({book[key].get('id')}) — new claim NOT opened. A position was "
+                  f"added to a symbol the ledger is still tracking.")
+            self._save()
+            return book[key].get("id") or tid
         self._append({"id": tid, "ts": _now().isoformat(), "state": "open",
                       "policy": policy, "symbol": symbol, "direction": int(direction),
                       "signal": round(float(signal), 4), "regime": regime,
@@ -102,7 +127,16 @@ class LearningSpine:
                       "horizon_days": int(horizon_days), "driver": driver,
                       "notional": round(float(notional), 2),
                       "expected_move": round(exp, 5), "gain_used": round(gain, 3)})
-        self._s.setdefault("open", {})[f"{policy}:{symbol}"] = {
+        # ONE OPEN CLAIM PER policy:symbol (checked above, before any write). A second
+        # claim on a live symbol used to REPLACE the first, which was then never
+        # settled and sat in expectations.jsonl as a permanently dangling `open`
+        # record. It happened for real on 2026-08-04: the event sleeve's broken
+        # re-entry guard opened two USO claims 44 minutes apart and one vanished, so
+        # the corpus is missing a resolution it will never get. That corpus is the one
+        # artefact here that cannot be rebuilt, so corrupting it must be loud. The
+        # FIRST claim survives: the position was opened on it, and its expected_move
+        # is what the exit gets judged against.
+        book[key] = {
             "id": tid, "expected_move": exp, "direction": int(direction),
             "driver": driver, "regime": regime, "signal": abs(float(signal))}
         self._save()
@@ -124,6 +158,26 @@ class LearningSpine:
         conviction = max(0.2, min(1.0, float(claim.get("signal", 0.2)) * 5))
         if signed <= -cost_frac:
             score = -min(1.0, 0.5 + 0.5 * conviction)     # confidently wrong hurts more
+            # SEVERITY. Direction is the primary mistake and stays the dominant term,
+            # but the old score was blind to HOW wrong: a -10% stop-out and a -0.3%
+            # scratch scored identically at equal conviction. For a system whose hard
+            # rule is "no position may lose more than max_loss_per_position", failing
+            # to distinguish a full stop-out from a nick is a real blind spot — it
+            # was the actual USO outcome on 2026-08-04 (expected +0.31%, realised
+            # -10.06%) scoring the same as a trade that lost a fifth of a percent.
+            #
+            # Scaled by the clipped ratio, which is already bounded, so one freak
+            # outcome still cannot rewrite the model. At |ratio| >= RATIO_CLIP the
+            # penalty reaches its floor of -1.0 and stops — bounded, not unbounded.
+            # Measured on the ABSOLUTE loss against the risk budget, NOT on the
+            # ratio to expectation. Ratio was the first attempt and it broke the
+            # design contract: expected_move scales with conviction, so a confident
+            # call losing X has a SMALLER ratio than a tentative one losing the same
+            # X, and severity then cancelled out the conviction penalty it is
+            # supposed to add to. Conviction stays the dominant term; severity is a
+            # bounded additive cost on top.
+            severity = min(1.0, abs(signed) / max(1e-6, self.loss_budget))
+            score = max(-1.0, score - SEVERITY_WEIGHT * severity)
         elif signed >= max(cost_frac, HIT_FRACTION * exp):
             score = 1.0
         else:
