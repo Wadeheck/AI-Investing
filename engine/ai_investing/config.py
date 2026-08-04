@@ -205,6 +205,13 @@ class Settings:
     live: bool = field(default_factory=lambda: _get_bool("LIVE_TRADING", False))
     base_currency: str = field(default_factory=lambda: _get("BASE_CURRENCY", "USD"))
     starting_cash: float = field(default_factory=lambda: _get_float("STARTING_CASH", 100_000.0))
+    # The 🏛 investing book's seed capital. investor.py has always read this via
+    # `getattr(settings, "invest_starting_cash", 100000.0)` — and the attribute did
+    # not exist, so the fallback fired every time and that book's size was
+    # unconfigurable in practice. The sleeve and crypto books take
+    # EVENT_START_CASH / CRYPTO_START_CASH; this is the missing third.
+    invest_starting_cash: float = field(
+        default_factory=lambda: _get_float("INVEST_STARTING_CASH", 100_000.0))
     # How much of a LIVE account this engine may treat as its own book, in
     # BASE_CURRENCY. 0 = off, meaning the whole account (the old behaviour).
     #
