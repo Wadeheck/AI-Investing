@@ -11,7 +11,15 @@ yfinance==1.5.1         # free stock/ETF historical data
 ccxt==4.5.66            # unified crypto data + trading (coinbase, gemini, binance, kraken...)
 
 # --- Stock brokers (Singapore) ---
-longbridge==4.3.3       # Longbridge / LongPort OpenAPI (SG/HK/US/CN) — cloud API
+# NOT `longbridge`. Both packages exist on PyPI at the same version line and both
+# ship an `openapi` submodule, but under different top-level names: `longbridge`
+# gives you `longbridge.openapi`, `longport` gives you `longport.openapi`.
+# brokers/live.py imports `longport.openapi`, so pinning `longbridge` installed a
+# package nothing imports and left the adapter permanently unconstructable —
+# `--check-broker` failed with ModuleNotFoundError, which reads as "SDK missing"
+# rather than "wrong SDK pinned". Found 2026-08-04, the first time the check was
+# ever run. `longport` is the current name; `longbridge` is the superseded one.
+longport==4.3.5         # Longbridge / LongPort OpenAPI (SG/HK/US/CN) — cloud API
 moomoo-api==10.9.6908   # moomoo OpenAPI — needs the moomoo OpenD gateway running locally
 
 # --- Optional niceties (engine has stdlib fallbacks for all of these) ---

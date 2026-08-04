@@ -17,6 +17,13 @@ what it predicted and reallocates capital toward demonstrated skill.
 pointed at a funded account. Nothing in this document should be read as
 evidence the system makes money with real money.
 
+As of 2026-08-04 the Longbridge adapter does at least **authenticate** — against
+a Longbridge *paper* account (`ac: lb_papertrading`), read-only, reporting cash
+and zero positions. That is the first time any broker adapter in this project
+has successfully connected to anything. It proves credentials, transport and the
+balance call; it proves **nothing** about placing, filling, or cancelling an
+order. See §5.1.
+
 ## 2. Where it stands today
 
 ```
@@ -425,6 +432,26 @@ free and not side-effect-free.
 1. **No live-money validation, ever.** Broker adapters have never touched a
    funded account. Slippage, partial fills, rejects, borrow availability for
    shorts — all unmodelled beyond assumptions.
+
+   Partially advanced 2026-08-04: `--check-broker` now returns `[ok] stocks` on a
+   Longbridge **paper** account. Note what that cost to discover — the check had
+   never been run, and it failed with `ModuleNotFoundError: No module named
+   'longport'` because `requirements.txt` pinned the `longbridge` PyPI package
+   while `brokers/live.py` imports `longport.openapi`. Two real packages, same
+   version line, different top-level names. **The adapter could never have
+   constructed, in any environment, since it was written.** An untested code path
+   is not "probably fine"; this one was unrunnable and nothing said so.
+
+   Still unverified even on paper: order placement, fill semantics, cancellation,
+   rejects, and the symbol-format assumptions in the HK/US routing. Paper accounts
+   also do not support OTC or pre/post-market trading, so those cannot be
+   validated this way at all.
+
+   Crypto remains `[FAIL]`: the Gemini credential is a **master key**, and ccxt
+   requires an account-scoped key (`gemini sign() requires an account-key,
+   master-keys are not-supported`). Fixing it means issuing an account key in the
+   Gemini console — which is the more restricted object anyway, so the fix and the
+   hardening are the same action.
 2. **The learning spine has never run.** 0 settled claims; neither
    `expectations.jsonl` nor `learning_state.json` exists on disk. Its behaviour is
    test-verified, not observed. Note the event sleeve's three profitable exits did

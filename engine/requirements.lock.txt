@@ -28,7 +28,7 @@ httpcore==1.0.9
 httpx==0.28.1
 idna==3.18
 jiter==0.16.0
-longbridge==4.3.3
+longport==4.3.5
 markdown-it-py==4.2.0
 mdurl==0.1.2
 moomoo_api==10.9.6908
