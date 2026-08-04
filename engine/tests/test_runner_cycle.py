@@ -99,6 +99,65 @@ def test_the_guard_alert_fires_on_change_not_every_cycle():
     assert any("recovered" in t for t in sent), "clearing must be announced too"
 
 
+def test_a_routine_restart_says_nothing__a_real_outage_says_something():
+    """The user's complaint, as a test. Eighteen "started (LIVE)" messages in
+    thirteen minutes buried the watchdog's crash-loop diagnosis. A deploy bounce is
+    not news; an engine that was actually DOWN is."""
+    import json
+    from ai_investing.safety import heartbeat as hb
+    import ai_investing.runner as runner_mod
+
+    sent: list[str] = []
+
+    class Counting:
+        enabled = True
+        def send(self, text, buttons=None):
+            sent.append(text)
+            return True
+
+    s = Settings()
+
+    # a FRESH heartbeat = the engine was just running = say nothing
+    hb.write_heartbeat(s.heartbeat_path, {"equity": 10000})
+    real = runner_mod.get_notifier
+    runner_mod.get_notifier = lambda _s: Counting()
+    try:
+        Runner(s, use_news=False)
+        assert not sent, f"a routine restart must be silent, got {sent}"
+
+        # a STALE heartbeat = it was genuinely down = report the recovery
+        d = json.load(open(s.heartbeat_path))
+        d["ts"] = "2026-08-04T00:00:00+00:00"          # hours ago
+        json.dump(d, open(s.heartbeat_path, "w"))
+        Runner(s, use_news=False)
+        assert len(sent) == 1 and "recovered" in sent[0], \
+            f"a real outage must be reported, got {sent}"
+    finally:
+        runner_mod.get_notifier = real
+
+
+def test_theta_version_tracks_learning_not_restarts():
+    """θv1 -> θv21 in twenty minutes with zero trades learned from. save() bumped
+    the version unconditionally and is called from run_forever()'s finally, so the
+    number counted process exits and was reported as if the formula had matured."""
+    from ai_investing.learning.store import ParamStore
+
+    path = os.path.join(tempfile.mkdtemp(), "formula.json")
+    st = ParamStore(path)
+    model, _ = st.load()
+    st.save(model)
+    first = model.version
+
+    for _ in range(5):                      # five restarts, no learning
+        st.save(model)
+    assert model.version == first, \
+        f"unchanged θ must not advance the version: {first} -> {model.version}"
+
+    model.weights = [w + 0.01 for w in model.weights]   # actual learning
+    st.save(model)
+    assert model.version == first + 1, "a real θ change must advance it exactly once"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

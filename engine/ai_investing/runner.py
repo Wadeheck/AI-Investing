@@ -25,6 +25,12 @@ from ai_investing.strategy import (DecisionEngine, RegimeGate, RiskManager, User
                                    build_market_stats)
 
 
+# How long the engine must have been DOWN before a start is worth a notification.
+# Below this it is a deploy or a quick bounce, and saying so on Telegram trains the
+# user to ignore the channel every safeguard reports through (STATE §4.16).
+START_ALERT_GAP_S = 900.0        # 15 minutes
+
+
 def foreign_positions(position_keys, universe) -> set[str]:
     """Positions this engine has no mandate over: present in the account, absent
     from the watchlist it trades.
@@ -98,9 +104,33 @@ class Runner:
 
         # --- alerts ---
         self.notifier = get_notifier(settings)
-        if self.notifier.enabled:
-            self.notifier.send(f"🟢 AI-Investing started "
-                               f"({'LIVE' if settings.live else 'paper'}) — θv{self.model.version}")
+        # ANNOUNCE A RECOVERY, NOT A RESTART (2026-08-05).
+        #
+        # This used to message on every start. A deploy restart is not news, and a
+        # crash loop turned it into eighteen identical "started (LIVE)" alerts in
+        # thirteen minutes — which BURIED the one message that mattered, the
+        # watchdog's "restarted 10x since last check — crash loop, not a blip". The
+        # noise did not merely annoy; it hid the diagnosis.
+        #
+        # So: alert only when the engine was actually DOWN long enough to matter,
+        # judged from the heartbeat rather than from a counter, and say how long.
+        # Restarting a healthy engine now says nothing at all. Silence is the
+        # correct report for "nothing happened".
+        mode = "LIVE" if settings.live else "paper"
+        down_s = None
+        try:
+            from ai_investing.safety import heartbeat as _hb
+            hb = _hb.read_heartbeat(settings.heartbeat_path)
+            down_s = _hb.age_seconds(hb) if hb else None
+        except Exception:
+            down_s = None
+        print(f"  started ({mode}) — θv{self.model.version}; "
+              f"last heartbeat {f'{down_s / 60:.0f} min ago' if down_s else 'none'}")
+        if self.notifier.enabled and (down_s is None or down_s > START_ALERT_GAP_S):
+            gap = (f"after {down_s / 3600:.1f}h down" if down_s
+                   else "first start (no prior heartbeat)")
+            self.notifier.send(f"🟢 AI-Investing recovered — {mode}, {gap}, "
+                               f"θv{self.model.version}")
 
         # --- safety layer ---
         errors, warnings = validate_settings(settings)

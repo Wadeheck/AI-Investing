@@ -49,9 +49,45 @@ class ParamStore:
     def load_model(self) -> FormulaModel:
         return self.load()[0]
 
+    def _weights_changed(self, model: FormulaModel) -> bool:
+        """Has θ moved since what is on disk?
+
+        A first save (nothing on disk) counts as a change: version 1 is real. An
+        unreadable file also counts, because refusing to record a version bump we
+        cannot rule out is the safer error — an over-counted version is misleading,
+        a silently dropped one loses history.
+        """
+        try:
+            with open(self.path) as fh:
+                prev = (json.load(fh) or {}).get("model") or {}
+        except (OSError, json.JSONDecodeError):
+            return True
+        if not prev:
+            return True
+        if list(prev.get("feature_names") or []) != list(model.feature_names):
+            return True
+        old_w = [float(x) for x in (prev.get("weights") or [])]
+        new_w = [float(x) for x in model.weights]
+        if len(old_w) != len(new_w):
+            return True
+        return any(abs(a - b) > 1e-12 for a, b in zip(old_w, new_w))
+
     def save(self, model: FormulaModel, rls: Optional[RLSLearner] = None,
              metrics: Optional[dict] = None, journal=None) -> None:
-        model.version += 1
+        # BUMP THE VERSION ONLY WHEN θ ACTUALLY CHANGED (fixed 2026-08-05).
+        # This used to increment unconditionally, and save() is called from
+        # run_forever()'s `finally` — so every process exit advanced the version.
+        # A crash loop took the engine from θv1 to θv21 in twenty minutes without a
+        # single trade being learned from, and every one of those numbers was
+        # reported to the user on Telegram and appended to the params history as
+        # though the formula had matured.
+        #
+        # The version is supposed to let you watch the formula mature (see this
+        # module's docstring). Counting restarts instead makes it worse than
+        # useless: it looks like learning.
+        changed = self._weights_changed(model)
+        if changed:
+            model.version += 1
         payload = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": model.to_dict(),
@@ -61,5 +97,7 @@ class ParamStore:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w") as fh:
             json.dump(payload, fh, indent=2)
-        if journal is not None:
+        # The params history is a record of the formula CHANGING. Appending a row on
+        # every shutdown filled it with identical θ under rising version numbers.
+        if journal is not None and changed:
             journal.record_params(model, metrics or {})
