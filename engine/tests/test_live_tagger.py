@@ -113,6 +113,60 @@ def test_batch_stays_small_enough_for_recall():
     assert _BATCH <= 12, "recall collapses on large batches — see the audit script"
 
 
+def test_x_capture_reaches_the_live_headline_feed():
+    """The X capture was a WRITE-ONLY channel for the life of the project.
+
+    x_capture_ingest.py filled news_archive_x.jsonl, daily_status and needs_you
+    watched its age, and nothing ever read it into the live brain — verified
+    against brain.db: of 36 X headlines captured for 2026-08-03/04, exactly one
+    appeared, and that arrived via an RSS feed carrying the same story. The daily
+    manual harvest shaped future retraining while contributing nothing to the
+    decisions being made that day.
+    """
+    import json
+    import tempfile
+    from datetime import datetime, timedelta, timezone
+    from ai_investing.brain.events import source_trust
+    from ai_investing.data.news import _x_capture_headlines
+
+    d = tempfile.mkdtemp()
+    now = datetime.now(timezone.utc)
+    fresh, stale = now - timedelta(hours=2), now - timedelta(days=30)
+    with open(os.path.join(d, "news_archive_x.jsonl"), "w") as fh:
+        fh.write(json.dumps({"date": "2026-08-03", "ts": fresh.isoformat(), "headlines": [
+            {"title": "Bitcoin ETF Daily Flow: +14.1 million net",
+             "source": "x.com/FarsideUK", "ts": fresh.isoformat()},
+            {"title": "Coldcard hack losses exceed $100 million",
+             "source": "x.com/TheBlockCo", "ts": fresh.isoformat()},
+            {"title": "", "source": "x.com/TheBlockCo", "ts": fresh.isoformat()},
+        ]}) + "\n")
+        fh.write(json.dumps({"date": "2026-07-01", "ts": stale.isoformat(), "headlines": [
+            {"title": "ancient post far outside the window",
+             "source": "x.com/TheBlockCo", "ts": stale.isoformat()}]}) + "\n")
+
+    class S:
+        state_path = os.path.join(d, "state.json")
+
+    got = _x_capture_headlines(S())
+    titles = [h["title"] for h in got]
+    assert len(got) == 2, f"expected 2 in-window posts, got {titles}"
+    assert "Bitcoin ETF Daily Flow: +14.1 million net" in titles
+    assert not any("ancient" in t for t in titles), "window not applied"
+    assert all(t for t in titles), "an empty title must never be fed to the brain"
+
+    # the per-handle trust values in SOURCE_TRUST must actually resolve, or the
+    # curated channel arrives no more credible than an anonymous account
+    assert source_trust("x.com/FarsideUK") == 0.8
+    assert source_trust("x.com/TheBlockCo") == 0.65
+    assert source_trust("x.com/SomeRandomAnon") == 0.25    # generic x.com floor
+
+    # a missing archive must be silent, not fatal: the capture is manual and
+    # will often be absent on a fresh checkout
+    class Empty:
+        state_path = os.path.join(tempfile.mkdtemp(), "state.json")
+    assert _x_capture_headlines(Empty()) == []
+
+
 class _NoLLM:
     """Settings stand-in with no model reachable, so escalation is skipped and
     the deterministic fallbacks are what gets tested."""

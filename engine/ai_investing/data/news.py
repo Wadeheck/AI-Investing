@@ -20,7 +20,7 @@ import re as _re
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from typing import Optional
 from xml.etree import ElementTree
@@ -433,7 +433,73 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     headlines: list[dict] = []
     for tier in zip_longest(*per_feed):
         headlines.extend(h for h in tier if h)
-    return headlines
+    # X capture goes FIRST, ahead of the wires. The brain digests only 30 fresh
+    # headlines per cycle (the LLM cost gate), and as one more feed among ~40 the
+    # round-robin pushed X posts past that cap on every cycle: all 60 captured
+    # posts sat in brain.db as digested=0 and were never tagged. Registered but
+    # starved is the worst of both worlds — it LOOKS accounted for in the table.
+    # Priority is justified on the merits, not just mechanics: this channel is
+    # hand-harvested, low-volume, carries the highest per-source trust in the
+    # table (Farside 0.80 vs a 0.5 default), and reports things the wires do not.
+    return _x_capture_headlines(settings) + headlines
+
+
+# X capture is harvested by a browser session (no API, by instruction) into
+# data/news_archive_x.jsonl. Treated as one more feed here, deliberately: it is
+# the only hand-curated channel, it carries things the wires do not (ETF net
+# flows, on-chain analysts, regulatory reporters), and SOURCE_TRUST in
+# brain/events.py has per-handle trust values written for exactly these sources.
+_X_WINDOW_H = 72.0
+
+
+def _x_capture_headlines(settings, limit: int = 60) -> list[dict]:
+    """Recent posts from the browser X capture, newest first.
+
+    This existed as a WRITE-ONLY channel: x_capture_ingest.py filled the archive,
+    daily_status and needs_you watched its age, and nothing ever read it into the
+    live brain. The capture flowed only to the offline corpus
+    (events_amend_crypto -> news_impulses_v2.jsonl -> train_web), so the daily
+    manual harvest shaped FUTURE retraining while contributing nothing to today's
+    decisions. Verified against brain.db: of 36 X headlines captured for
+    2026-08-03/04, exactly one appeared — and that one arrived via an RSS crypto
+    feed carrying the same story, not from the capture.
+
+    Re-feeding the same window every cycle is safe and intended: BrainStore
+    .filter_new dedupes on (title, source) and only counts an article seen once
+    DIGESTED, so posts are digested once and skipped forever after. The window
+    exists to bound the work, not to prevent repeats.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(settings.state_path)),
+                        "news_archive_x.jsonl")
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=_X_WINDOW_H)).isoformat()
+    out: list[dict] = []
+    try:
+        with open(path, errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return out
+    for line in reversed(lines):            # newest records are appended last
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for h in (rec.get("headlines") or []):
+            title = (h.get("title") or "").strip()
+            if not title:
+                continue
+            ts = h.get("ts") or rec.get("ts") or ""
+            if ts and ts < cutoff:
+                continue
+            out.append({"title": title,
+                        "source": h.get("source") or "x.com",
+                        "published": ts,
+                        "summary": (h.get("summary") or "")[:500]})
+            if len(out) >= limit:
+                return out
+    return out
 
 
 def analyze_with_claude(headlines: list[dict], symbols: list[str], settings) -> Optional[dict]:

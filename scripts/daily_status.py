@@ -80,6 +80,26 @@ def main() -> int:
     a = age_h(D("news_archive_x.jsonl"))
     row("X capture (manual)", a is not None and a < 30,
               f"last capture {a:.1f}h ago" if a else "missing")
+    # ...but freshness of the FILE says nothing about whether the capture reached
+    # the brain, and for the life of the project it did not: the archive was
+    # write-only, so a perfectly fresh row above sat next to zero X content in
+    # brain.db. Measure arrival, not deposit — the same mistake as reporting the
+    # 4-hourly RSS archive's age instead of the brain's lag.
+    try:
+        import sqlite3
+        con = sqlite3.connect(D("brain.db"))
+        arts = list(con.execute(
+            "select coalesce(sum(digested),0), count(*) from articles "
+            "where source like 'x.com%'"))[0]
+        evs = list(con.execute(
+            "select count(*) from events where source like 'x.com%'"))[0][0]
+        con.close()
+        done, total = int(arts[0]), int(arts[1])
+        ok &= row("X capture -> brain", total > 0 and done > 0,
+                  f"{done}/{total} posts digested, {evs} events tagged"
+                  + ("" if total else "  <-- captured but NEVER ingested"))
+    except Exception:
+        pass
     a = age_h(D("crypto_signals.json"))
     ok &= row("crypto signals (hourly)", a is not None and a < 3,
               f"funding/F&G {a:.1f}h ago" if a else "missing")

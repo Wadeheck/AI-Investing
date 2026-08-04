@@ -262,7 +262,46 @@ Each was independently capable of causing a later incident.
   day before the corpus it is built from. `digest_day.py` now derives impulses as
   its final step. Automating a pipeline means automating *all* of it.
 
-### 4.9 Earlier failures, same shape
+### 4.9 The X capture was a write-only channel *(2026-08-04)*
+
+The daily manual harvest never reached the brain that trades.
+
+- **What.** `x_capture_ingest.py` wrote `news_archive_x.jsonl`; `daily_status.py`
+  and `needs_you.py` watched its age; **nothing ever read it.** `fetch_headlines`
+  polls `settings.news_rss` only. The capture flowed exclusively to the offline
+  corpus (`events_amend_crypto` → `news_impulses_v2.jsonl` → `train_web`), so it
+  shaped *future retraining* while contributing nothing to the decisions being
+  made that day.
+- **Measured, not assumed.** Of 36 X headlines captured for 2026-08-03/04,
+  exactly **one** appeared in `brain.db` — and that one arrived via an RSS crypto
+  feed carrying the same story, not from the capture.
+- **The tell.** `SOURCE_TRUST` in `brain/events.py` has per-handle values written
+  for these exact sources, under a comment naming
+  `news_archive_x.jsonl`: Farside 0.80, glassnode/zachxbt/EleanorTerrett 0.70,
+  TheBlockCo 0.65. The plumbing was designed and never connected. The highest
+  per-source trust in the table belonged to a channel the brain could not read.
+- **Why it mattered more than most.** This is the *only* hand-curated channel, it
+  cannot self-heal (no API, by instruction), it costs the user a browser session
+  every day, and it carries what the wires do not — ETF net flows, on-chain
+  analysts, regulatory reporters.
+- **Second defect, found while fixing the first.** Feeding X as one more feed
+  among ~40 put it *behind* the round-robin, past the brain's 30-fresh-headlines
+  per-cycle LLM cost gate. All 60 posts registered in `brain.db` as `digested=0`
+  and were never tagged — **registered but starved, which looks accounted for in
+  the table.** X now goes ahead of the wires: hand-curated, low-volume, highest
+  trust, and self-limiting (once digested, posts are skipped forever).
+- **Verified after the fix.** 60 articles ingested; ETF flows tagged to
+  `crypto_liquidity` with correct signs (+$14.1M inflow positive, −$7.8M outflow
+  negative); the Coldcard exploit to `custody_risk`; Bessent's Fed request to
+  `yen_carry` + `fed_rate`.
+- **New health row.** `X capture -> brain` reports digested/total and events
+  tagged. The old row measured only the *file's* age — a fresh archive read as
+  healthy while nothing reached the brain, the identical mistake to reporting the
+  4-hourly RSS archive's age instead of the brain's lag (§4.3).
+- **Lesson.** Freshness of a deposit is not evidence of arrival. Every channel
+  needs a check on the far end, at the thing that actually consumes it.
+
+### 4.10 Earlier failures, same shape
 
 | Failure | Consequence | Found by |
 |---|---|---|
