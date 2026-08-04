@@ -113,6 +113,10 @@ class Runner:
         self.breaker = CircuitBreaker(settings.safety, settings.risk.max_daily_drawdown, settings.breaker_path)
         self.guard = DataGuard(settings.safety)
         self._last_prices: dict[str, float] = {}
+        # Symbols the data guard flagged on the previous cycle, so an ongoing fault
+        # is announced once instead of every cycle. Shipping the USE of this without
+        # the initialisation crash-looped the engine 18 times (see STATE §4.16).
+        self._flagged_symbols: set[str] = set()
 
         # --- shadow "formula-only" portfolio (ignores your input) for the comparison ---
         self._shadow_path = os.path.join(
