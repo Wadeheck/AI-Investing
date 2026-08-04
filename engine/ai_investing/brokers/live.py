@@ -179,6 +179,8 @@ class LongbridgeBroker(BrokerAdapter):
         restricted to USD listings for now (see runner._live_universe) instead of
         being papered over here.
         """
+        from ai_investing.data import fx
+
         out: dict[str, Position] = {}
         resp = self.ctx.stock_positions()
         for channel in getattr(resp, "channels", []):
@@ -186,12 +188,41 @@ class LongbridgeBroker(BrokerAdapter):
                 qty = float(p.quantity)
                 if abs(qty) < 1e-9:
                     continue
-                sym = p.symbol
-                if sym.upper().endswith(".US"):
-                    sym = sym[:-3]
+                sym = self.watchlist_symbol(p.symbol)
                 asset = Asset(sym, AssetClass.STOCK)
-                out[asset.key] = Position(asset, qty, float(getattr(p, "cost_price", 0) or 0))
+                # §4.2, third appearance. cost_price arrives in the LISTING currency
+                # while every price in this engine is USD-normalised, so an HK
+                # position's basis would be compared against a USD mark — the exact
+                # error that once read SK Hynix at $1.59M a share. Converted at the
+                # boundary, like every other price.
+                cost = float(getattr(p, "cost_price", 0) or 0)
+                out[asset.key] = Position(asset, qty, fx.to_usd(cost, sym, self.settings))
         return out
+
+    @staticmethod
+    def watchlist_symbol(broker_symbol: str) -> str:
+        """Longbridge's symbol -> the form this engine's watchlist uses.
+
+        Two conversions, both learned the hard way:
+
+        `.US` is stripped, because the watchlist says `AAPL`, not `AAPL.US`. The
+        original code did `symbol.split(".")[0]` for every market, which turned
+        `700.HK` into `700` and matched nothing at all.
+
+        HK codes are zero-padded to four digits. Longbridge reports `700.HK`; the
+        watchlist holds `0700.HK`. Same instrument, different string, and a dict
+        lookup does not care that a human can see they are the same — the position
+        would be classed as foreign and left unmanaged forever (see
+        runner.foreign_positions).
+        """
+        s = (broker_symbol or "").strip()
+        if s.upper().endswith(".US"):
+            return s[:-3]
+        if s.upper().endswith(".HK"):
+            code, _, suffix = s.rpartition(".")
+            if code.isdigit():
+                return f"{int(code):04d}.{suffix.upper()}"
+        return s
 
     def submit(self, order: Order, price: float) -> Order:
         from decimal import Decimal
