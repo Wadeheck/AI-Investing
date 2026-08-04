@@ -164,11 +164,53 @@ def test_last_good_bars_survive_a_restart():
 
     # the process dies and a NEW one starts into a throttled feed
     inner.alive = False
-    c2 = LastGoodBarCache(Flaky2 := type("F2", (DataProvider,), {
+    c2 = LastGoodBarCache(type("F2", (DataProvider,), {
         "get_bars": lambda self, asset, limit=200: []})(), path)
     served = c2.get_bars(a)
     assert served and served[-1].close == 10.5, \
         "a fresh process must serve the last good bars, not zeros"
+
+
+def test_the_cache_refuses_nan_bars():
+    """NON-EMPTY IS NOT GOOD, and the first version of the persistent cache
+    assumed it was. yfinance returns rows whose values are NaN (incomplete
+    session, partial response); the cache accepted them because the list was
+    truthy, then reported itself healthy — data/last_good_bars_stock.json really
+    did hold 85 symbols of which 51 had a NaN last close. A NaN price loses every
+    comparison it meets, so nothing downstream flags it."""
+    import tempfile
+    from datetime import datetime, timezone
+    from ai_investing.data.providers import DataProvider, LastGoodBarCache
+    from ai_investing.models import Asset, AssetClass, Bar
+
+    t = datetime.now(timezone.utc)
+    assert not LastGoodBarCache._usable([])
+    assert not LastGoodBarCache._usable([Bar(t, 1, 1, 1, float("nan"), 1)])
+    assert not LastGoodBarCache._usable([Bar(t, 1, 1, 1, 0.0, 1)])
+    assert not LastGoodBarCache._usable([Bar(t, 1, 1, 1, -5.0, 1)])
+    assert LastGoodBarCache._usable([Bar(t, 1, 1, 1, 10.5, 1)])
+
+    # a good bar must never be replaced by a NaN one, and NaN must not be cached
+    path = os.path.join(tempfile.mkdtemp(), "lg.json")
+    a = Asset("TEST", AssetClass.STOCK)
+
+    class Feed(DataProvider):
+        px = 10.5
+        def get_bars(self, asset, limit=200):
+            return [Bar(datetime.now(timezone.utc), 1, 1, 1, self.px, 1)]
+
+    f = Feed()
+    c = LastGoodBarCache(f, path)
+    c.SAVE_EVERY_S = 0.0
+    assert c.get_bars(a)[-1].close == 10.5
+
+    f.px = float("nan")                       # feed degrades to NaN rows
+    assert c.get_bars(a)[-1].close == 10.5, \
+        "a NaN bar must not displace the last good one"
+
+    c2 = LastGoodBarCache(Feed(), path)
+    for key, (_, bars) in c2._cache.items():
+        assert bars[-1].close == 10.5, f"{key} persisted a NaN close"
 
 
 def test_a_zero_price_never_values_a_position_at_zero():

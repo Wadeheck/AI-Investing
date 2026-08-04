@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import random
 import urllib.request
@@ -109,8 +110,20 @@ class YFinanceDataProvider(DataProvider):
         df = yfinance.Ticker(asset.symbol).history(period=period, interval=self.timeframe)
         bars: list[Bar] = []
         for ts, row in df.iterrows():
+            try:
+                close = float(row["Close"])
+            except (TypeError, ValueError):
+                continue
+            # Drop NaN rows HERE rather than letting them travel. yfinance emits
+            # them for incomplete sessions and partial responses, and a NaN close
+            # becomes a NaN price, which loses every comparison it meets: it does
+            # not trip the data guard's `<= 0` test, it does not trip the circuit
+            # breaker, and it silently poisoned the last-good-bar cache. Killing
+            # it at the boundary is the only place one check covers everything.
+            if not math.isfinite(close) or close <= 0.0:
+                continue
             bars.append(Bar(ts.to_pydatetime(), float(row["Open"]), float(row["High"]),
-                            float(row["Low"]), float(row["Close"]), float(row["Volume"])))
+                            float(row["Low"]), close, float(row["Volume"])))
         return bars[-limit:]
 
 
@@ -240,7 +253,11 @@ class LastGoodBarCache(DataProvider):
                         for b in rec["bars"]]
             except (KeyError, TypeError, ValueError):
                 continue
-            if bars:
+            # validate on the way IN as well: a file written by an older build
+            # (or by a poisoned run) must not be trusted just because it parses.
+            # data/last_good_bars_stock.json really did contain 85 symbols whose
+            # every close was NaN.
+            if self._usable(bars):
                 self._cache[key] = (ts, bars)
 
     def _save(self) -> None:
@@ -261,10 +278,33 @@ class LastGoodBarCache(DataProvider):
         except OSError:
             pass
 
+    @staticmethod
+    def _usable(bars: list[Bar]) -> bool:
+        """Are these bars fit to cache and to serve?
+
+        NON-EMPTY IS NOT GOOD. yfinance returns rows whose values are NaN (an
+        incomplete session, a holiday, a partial response), and the first version
+        of this cache accepted them because the list was truthy — so it cached
+        NaN closes and would have served them for six hours, poisoning the very
+        fallback that exists to keep bad prices out. `mark_price` downstream still
+        held valuation together, but the cache was actively storing garbage and
+        reporting itself healthy (85 symbols "cached", every close NaN).
+
+        Only the LAST bar is checked. Earlier NaNs are the indicators' problem and
+        they have their own handling; the last close is what becomes a price.
+        """
+        if not bars:
+            return False
+        c = bars[-1].close
+        try:
+            return math.isfinite(float(c)) and float(c) > 0.0
+        except (TypeError, ValueError):
+            return False
+
     def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
         bars = self.inner.get_bars(asset, limit)
         now = time.time()
-        if bars:
+        if self._usable(bars):
             self._cache[asset.key] = (now, bars)
             self._dirty = True
             self._save()

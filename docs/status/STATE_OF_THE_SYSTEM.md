@@ -21,24 +21,38 @@ evidence the system makes money with real money.
 
 ```
 GRAPH    321 nodes, 690 edges          (seed v25)
-BRAIN    4,923 articles, 1,672 events tagged
-TAGGER   2% unsigned across 1,380 recent events     (was 57%)
+BRAIN    5,042 articles, 1,766 events tagged   (57 now from the X capture)
+TAGGER   2% unsigned across 1,474 recent events     (was 57%)
 TESTS    24 suites, all green
-COMMITS  131
+COMMITS  134
 
-BOOKS            equity      cash        positions
-  trading      $ 99,997    $ 99,997         0   (flat after §4.7; re-entering)
-  investing    $ 83,125    $105,356         8
-  event sleeve $100,479    $ 87,671         3
-  crypto       $100,000    $100,000         0   (bear mode, deliberately flat)
-  ----------------------------------------
-  TOTAL        $383,601
+BOOKS            equity      cash     pos   at cost
+  📈 trading   $ 99,997    $ 99,997     0     -     (flat after §4.7; re-entering)
+  🏛 investing $ 99,913    $105,356     8     6
+  ⚡ sleeve    $100,437    $100,437     0     0     (+$437 realised, see below)
+  ₿ crypto     $100,000    $100,000     0     0     (bear mode, deliberately flat)
+  ------------------------------------------------
+  TOTAL        $400,347   on $400,000 staked  (+0.09%)
 ```
 
 Read **equity**, not cash. Three of these books hold shorts, whose sale proceeds
 sit in cash while the shares are still owed — which is why cash exceeds equity in
 the investing book, and why cash is never the portfolio's value. Conflating the
 two caused §4.4, and valuing a short at a zero price caused §4.7.
+
+**"at cost" is the honest caveat on the numbers above.** It counts positions
+marked at cost basis because no live price is available. As of this writing the
+feed is returning `0.0` for all 88 symbols (throttled — see §4.11), so 6 of the
+investing book's 8 positions are held at their entry price. That book's equity is
+therefore *"no worse than cost"*, not a true mark. It is reported this way
+deliberately: the alternative — dropping unpriced positions out of equity — is
+precisely the bug in §4.10.
+
+**First realised P&L in the system's history**, and it came from the event sleeve:
+three positions closed on its 2-day clock, all profitable — 9988.HK **+$326**,
+0700.HK **+$105**, 3690.HK **+$6**. Total **+$437**. Every other number in the
+table above is still unrealised or untraded, so this is the only line that has
+been settled by the market rather than by a mark.
 
 **The learning spine has 0 settled claims.** It is armed and tested but has
 never actually adjusted anything, because no trade has closed through it yet.
@@ -301,7 +315,81 @@ The daily manual harvest never reached the brain that trades.
 - **Lesson.** Freshness of a deposit is not evidence of arrival. Every channel
   needs a check on the far end, at the thing that actually consumes it.
 
-### 4.10 Earlier failures, same shape
+### 4.10 The phantom valuation existed in all four books *(2026-08-04)*
+
+§4.7's fix was incomplete, and the question *"what is the portfolio now?"* is what
+exposed it. `Portfolio.equity` was guarded. The three other books each
+re-implement valuation, and each was wrong in the same direction.
+
+- **The `_stamp_marks` form.** All three read
+  `if px > 0: mv += qty * px` — which **omits an unpriced position from equity
+  entirely**. An unpriced short reads as a debt that vanished; an unpriced long as
+  an asset that vanished. Worse than §4.7's zero-valuation, because the position
+  disappears rather than being marked wrong.
+- **The original hole, twice more.** `investor._equity` and `crypto_book`'s
+  `tact_val` used a dict-default (`prices.get(sym, p.avg_price)` /
+  `prices.get(sym, 0.0)`) covering only a *missing* symbol, while a present `0.0`
+  or `NaN` sailed straight through.
+- **It produced a real misreport, which I gave the user.** The investing book
+  showed equity **$83,125** against $105,356 cash — apparently −16.9%, and I
+  reported it as such. Valuing every position (6 of 8 at cost, their prices being
+  unavailable) puts it at **$99,913**. The portfolio was never down 4%; it is
+  **$400,347 on $400,000 staked**. A valuation bug does not just mislead the
+  engine, it misleads the report *about* the engine.
+- **Fix.** One shared rule, `models.mark_price(raw, fallback)`: non-finite,
+  non-positive or unparseable means *no price*, fall back to cost basis. Applied
+  to all four valuation paths. Books now persist `stale_marks` and a per-position
+  `stale_mark` flag so a reader can tell a mark from a placeholder.
+- **Deliberately NOT changed.** Trading-decision guards (`if px <= 0: continue`)
+  stay exactly as they are. Refusing to **act** on a bad price is correct;
+  refusing to **count** a position is not. That distinction is the whole bug.
+- **Lesson.** Four implementations of one rule is four chances to get it wrong,
+  and they were written months apart by the same reasoning that failed each time.
+  When the same concept appears in N places, the defect rate is N, not 1.
+
+### 4.11 The cache that absorbs feed failures did not survive a restart *(2026-08-04)*
+
+- **What.** `LastGoodBarCache` exists specifically so a blanket feed failure
+  serves stale prices instead of zeros (§4.5). Its `_cache` was **in-memory
+  only**, so every restart emptied it — and a restart is precisely when the
+  throttle fires, because a cold start refetches all ~88 symbols at once. The
+  safety net was absent exactly when it was needed.
+- **Observed live.** While verifying the §4.10 fix, the feed returned `0.0` for
+  **all 88 symbols, stocks and crypto**. My own repeated restarts that day are
+  what triggered the throttle, and the cache had nothing to serve because each
+  process was new.
+- **Second gap in the same class.** Only the *stock* leg was wrapped. The crypto
+  leg had no cache at all, so a ccxt outage put zeros straight into the books —
+  identical failure, different provider.
+- **Fix.** The cache persists to disk (last 120 bars/symbol, atomic write, aged
+  out at 6h, written at most once per cycle), and both legs are wrapped with
+  separate files so one leg's staleness cannot masquerade as the other's.
+- **Why the incident was survivable this time.** The §4.7 and §4.10 fixes were
+  already in: guard-filtered valuation plus cost-basis fallback meant a total
+  feed blackout read as "no change" and marked 6 positions at cost, instead of
+  faking a collapse. The defect that caused the morning's near-disaster was the
+  reason the afternoon's identical outage was uneventful.
+- **Then my own fix was wrong, in the session's signature way.** The new cache
+  treated *non-empty* as *good*. yfinance returns rows whose values are `NaN`
+  (incomplete session, partial response), the list was truthy, so the cache stored
+  them — and reported itself healthy. `data/last_good_bars_stock.json` held **85
+  symbols of which 51 had a NaN last close**, and would have served them for six
+  hours: the fallback built to keep bad prices out had become a bad-price store.
+  Valuation still held (`mark_price` rejects NaN), so nothing broke — which is
+  exactly why it would have gone unnoticed.
+- **Fix, at both ends.** `LastGoodBarCache._usable()` validates the last close on
+  the way in, on the way to disk, and on load (a file written by an older build
+  must not be trusted just because it parses). And `YFinanceDataProvider` now
+  drops non-finite rows **at the boundary** — the one place a single check covers
+  the guard, the breaker, the cache and every book at once. Poisoned cache files
+  were deleted; they rebuild from the next good fetch.
+- **Lesson.** A fallback that has never been exercised in the condition it exists
+  for is an assumption, not a safeguard. Test the safety net under the failure it
+  was built for — including process death, not just provider death. And **"I got
+  data back" is not "I got usable data back"**: NaN is the most dangerous value in
+  this codebase, because it fails every comparison silently instead of loudly.
+
+### 4.12 Earlier failures, same shape
 
 | Failure | Consequence | Found by |
 |---|---|---|
@@ -315,11 +403,20 @@ The daily manual harvest never reached the brain that trades.
 | Budget renormalisation broke its own ceiling | 0.5263 allocated against a 0.50 cap | contract test |
 | `_call_byteplus` ignored `json_mode` | cloud path would answer in prose → silent keyword fallback | switching providers |
 
-**Two of my own mistakes this session, recorded because they distort
-measurements rather than crash:** the audit script's `--model` flag also
-overrode the *local* model name, so one run measured the keyword fallback
-instead of the model under test (8% recall, meaningless); and a test appended
-below a file's `__main__` block never ran at all.
+**My own mistakes, recorded because they distort measurements rather than
+crash:** the audit script's `--model` flag also overrode the *local* model name,
+so one run measured the keyword fallback instead of the model under test (8%
+recall, meaningless); a test appended below a file's `__main__` block never ran
+at all; a `sed` replacement matched the string `Restart=always` inside a *comment*
+and put a `[Service]` directive in the unit's `[Unit]` section; I reported the
+investing book as down 16.9% when the figure was an artefact of the very bug I
+was fixing (§4.10); and my repeated service restarts while verifying fixes are
+what throttled the price feed (§4.11).
+
+**The pattern in the last one is worth naming.** Restarting to verify a fix is
+itself an action with consequences. Four restarts in twenty minutes triggered a
+provider rate limit, which then looked like a new failure. Verification is not
+free and not side-effect-free.
 
 ## 5. What is unverified or uncertain
 
@@ -328,48 +425,60 @@ below a file's `__main__` block never ran at all.
 1. **No live-money validation, ever.** Broker adapters have never touched a
    funded account. Slippage, partial fills, rejects, borrow availability for
    shorts — all unmodelled beyond assumptions.
-2. **The learning spine has never run.** 0 settled claims. Its behaviour is
-   test-verified, not observed.
+2. **The learning spine has never run.** 0 settled claims; neither
+   `expectations.jsonl` nor `learning_state.json` exists on disk. Its behaviour is
+   test-verified, not observed. Note the event sleeve's three profitable exits did
+   **not** settle through it — the sleeve keeps its own journal, so the first
+   realised P&L in the system taught the learner nothing.
 3. **The lockbox is burned.** It was spent on the two-book configuration; the
    current four-policy system has no clean out-of-sample exam. My recommendation
    — not yet accepted — is to treat the forward paper record as the real test
    and stop tuning against history.
-4. **The golden set is 50 items and has been tuned against three times.** The
-   66% ORIGIN figure is a *relative* comparison between models, not an unbiased
-   estimate. Inspecting the failures showed ~4 of 7 were defensible alternative
-   nodes rather than errors, so true accuracy is higher than the metric — but
-   an alternative node still propagates differently from the calibrated one.
-   Run-to-run variance is 2–4 points, so gaps smaller than that are noise.
-5. **Backtest-to-live gap.** All strategy validation is walk-forward on
-   historical data with modelled costs. Real crypto 24/7 microstructure,
-   exchange outages and funding dynamics are approximations.
-6. **Shorts.** Six independent rejections in testing; the investing book still
-   holds short positions from an earlier configuration. Not obviously
-   consistent, and worth revisiting.
-7. **`$25/day` target.** Never demonstrated. No book has produced a verified
-   profitable forward record.
-8. **Advice hit-rate is 0.404 over 30 days** — below a coin flip for
-   directional calls, on 170 graded outcomes. This is the first honest reading
-   the system has ever produced (see §4.6); it was 0.689 while contaminated.
-   Whether 0.404 reflects genuine skill deficit or a scoring definition that
-   mixes `long` with `short_or_avoid` has **not** been investigated yet.
-
-9. **The equity marks were repaired against the journal, not recovered.**
+4. **How much of the current portfolio value is a real mark is unknown while the
+   feed is throttled.** 6 of 8 investing positions are held at cost (§4.11). The
+   figure is "no worse than cost" — honest, but not a valuation. It becomes a true
+   mark only once the feed recovers and `stale_marks` reads 0.
+5. **The equity marks were repaired against the journal, not recovered.**
    `scripts/breaker.py --repair-marks` rebuilt `peak_equity` ($100,142) and
-   `day_start_equity` ($99,997) from the trusted journal rows after §4.7. That is
-   a *reconstruction*: the true peak may have fallen between recorded cycles, and
+   `day_start_equity` ($99,997) from trusted journal rows after §4.7. That is a
+   *reconstruction*: the true peak may have fallen between recorded cycles, and
    the day's real opening mark was overwritten by the phantom before any honest
    cycle ran. The repair deliberately errs low, so it can never manufacture
    headroom the book did not have — but the marks are inferred, not observed.
-10. **The twelve positions closed by the phantom halt are gone.** Nothing
-    reopened them; the engine re-decides from current signals, which is correct
-    but means the forward record contains twelve exits that no strategy chose.
-    They cannot corrupt the learning spine, for two independent reasons: they
-    fall inside a journalled outage window (`gap_affected`), and the spine has
-    never opened a claim at all — neither `expectations.jsonl` nor
-    `learning_state.json` exists on disk. Checked, not assumed. The second reason
-    is the load-bearing one today, and it disappears the moment the spine starts
-    working, so the gap window is what must hold long-term.
+6. **The twelve positions closed by the phantom halt are gone.** Nothing reopened
+   them; the engine re-decides from current signals, which is correct, but the
+   forward record now contains twelve exits no strategy chose. They cannot
+   corrupt the learning spine for two independent reasons — they fall inside a
+   journalled outage window (`gap_affected`), and the spine has never opened a
+   claim at all. Checked, not assumed. The second reason is the load-bearing one
+   today and disappears the moment the spine starts working, so the gap window is
+   what must hold long-term.
+7. **The golden set is 50 items and has been tuned against three times.** The
+   66% ORIGIN figure is a *relative* comparison between models, not an unbiased
+   estimate. Inspecting the failures showed ~4 of 7 were defensible alternative
+   nodes rather than errors, so true accuracy is higher than the metric — but an
+   alternative node still propagates differently from the calibrated one.
+   Run-to-run variance is 2–4 points, so gaps smaller than that are noise.
+8. **Backtest-to-live gap.** All strategy validation is walk-forward on
+   historical data with modelled costs. Real crypto 24/7 microstructure, exchange
+   outages and funding dynamics are approximations.
+9. **Shorts.** Six independent rejections in testing; the investing book still
+   holds short positions from an earlier configuration. Not obviously consistent,
+   and worth revisiting. Note that shorts are what turned §4.7 and §4.10 from
+   cosmetic bugs into a liquidation: an unpriced short reads as a debt forgiven.
+10. **`$25/day` target.** Never demonstrated. No book has produced a verified
+    profitable forward record. The only realised P&L to date is the sleeve's
+    **+$437** across three trades — real, but far too small a sample to mean
+    anything.
+11. **Advice hit-rate is 0.404 over 30 days** — below a coin flip for directional
+    calls, on 170 graded outcomes. This is the first honest reading the system has
+    ever produced (see §4.6); it was 0.689 while contaminated. Whether 0.404
+    reflects genuine skill deficit or a scoring definition that mixes `long` with
+    `short_or_avoid` has **not** been investigated yet.
+12. **The X capture's contribution is unmeasured.** It now reaches the brain
+    (§4.9) and 57 events are tagged from it, but no scored outcome yet attributes
+    anything to that channel. Its per-handle trust values are priors, not measured
+    precision.
 
 ## 6. Known limitations, deliberately not fixed
 
@@ -402,8 +511,32 @@ tagging spec), `docs/data-pipeline/DAILY_LOOP.md` (data cadence).
 Every serious defect in this project was **silent**. Nothing crashed. The
 checks were green. A model returned `0` instead of an answer; a price was in
 the wrong currency; a process was dead while a check said it was alive; a book
-was invisible.
+was invisible; a captured feed was written and never read.
 
 So the standing rule is: **measure the thing that decides, not the thing that
 is easy to measure** — and when a component has no audit, assume it is the
 broken one, because that is where every one of these has been found.
+
+Three corollaries earned on 2026-08-04, each from a defect that had already been
+"fixed" once:
+
+1. **A safeguard is only as good as the number it reads.** The circuit breaker
+   worked perfectly — on a fabricated equity. Guard what the marks are made of,
+   not just what is done with them. A mark taken from a bad valuation is permanent
+   damage, because every honest reading afterwards is measured against a fiction.
+2. **One rule implemented in N places is N chances to be wrong.** The
+   zero-price hole existed in all four books; fixing one and declaring victory is
+   how a fix becomes a false sense of coverage. Find the other implementations
+   before writing the commit message.
+3. **A fallback never exercised under its own failure mode is an assumption.**
+   `LastGoodBarCache` was written for a blanket feed outage and could not survive
+   the restart that usually accompanies one. Test the net under the fall.
+4. **NaN is the most dangerous value here.** It caused three separate failures in
+   one day: it walked past the circuit breaker (§4.7), it was stored as a good
+   price by the cache (§4.11), and it defeats every `<= 0` guard in the codebase
+   because it fails comparisons silently rather than loudly. Reject it at the
+   boundary where data enters, not at each of the places it can hurt.
+
+And the uncomfortable one: **verification is not free.** Restarting the service
+four times to confirm fixes is what throttled the price feed and produced the
+next incident.

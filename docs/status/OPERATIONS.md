@@ -91,6 +91,34 @@ day serving a stale portfolio format from memory.
 shifting the bytes under a running shell caused a whole-stack crash and the
 11.9h outage. Edit, then restart.
 
+**Do not restart repeatedly to verify a fix.** Each cold start refetches all ~88
+symbols at once, and four restarts inside twenty minutes was enough to trip
+yfinance's rate limit — turning a verification step into the next incident
+(STATE §4.11). Batch your changes, restart once, then read `data/engine.log`.
+
+### If prices go to zero across the board
+
+```bash
+grep "DATA GUARD" data/engine.log | tail -1        # how many symbols, and which
+python3 -c "import json;print(len(json.load(open('data/last_good_bars_stock.json'))['symbols']))"
+python3 scripts/breaker.py                         # confirm it did NOT halt
+```
+
+A blanket zero is the provider throttling, not 88 simultaneous delistings. What
+*should* happen now, and what to confirm:
+
+- `LastGoodBarCache` serves the last good bars from disk (both legs, aged out at
+  6h). It survives a restart as of 2026-08-04; before that it did not.
+- Valuation falls back to **cost basis**, so equity reads "no change" rather than
+  a collapse, and books record `stale_marks` plus a per-position `stale_mark`.
+- The breaker **refuses** an unreadable equity: gate shut, no flatten.
+- Decisions and stops skip flagged symbols entirely.
+
+So the correct response is usually **nothing**. Do not restart — that makes it
+worse. Wait for the limit to reset; the books hold at cost until it does. Only
+investigate if the breaker halted, or if `stale_marks` stays non-zero for hours
+after the guard stops flagging.
+
 ## What is protected, and what is not
 
 | Failure | Response |

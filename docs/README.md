@@ -14,6 +14,19 @@ Organised by **what you are trying to do**, not by when it was written.
 Everything else explains *how a part works*. Those two explain *how much of it
 is proven* and *how to keep it alive*.
 
+**If something is wrong right now**, in this order:
+
+```bash
+python3 scripts/daily_status.py      # every channel, and whether it reaches the brain
+python3 scripts/breaker.py           # is a book halted, and should it be
+python3 scripts/needs_you.py --show  # what is waiting on you
+python3 scripts/watchdog.py --test   # prove alerts still reach you
+```
+
+The two most likely alerts have their own runbook sections in OPERATIONS.md:
+**🛑 CIRCUIT BREAKER** (do not just clear it — cross-check the marks first) and
+**prices going to zero across the board** (usually do nothing; do *not* restart).
+
 ---
 
 ## `status/` — what is true right now
