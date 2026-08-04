@@ -360,6 +360,31 @@ non-USD listings are excluded because `cost_price` arrives in the listing curren
 while prices here are USD-normalised; crypto is excluded because the segregated
 Gemini account is empty.
 
+**Shorting is off in live, because neither paper venue supports it.** Checked
+2026-08-04 rather than assumed:
+
+- **Longbridge** — shorting requires a margin account ("Integrated A/C"); cash
+  accounts cannot. `estimate_max_purchase_quantity` (the call Longbridge's own
+  docs name for short capacity) returns `margin_max_qty=0` on the **Sell** side
+  for AAPL and MSFT while the **Buy** side returns 4001 and 2490. The account also
+  reports `init_margin=0`, `maintenance_margin=0`, `risk_level=0` — it behaves as
+  a cash account.
+- **moomoo** — documented outright: short selling in paper trading is available
+  for options and futures, **not for stocks**. It would also mean running the
+  OpenD gateway 24/7 on a headless box, which is a real operational cost for no
+  gain here.
+
+So `RISK_ALLOW_SHORT=false` in live. Note the consequence: the 📈 book previously
+held shorts (twelve of them, until §4.7 flattened it), so the live book is a
+strictly long-only version of the same policy and its record is not directly
+comparable to the paper history before it. `docs/research/SHORT_STRATEGY.md`
+already reports shorts failing six independent tests here, so little is lost —
+but it is a policy change forced by the venue, not a choice.
+
+Also confirmed while looking: Longbridge does **not** support resetting demo
+funds ("please contact customer service"), which is why the slice is enforced in
+the engine rather than by shrinking the account.
+
 **Changing `LIVE_CAPITAL_BASE` re-bases the breaker's marks** and resets the
 per-day counters — announced on Telegram and in the log. That is deliberate: the
 marks describe a book, and you just changed the book. It does **not** clear a
