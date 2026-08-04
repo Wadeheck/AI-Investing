@@ -474,14 +474,17 @@ class Runner:
         # 3) Decisions — excluding data-guard-flagged and user-blocked symbols.
         portfolio = self._book_portfolio()
         equity = portfolio.equity(prices)
-        # Decide only where this book may act. With a live slice attached that is
-        # USD stocks: crypto entries would route to an empty Gemini account and
-        # reject, and non-USD listings hit the currency defect on the adapter.
-        # Signals still run for every asset elsewhere — the ₿ and 🏛 books are
-        # paper and unaffected.
+        # DECIDE ON EVERYTHING, EXECUTE ONLY WHERE ALLOWED. These are two different
+        # questions and conflating them cost a day: the live slice can only trade
+        # USD stocks, so an earlier version filtered `active` down to that — which
+        # also stripped crypto out of state.json's decisions, and the adviser reads
+        # its formula leg from there. Result: zero crypto in 96 considered names,
+        # and no way to learn whether the model's crypto view was any good.
+        #
+        # A prediction costs nothing and is the point of the exercise. The venue
+        # restriction belongs on the ORDER, not on the opinion — see step 4.
         active = [a for a in self.assets
-                  if a.key not in bad_data and self.user_views.is_allowed(a.symbol)
-                  and (self._ledger is None or a.key in universe)]
+                  if a.key not in bad_data and self.user_views.is_allowed(a.symbol)]
         decisions = [self.engine.decide(a, bars_by_key[a.key], context) for a in active]
         features_by_key = {d.asset.key: d.features for d in decisions}
         for d in decisions:
@@ -493,6 +496,14 @@ class Runner:
         if breaker.allow_new:
             entries = self.risk.size_orders(decisions, portfolio, prices, equity,
                                             market=self._stats, model=self.model)
+            # The venue gate, applied to the ORDER. Predictions above cover every
+            # watched asset; only what this book can actually trade gets sent.
+            if self._ledger is not None:
+                blocked = [o for o in entries if o.asset.key not in universe]
+                if blocked:
+                    print(f"  (not tradable in the live slice, decision recorded only: "
+                          f"{', '.join(sorted({o.asset.symbol for o in blocked}))})")
+                entries = [o for o in entries if o.asset.key in universe]
             if self.settings.trade_approval:
                 entries = self._gate_entries(entries, prices)
             for o in entries:
