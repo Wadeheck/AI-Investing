@@ -78,7 +78,7 @@ python3 tests/test_smoke.py                      # sanity checks
 Then add real data + a global briefing:
 
 ```bash
-cp ../.env.example ../.env        # then edit ../.env
+python3 ../scripts/env_template.py > ../.env   # blank template; then edit
 pip install -r requirements.txt   # optional: real data / live brokers
 python3 -m ai_investing.main --briefing         # AI world briefing (needs DEEPSEEK_API_KEY, BYTEPLUS_API_KEY, or ANTHROPIC_API_KEY)
 python3 -m ai_investing.main                     # autonomous loop (fully automated)
@@ -91,7 +91,7 @@ Artifacts land in `data/`: `journal.db` (auditable decisions/orders/equity) and
 
 ## Configuration
 
-Everything is in `.env` (copy from `.env.example`). Key switches:
+Everything is in `.env` (create with `python3 scripts/env_template.py > .env`). Key switches:
 
 | Variable | Default | Meaning |
 |---|---|---|

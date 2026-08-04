@@ -11,8 +11,12 @@ command -v node    >/dev/null || { err "node not found — install Node 18+ (for
 python3 --version; node --version
 
 if [ ! -f .env ]; then
-  cp .env.example .env
-  say "Created .env (paper mode works with no keys; edit it later to go further)"
+  # GENERATED, not copied. A checked-in .env.example carried a real exchange key
+  # and secret for months (docs/status/STATE_OF_THE_SYSTEM.md §4.18). A template
+  # that is printed on demand has nowhere for a secret to be committed.
+  python3 scripts/env_template.py > .env && chmod 600 .env
+  say "Created .env from scripts/env_template.py — 0600, every secret blank"
+  say "Paper mode works with no keys at all; fill in only what you need"
 else
   say ".env already exists — leaving it as is"
 fi

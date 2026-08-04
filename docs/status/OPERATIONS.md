@@ -279,7 +279,7 @@ Worth stating, because the list below is all problems and the baseline is good.
 | SSH | keys only — `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no` |
 | Firewall | `ufw` active, `DEFAULT_INPUT_POLICY=DROP`, and every ALLOW rule is scoped **`on tailscale0`**. `sshd` binds `0.0.0.0:22` but nothing off the tailnet can reach it. |
 | Exposure | listening sockets are :22, :4300 (dashboard), :631 and :53 on loopback only |
-| Secrets | `.env` is `0600`; nothing secret is git-tracked (`.env.example` only) |
+| Secrets | `.env` is `0600`, and **no template is tracked at all** — `.env.example` held a real exchange key and secret for months (STATE §4.18) and was deleted 2026-08-05. Generate one with `python3 scripts/env_template.py`. |
 | Money | `LIVE_TRADING=false`, and `brokers/get_broker()` is a **single choke point** — it returns `PaperBroker` unless the flag is set, so a missing SDK or a stray key cannot route a real order |
 | Telegram | the chat bot checks `sender != self.chat_id` on **both** the message and the inline-button paths before acting. Verified in `alerts/chat.py`, not just claimed in its docstring. |
 | Patching | `unattended-upgrades` enabled |

@@ -665,11 +665,11 @@ listed as outstanding and twice not done.
 The most serious finding of the session, and it surfaced by accident. The user
 questioned an open item I had labelled *"Gemini master key not revoked"* — asking,
 correctly, whether the master key was the sandbox one. It is:
-`CRYPTO_SANDBOX_API_KEY=master-XbGG…`. My label was wrong. Checking where the key I
+`CRYPTO_SANDBOX_API_KEY` (a `master-` key). My label was wrong. Checking where the key I
 *actually* meant still existed turned up something worse.
 
 - **What.** `.env.example` lines 50–51 contained the **real Gemini production API key
-  and its secret** — `CRYPTO_API_KEY=account-IHDc6M…` / `CRYPTO_API_SECRET=3zUh8K…`
+  and its secret** — the production `CRYPTO_API_KEY` / its secret
   — for the account holding roughly $5.6k of stablecoins plus BTC, ETH and fourteen
   alts. Present since the brain commit (`ea0816e`), tracked, pushed, and preserved
   in git history across 8 committed versions of the file.
@@ -718,7 +718,7 @@ and the register had drifted **13 commits** behind reality.
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
 | **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
-| **🔴 The leaked Gemini key is still valid** | Not the master/sandbox key — that one is harmless. `account-IHDc6M…` **and its secret** were committed to `.env.example` and remain in git history (§4.18). The file is sanitised; history is not, and cannot be by editing a file. | **The only real-money exposure in the system.** It is account-scoped, trade-only and IP-locked to the home address, which bounds it — but it is published. Revoke at Gemini. |
+| **🔴 The leaked Gemini key is still valid** | Not the master/sandbox key — that one is harmless. `account-…` (the production key) **and its secret** were committed to `.env.example` and remain in git history (§4.18). The file is sanitised; history is not, and cannot be by editing a file. | **The only real-money exposure in the system.** It is account-scoped, trade-only and IP-locked to the home address, which bounds it — but it is published. Revoke at Gemini. |
 | **Git history still carries the credential** | `git filter-repo`/BFG could purge it, which rewrites every commit hash and breaks any existing clone. Pointless before revocation and unnecessary after. | None once the key is revoked. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
 
