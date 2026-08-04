@@ -17,12 +17,12 @@ what it predicted and reallocates capital toward demonstrated skill.
 pointed at a funded account. Nothing in this document should be read as
 evidence the system makes money with real money.
 
-As of 2026-08-04 the Longbridge adapter does at least **authenticate** — against
-a Longbridge *paper* account (`ac: lb_papertrading`), read-only, reporting cash
-and zero positions. That is the first time any broker adapter in this project
-has successfully connected to anything. It proves credentials, transport and the
-balance call; it proves **nothing** about placing, filling, or cancelling an
-order. See §5.1.
+As of 2026-08-04 both adapters **authenticate** for the first time —
+Longbridge against a *paper* account (`ac: lb_papertrading`) and Gemini against a
+deliberately *empty*, separate account. Read-only, reporting cash and zero
+positions. It proves credentials, transport and the balance call; it proves
+**nothing** about placing, filling, or cancelling an order, and an empty account
+cannot prove it. See §5.1.
 
 ## 2. Where it stands today
 
@@ -489,11 +489,40 @@ because it was armed and waiting for the day that flag changed.
    also do not support OTC or pre/post-market trading, so those cannot be
    validated this way at all.
 
-   Crypto remains `[FAIL]`: the Gemini credential is a **master key**, and ccxt
-   requires an account-scoped key (`gemini sign() requires an account-key,
-   master-keys are not-supported`). Fixing it means issuing an account key in the
-   Gemini console — which is the more restricted object anyway, so the fix and the
-   hardening are the same action.
+   Crypto now returns `[ok]` too, so as of 2026-08-04 **both legs authenticate
+   for the first time**:
+
+   ```
+   [ok]  stocks: {'broker': 'longbridge',  'cash': 14144300.0, 'positions': 0}   # paper acct
+   [ok]  crypto: {'broker': 'ccxt:gemini', 'cash': 0.0,        'positions': 0}   # empty acct
+   ```
+
+   Two false trails were worth the walk. The first `[FAIL]` said
+   `gemini sign() requires an account-key, master-keys are not-supported` — but
+   the production key was never being tried: `CRYPTO_SANDBOX=true` makes the
+   adapter read `CRYPTO_SANDBOX_API_*` instead (`live.py:33`), and *that* was the
+   master key. The second, once pointed at the right credential, was
+   `ApiKey fails IP Filtering Check` — a stale entry in Gemini's allowlist, the
+   home IP having rotated. Neither error named the variable or the address at
+   fault, which is why both cost a round trip to diagnose.
+
+   **Read those two zeros carefully.** The stock leg is a *paper* account and the
+   crypto leg is an *empty* one, deliberately segregated from the user's real
+   holdings after §4.13. They prove credentials, transport, IP allowlisting and
+   the balance call. They prove nothing about placing an order, and an empty
+   account **cannot** prove it — order validation needs a funded balance, however
+   small.
+
+   Still unverified on both legs: order placement, fill semantics, partial fills,
+   cancellation, rejects, and the symbol-format assumptions in the HK/US routing.
+   Paper stock accounts additionally do not support OTC or pre/post-market
+   trading, so those cannot be validated this way at all.
+
+   **Cost of getting here:** `CRYPTO_SANDBOX` is now `false`, which removes one of
+   the two independent barriers in front of live crypto. `LIVE_TRADING=false` and
+   the `get_broker()` choke point are what remain. That is an acceptable trade only
+   because the account behind the key is empty and separate; it would not have been
+   against the account in §4.13.
 2. **The learning spine has never run.** 0 settled claims; neither
    `expectations.jsonl` nor `learning_state.json` exists on disk. Its behaviour is
    test-verified, not observed. Note the event sleeve's three profitable exits did

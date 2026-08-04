@@ -256,7 +256,26 @@ Worth stating, because the list below is all problems and the baseline is good.
 | Key | `~/.ssh/prodesk_ed25519` is passphrase-protected, so the file alone is not access |
 | Data dirs | `data/` and the repo root tightened to `750`, `data/backups/` to `700` |
 
-### The one that actually matters: live broker credentials on a paper box
+### Broker credentials — resolved 2026-08-04
+
+Both broker credentials on the box now point at **accounts that hold nothing of
+yours**: Longbridge at a paper account, Gemini at a separate empty account
+(`account-` scoped, Trading only, no withdraw/deposit-address rights, IP-locked
+to the home address). `--check-broker` returns `[ok]` on both.
+
+The Gemini key that reached the real holdings — 19 currencies — was replaced, not
+merely removed from `.env`. **Removing a secret from a file does not revoke it;
+revoke it at the provider**, or every copy that ever existed stays valid.
+
+`CRYPTO_SANDBOX` is now `false`, so `LIVE_TRADING=false` and the `get_broker()`
+choke point are the only barriers left in front of live crypto. Acceptable
+because the account is empty and segregated. It would not be otherwise.
+
+Longport tokens expire **90 days** from issue — the current paper one dies around
+**2026-11-02** — and refreshing invalidates the old token, which is also how you
+revoke one.
+
+### For history: what the original audit found here
 
 `.env` holds **production** credentials — `LONGPORT_ACCESS_TOKEN`,
 `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`, and `CRYPTO_API_KEY` /
