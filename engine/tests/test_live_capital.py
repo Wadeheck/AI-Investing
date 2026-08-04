@@ -145,9 +145,20 @@ def test_only_positions_in_the_mandate_enter_the_slice():
 
 
 def test_the_setting_is_off_by_default():
-    s = Settings()
-    assert s.live_capital_base == 0.0, \
-        "capping must be opt-in; existing paper behaviour is unchanged"
+    """Must assert the DEFAULT, not the ambient environment.
+
+    First version read `Settings().live_capital_base` directly. It passed here
+    (dev box, no LIVE_CAPITAL_BASE exported) and failed on the ProDesk, where the
+    engine's own .env sets it to 10000 — a test whose result depended on which
+    machine ran it. Config defaults have to be tested with the variable absent.
+    """
+    saved = os.environ.pop("LIVE_CAPITAL_BASE", None)
+    try:
+        assert Settings().live_capital_base == 0.0, \
+            "capping must be opt-in; existing paper behaviour is unchanged"
+    finally:
+        if saved is not None:
+            os.environ["LIVE_CAPITAL_BASE"] = saved
 
 
 if __name__ == "__main__":
