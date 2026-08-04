@@ -72,14 +72,36 @@ class CcxtBroker(BrokerAdapter):
             else:
                 res = self.client.create_order(order.asset.symbol, "market", side, order.qty)
             order.id = str(res.get("id"))
-            order.filled_qty = float(res.get("filled") or (0.0 if is_limit else order.qty))
-            order.filled_price = float(res.get("average") or res.get("price") or price)
-            # a resting limit order may not be filled yet
-            order.status = OrderStatus.FILLED if (order.filled_qty or 0) > 0 else OrderStatus.PENDING
+            # ccxt often returns the fill inline; trust it ONLY when it is actually
+            # there. The old fallback was `order.filled_qty = ... or order.qty`, which
+            # invented a full fill for every market order the exchange did not report
+            # on, and `... or price`, which invented the caller's mark as the traded
+            # price. Same fabrication as §4.15, one degree milder.
+            filled = res.get("filled")
+            avg = res.get("average") or res.get("price")
+            if filled is not None and float(filled) > 0 and avg and float(avg) > 0:
+                order.filled_qty = float(filled)
+                order.filled_price = float(avg)
+                order.status = OrderStatus.FILLED
+            else:
+                self._symbol_for_fetch = order.asset.symbol
+                self.confirm_or_pend(order)
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"ccxt: {exc}"
         return order
+
+    def fetch_fill(self, order_id: str):
+        """ccxt needs the symbol to query an order on most exchanges, so submit()
+        stashes it. Returns None when it cannot be asked — the caller then reports
+        PENDING rather than guessing."""
+        sym = getattr(self, "_symbol_for_fetch", None)
+        try:
+            o = self.client.fetch_order(order_id, sym) if sym else self.client.fetch_order(order_id)
+        except Exception:
+            return None
+        return (o.get("status"), o.get("filled") or 0.0,
+                o.get("average") or o.get("price") or 0.0)
 
     def place_stop(self, asset, side, qty, stop_price):
         s = "sell" if side is Side.SELL else "buy"
@@ -258,71 +280,24 @@ class LongbridgeBroker(BrokerAdapter):
             # was never traded. The book would have been fiction while every check
             # stayed green — and the ledger, the breaker and the learning spine all
             # read from it.
-            self._confirm(order, price, is_limit)
+            self.confirm_or_pend(order)
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"longport: {exc}"
         return order
 
-    # Longport status -> ours. Anything unmapped is deliberately NOT treated as a
-    # fill: an unknown state must never be optimistically booked as executed.
-    _TERMINAL_FILLED = {"Filled"}
-    _TERMINAL_DEAD = {"Rejected", "Canceled", "Expired"}
+    def fetch_fill(self, order_id: str):
+        """Longport's own view of the order — the only trustworthy source.
 
-    def _confirm(self, order: Order, mark: float, is_limit: bool,
-                 attempts: int = 4, pause: float = 0.75) -> None:
-        """Ask the broker what actually happened, and record only that.
-
-        A market order normally fills in well under a second, but "normally" is not
-        a guarantee, so this polls briefly and then reports the true state rather
-        than guessing. A still-open order is PENDING, not FILLED — the runner and
-        the ledger can handle a pending order; they cannot handle a lie.
+        Statuses are an enum whose names (`Filled`, `Rejected`, `Canceled`,
+        `Expired`, `PartialFilled`, `New`, ...) the shared `confirm_or_pend` maps
+        case-insensitively. Anything it does not recognise counts as still working,
+        never as a fill: an unknown state must not be optimistically booked.
         """
-        import time as _time
-
-        if not order.id:
-            order.status = OrderStatus.PENDING
-            order.reason = (order.reason or "") + " [no order id returned]"
-            return
-        last = None
-        for i in range(attempts):
-            try:
-                d = self.ctx.order_detail(order.id)
-            except Exception as exc:                     # transient: keep trying
-                last = exc
-                _time.sleep(pause)
-                continue
-            status = str(getattr(d, "status", "") or "").split(".")[-1]
-            executed = float(getattr(d, "executed_quantity", 0) or 0)
-            exec_px = float(getattr(d, "executed_price", 0) or 0)
-            order.filled_qty = executed
-            # Only trust a real execution price. Falling back to the mark is how the
-            # old code invented fills; here it is used solely to keep the field
-            # numeric when nothing has executed yet (filled_qty is 0 in that case,
-            # so no P&L is derived from it).
-            order.filled_price = exec_px if exec_px > 0 else (order.limit_price or mark)
-            if status in self._TERMINAL_FILLED and executed > 0:
-                order.status = OrderStatus.FILLED
-                return
-            if status in self._TERMINAL_DEAD:
-                order.status = OrderStatus.REJECTED if status == "Rejected" else OrderStatus.CANCELLED
-                order.reason = f"{order.reason or ''} [broker: {status}]".strip()
-                return
-            if executed > 0 and i == attempts - 1:
-                # A partial that is still working. There is no PARTIAL status in this
-                # codebase, and adding one would ripple through the journal and the
-                # dashboard for little gain: `filled_qty` already carries the truth,
-                # and every downstream calculation (notional, position, breaker,
-                # ledger) reads that rather than the enum. Marked FILLED for the
-                # quantity that ACTUALLY executed, with the shortfall in the reason.
-                order.status = OrderStatus.FILLED
-                order.reason = f"{order.reason or ''} [partial {executed:g}/{order.qty:g}]".strip()
-                return
-            if i < attempts - 1:
-                _time.sleep(pause)
-        order.status = OrderStatus.PENDING
-        order.reason = (f"{order.reason or ''} [unconfirmed after {attempts} checks"
-                        + (f": {last}" if last else "") + "]").strip()
+        d = self.ctx.order_detail(order_id)
+        return (getattr(d, "status", None),
+                getattr(d, "executed_quantity", 0) or 0,
+                getattr(d, "executed_price", 0) or 0)
 
     def place_stop(self, asset, side, qty: float, stop_price: float):
         """Rest a protective STOP at Longbridge, so it survives a crash and fires on
@@ -471,9 +446,14 @@ class MoomooBroker(BrokerAdapter):
                 order.status = OrderStatus.REJECTED
                 order.reason = f"moomoo: {data}"
             else:
-                order.filled_qty = float(qty)
-                order.filled_price = limit_px
-                order.status = OrderStatus.FILLED
+                # NEVER assume. This read `filled_qty = qty; filled_price = limit_px;
+                # status = FILLED` on any successful place_order — inventing both the
+                # quantity and the price, exactly as the Longbridge adapter did
+                # (§4.15). moomoo's order-status query is not implemented here and
+                # cannot be tested (it needs the OpenD gateway running), so the
+                # honest report is PENDING: unconfirmed, not fabricated.
+                order.id = str(_moomoo_order_id(data) or "")
+                self.confirm_or_pend(order, attempts=1)
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"moomoo: {exc}"
@@ -482,3 +462,13 @@ class MoomooBroker(BrokerAdapter):
     def validate(self) -> dict:
         return {"broker": f"moomoo:{self.trd_env}", "cash": self.get_cash(),
                 "positions": len(self.get_positions())}
+
+def _moomoo_order_id(data) -> str | None:
+    """moomoo returns a DataFrame; pull the order id if it is there."""
+    try:
+        return str(data["order_id"].iloc[0])
+    except Exception:
+        try:
+            return str(data[0]["order_id"])
+        except Exception:
+            return None

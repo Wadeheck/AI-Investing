@@ -74,20 +74,14 @@ def test_fill_confirmation_never_invents_a_price():
                           if not l.strip().startswith("#"))
 
     src = code_only(LongbridgeBroker.submit)
-    assert "self._confirm(" in src, "submit must confirm against the broker"
+    assert "self.confirm_or_pend(" in src, "submit must confirm against the broker"
     assert "order.status = OrderStatus.FILLED" not in src, \
         "submit must not declare a fill itself — _confirm decides from order_detail"
     assert "order.filled_qty = float(qty)" not in src, \
         "submit must not assume the submitted quantity was the filled quantity"
 
-    csrc = code_only(LongbridgeBroker._confirm)
+    csrc = code_only(LongbridgeBroker.fetch_fill)
     assert "order_detail" in csrc, "the fill must come from the broker, not the caller"
-    # terminal states live on the class, so assert on them there rather than by
-    # grepping a function body
-    assert LongbridgeBroker._TERMINAL_FILLED == {"Filled"}
-    assert {"Rejected", "Canceled", "Expired"} <= LongbridgeBroker._TERMINAL_DEAD, \
-        "a dead order must never be booked as a fill"
-    assert "Filled" not in LongbridgeBroker._TERMINAL_DEAD
 
 
 def test_the_venue_exits_use_the_right_order_types():

@@ -2,13 +2,45 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _running_under_test() -> bool:
+    """Is this process a test run?
+
+    A TEST MUST NOT INHERIT THE OPERATOR'S CONFIG. `_load_dotenv` runs at import
+    time, so importing config.py pulled the live `.env` into every test process —
+    and three separate tests then passed on the dev box and failed on the ProDesk, or
+    the reverse, because the two machines are configured differently
+    (test_live_capital, test_scorecard_benchmark, test_execution; STATE §4.17).
+
+    Each was fixed by pinning the value in the test. That is the symptom. This is the
+    cause, and it is detected automatically rather than by an opt-in flag, because
+    what actually failed three times was *remembering*.
+
+    A test that genuinely wants the real file opens it directly — as the benchmark
+    and watchlist coverage checks do — which is unaffected by this.
+    """
+    if os.environ.get("AI_INVESTING_LOAD_DOTENV") == "1":
+        return False                       # explicit override, for a deliberate case
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    argv0 = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    if argv0 is not None:
+        if argv0.parent.name == "tests" or argv0.name.startswith("test_"):
+            return True
+        if argv0.name in ("pytest", "py.test"):
+            return True
+    return False
 
 
 def _load_dotenv(path: Path) -> None:
     """Tiny .env loader. Real environment variables always win."""
     if not path.exists():
+        return
+    if _running_under_test():
         return
     for raw in path.read_text().splitlines():
         line = raw.strip()

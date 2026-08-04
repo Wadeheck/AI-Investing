@@ -131,7 +131,9 @@ def test_a_transient_network_failure_is_retried_then_reported():
         assert len(calls) == 3, f"expected 3 attempts, got {len(calls)}"
         # 2 network failures, then the 3rd attempt succeeded — no plain-text needed
 
-        # total failure: reports False AND says so, rather than vanishing
+        # total failure: reports False AND says so, rather than vanishing.
+        # DISTINCT text on purpose — the notifier now suppresses byte-identical
+        # repeats, so reusing "engine started" here would test the dedupe instead.
         calls.clear()
         urllib.request.urlopen = lambda req, timeout=None: (
             calls.append(req) or (_ for _ in ()).throw(
@@ -140,7 +142,7 @@ def test_a_transient_network_failure_is_retried_then_reported():
         _stdout = sys.stdout
         sys.stdout = buf
         try:
-            got = n.send("engine started")
+            got = n.send("engine started — second, distinct message")
         finally:
             sys.stdout = _stdout
         assert got is False
@@ -162,6 +164,50 @@ def test_a_transient_network_failure_is_retried_then_reported():
     finally:
         urllib.request.urlopen = real_open
         _tg_mod.time.sleep = real_sleep
+
+
+def test_identical_messages_are_suppressed_as_a_last_resort():
+    """The backstop for the whole announce-the-state bug class.
+
+    Four of these reached the user in one day — breaker every 5 min for 9 hours,
+    data guard every cycle, "started" 18 times during a crash loop, news error every
+    cycle of an outage. Each was fixed at its call site; a fifth will be written
+    eventually. The notifier now refuses byte-identical repeats inside a window.
+
+    A call site that announces a state is STILL a bug. This only bounds the damage.
+    """
+    import urllib.request
+    from ai_investing.alerts.telegram import TelegramNotifier
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    posts = []
+    real = urllib.request.urlopen
+    urllib.request.urlopen = lambda req, timeout=None: (posts.append(req) or _Resp())
+    try:
+        n = TelegramNotifier("tok", "42")
+        for _ in range(18):                       # the crash loop, as it happened
+            assert n.send("AI-Investing started (LIVE)") is True
+        assert len(posts) == 1, f"18 identical alerts became {len(posts)} sends"
+        assert n.suppressed == 17
+
+        # a message carrying changing detail still gets through — the storms were
+        # all byte-identical, and real alerts usually are not
+        posts.clear()
+        for px in (13.99, 14.02, 14.10):
+            n.send(f"BUY 1 F @ ${px}")
+        assert len(posts) == 3, "distinct messages must never be suppressed"
+
+        # and the window expires
+        posts.clear()
+        n._recent.clear()
+        assert n.send("AI-Investing started (LIVE)") is True
+        assert len(posts) == 1, "after the window, the message is deliverable again"
+    finally:
+        urllib.request.urlopen = real
 
 
 if __name__ == "__main__":

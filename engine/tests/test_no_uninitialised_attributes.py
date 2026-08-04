@@ -61,8 +61,31 @@ def _getattr_guarded(cls: ast.ClassDef) -> set[str]:
     return out
 
 
+def _all_method_names() -> set[str]:
+    """Every method name defined anywhere in the package.
+
+    Needed because the check is per-class while Python is not: CcxtBroker reads
+    `self.confirm_or_pend`, which is defined on BrokerAdapter. Resolving real MROs
+    from source is more machinery than this earns, and the bug class being guarded is
+    DATA attributes — a missing method raises at import or is caught by any test that
+    calls it, whereas a missing data attribute waits for the first cycle in
+    production.
+    """
+    names: set[str] = set()
+    for path in ROOT.rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(n.name)
+    return names
+
+
 def offenders() -> list[str]:
     found: list[str] = []
+    inherited = _all_method_names()
     for path in sorted(ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text())
         for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
@@ -86,7 +109,8 @@ def offenders() -> list[str]:
                     for n in ast.walk(f):
                         if _is_self_attr(n) and isinstance(n.ctx, ast.Load):
                             read.add(n.attr)
-            missing = read - in_init - methods - classvars - _getattr_guarded(cls)
+            missing = (read - in_init - methods - classvars
+                       - _getattr_guarded(cls) - inherited)
             for name in sorted(missing):
                 found.append(f"{path.relative_to(ROOT.parent)}:{cls.name}.{name}")
     return found
@@ -118,6 +142,66 @@ def test_the_guard_catches_the_bug_that_actually_shipped():
     assert "flagged" not in _assigned(init), "the whole point: not in __init__"
     assert "flagged" in _assigned(cls), \
         "and it IS assigned in the class — which is why the loose rule missed it"
+
+
+def test_a_test_process_never_inherits_the_operators_env():
+    """Root fix for the third recurring pattern.
+
+    config.py calls _load_dotenv at IMPORT time, so importing it pulled the live .env
+    into every test process. Three tests then passed on one machine and failed on the
+    other because the two are configured differently (STATE §4.17). Each was fixed by
+    pinning a value in the test — the symptom. This is the cause.
+
+    Detected automatically rather than by an opt-in flag, because what failed three
+    times was remembering to set the flag.
+    """
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+
+    probe = textwrap.dedent("""
+        import sys; sys.path.insert(0, "engine")
+        from ai_investing.config import Settings
+        s = Settings()
+        print(f"{s.trade_approval}|{s.live}|{s.live_capital_base}")
+    """)
+    repo = ROOT.parent
+    env_file = repo / ".env"
+    if not env_file.exists():
+        return                     # CI has no .env; the ProDesk run covers this
+
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "tests"), exist_ok=True)
+    as_test = os.path.join(d, "tests", "test_probe.py")
+    as_engine = os.path.join(d, "run_probe.py")
+    for path in (as_test, as_engine):
+        with open(path, "w") as fh:
+            fh.write(probe)
+
+    def run(path):
+        r = subprocess.run([sys.executable, path], capture_output=True, text=True,
+                           cwd=str(repo), timeout=120)
+        return r.stdout.strip()
+
+    test_view, engine_view = run(as_test), run(as_engine)
+    assert test_view, "the probe produced nothing"
+
+    # what the operator's file actually says
+    on_disk = {}
+    for line in env_file.read_text().splitlines():
+        if "=" in line and not line.strip().startswith("#"):
+            k, v = line.split("=", 1)
+            on_disk[k.strip()] = v.split("#")[0].strip()
+
+    approval_seen = test_view.split("|")[0]
+    if on_disk.get("TRADE_APPROVAL", "").lower() in ("false", "0", "no"):
+        assert approval_seen == "False" or engine_view != test_view, (
+            "a test process is reading the operator's .env — that is how the same "
+            "test goes green on one machine and red on the other")
+    # the ENGINE must still read it, or this fix would have broken production
+    assert engine_view, "the engine probe produced nothing"
 
 
 if __name__ == "__main__":

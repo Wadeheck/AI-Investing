@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ai_investing.models import Order, Portfolio, Position
+from ai_investing.models import Order, OrderStatus, Portfolio, Position
 
 
 class BrokerAdapter(ABC):
@@ -25,7 +25,88 @@ class BrokerAdapter(ABC):
 
     @abstractmethod
     def submit(self, order: Order, price: float) -> Order:
+        """Send the order and report WHAT ACTUALLY HAPPENED.
+
+        THE CONTRACT, stated because breaking it silently was the worst bug in this
+        project's history (STATE §4.15). A live venue's submit call *acknowledges* an
+        order; it does not fill it. An adapter may therefore only set
+        `status = FILLED` and a `filled_price` it has **confirmed with the venue**.
+
+        When confirmation is unavailable — unimplemented, timed out, ambiguous — the
+        honest answer is `PENDING` with a reason. The engine handles a pending order:
+        it holds no position for it, books no P&L, and re-decides next cycle. It
+        cannot handle a fabricated fill, because the ledger, the circuit breaker and
+        the learning spine all read the fill price as fact.
+
+        Three adapters implemented three different degrees of assumption here, and
+        two of them invented both the quantity and the price. `confirm_or_pend()`
+        below exists so the safe default costs less effort than the unsafe one.
+        """
         ...
+
+    # -- fill confirmation ---------------------------------------------------
+    def fetch_fill(self, order_id: str):
+        """Ask the venue about an order: `(status, filled_qty, filled_price)`.
+
+        `status` is a venue string; `"filled"`, `"rejected"`, `"canceled"` and
+        `"expired"` are recognised case-insensitively, anything else is treated as
+        still working. Return None when the venue cannot be asked — the caller then
+        reports PENDING rather than guessing.
+        """
+        return None
+
+    def confirm_or_pend(self, order: Order, attempts: int = 4, pause: float = 0.75) -> Order:
+        """Poll `fetch_fill` briefly, then record the truth — never an assumption.
+
+        Shared so every adapter gets the same behaviour: the reason two of three had
+        this wrong is that each wrote its own ending to `submit`.
+        """
+        import time as _time
+
+        if not order.id:
+            order.status = OrderStatus.PENDING
+            order.reason = f"{order.reason or ''} [no order id returned]".strip()
+            return order
+        last = None
+        for i in range(attempts):
+            try:
+                got = self.fetch_fill(order.id)
+            except Exception as exc:
+                last, got = exc, None
+            if got is None:
+                if i < attempts - 1 and last is not None:
+                    _time.sleep(pause)
+                    continue
+                order.status = OrderStatus.PENDING
+                order.reason = (f"{order.reason or ''} [unconfirmed"
+                                + (f": {last}" if last else " — venue query "
+                                   "unimplemented for this adapter") + "]").strip()
+                return order
+            status, qty, px = got
+            s = str(status or "").split(".")[-1].lower()
+            order.filled_qty = float(qty or 0.0)
+            if px and float(px) > 0:
+                order.filled_price = float(px)
+            if s == "filled" and order.filled_qty > 0:
+                order.status = OrderStatus.FILLED
+                return order
+            if s in ("rejected", "canceled", "cancelled", "expired"):
+                order.status = (OrderStatus.REJECTED if s == "rejected"
+                                else OrderStatus.CANCELLED)
+                order.reason = f"{order.reason or ''} [venue: {s}]".strip()
+                return order
+            if order.filled_qty > 0 and i == attempts - 1:
+                # partial still working: filled_qty carries the truth, which is what
+                # every downstream calculation actually reads
+                order.status = OrderStatus.FILLED
+                order.reason = (f"{order.reason or ''} "
+                                f"[partial {order.filled_qty:g}/{order.qty:g}]").strip()
+                return order
+            if i < attempts - 1:
+                _time.sleep(pause)
+        order.status = OrderStatus.PENDING
+        order.reason = f"{order.reason or ''} [unconfirmed after {attempts} checks]".strip()
+        return order
 
     def portfolio(self) -> Portfolio:
         return Portfolio(self.get_cash(), self.get_positions())

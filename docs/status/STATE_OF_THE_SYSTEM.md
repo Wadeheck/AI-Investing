@@ -33,8 +33,8 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 GRAPH    321 nodes, 690 edges          (seed v25)
 BRAIN    6,326 articles, 2,380 events tagged
 TAGGER   1% unsigned across recent events              (was 57%)
-TESTS    30 suites, all green (local AND on the ProDesk AND in CI)
-COMMITS  163
+TESTS    32 suites, all green (local AND on the ProDesk AND in CI)
+COMMITS  167
 
 BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
@@ -110,6 +110,23 @@ expectations; only the offline gauntlet may change structure.*
 
 The through-line: **almost every failure here was silent, and passed its health
 checks while failing.** Not crashes — wrong answers delivered confidently.
+
+**Index.** §4.1–4.6 predate 2026-08-04. §4.7–4.14 are the phantom-valuation day.
+§4.15–4.19 are the autonomy session. §4A is the live list of what is still broken —
+read that one first if something is wrong now.
+
+| § | Defect | Root-caused? |
+|---|---|---|
+| 4.7 | A feed outage faked a 13.8% crash and flattened a healthy book | Contained — `mark_price` at every consumer; the `0.0` sentinel remains (§4A) |
+| 4.10 | The same phantom existed in all four books | ✅ one shared valuation rule |
+| 4.11 | The last-good-bar cache did not survive a restart, then cached NaN | ✅ persisted + validated on save, load and serve |
+| 4.13 | The engine would have liquidated holdings it never opened | ✅ `foreign_positions`, gating both exit paths |
+| 4.14 | A change of book size read as a 90% crash | ✅ declared basis, never inferred |
+| 4.15 | `submit()` reported fills it never confirmed | ✅ **after §4.19** — was one adapter of three |
+| 4.16 | I shipped a crash loop into the one path with no test | ✅ cycle test + static attribute guard |
+| 4.17 | The investing book was never autonomous | ✅ one shared `_open()` for both routes |
+| 4.18 | A live API key and secret were committed to the repo | ✅ file deleted, every tracked file scanned |
+| 4.19 | Three fixes that were not root fixes | ✅ contract, backstop, and test isolation |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -716,6 +733,60 @@ correctly, whether the master key was the sandbox one. It is:
   in this project, and it only works if the pushback is followed rather than
   answered.
 
+### 4.19 The root-cause audit: three fixes that were not root fixes *(2026-08-05)*
+
+Asked to make sure the fixes were root-level, I audited them instead of assuming.
+Three were not, and each had the same shape: **I fixed the instance I could see and
+left the mechanism that produces more of them.**
+
+**1. The fill fabrication was fixed in ONE of three adapters.** §4.15 fixed
+`LongbridgeBroker`. Reviewing the others afterwards:
+
+| Adapter | Before |
+|---|---|
+| `MoomooBroker` | `filled_qty = float(qty); filled_price = limit_px; status = FILLED` on any successful `place_order` — **identical fabrication**, both quantity and price invented |
+| `CcxtBroker` | `filled or order.qty` and `average or price` — invented a full fill and the caller's mark whenever the exchange did not report |
+
+Three adapters, three degrees of the same assumption, because **each wrote its own
+ending to `submit()`**. Root fix: the contract now lives once. `BrokerAdapter` states
+it explicitly, `confirm_or_pend()` implements it, and each adapter supplies only a
+`fetch_fill()` hook. Where a venue query is not implemented — moomoo, which needs the
+OpenD gateway and cannot be tested here — the answer is **PENDING**, not a guess. The
+engine handles pending: no position, no P&L, re-decide next cycle. It cannot handle a
+fabricated fill, because the ledger, the breaker and the spine read the price as fact.
+`test_fill_contract.py` holds this for all three, including a structural check that a
+future adapter cannot write its own ending again.
+
+**2. Four alert storms were fixed four times.** Breaker, data guard, engine-start,
+news error — each at its call site, and a fifth would eventually be written. Root fix:
+`TelegramNotifier` now suppresses byte-identical messages inside a 30-minute window,
+counts what it dropped, and **prints that a caller is announcing a state so the real
+bug still gets fixed**. Keyed on exact text, because every storm was byte-identical
+while real alerts carry changing detail. Monotonic clock, so a clock adjustment cannot
+unblock a storm. This is a backstop, not the design — but the user will not receive
+eighteen copies of anything again because one caller forgot.
+
+**3. Three tests inheriting the operator's config were pinned one at a time.**
+`config.py` calls `_load_dotenv` at **import** time, so importing it pulled the live
+`.env` into every test process — and the same test then went green on the dev box and
+red on the ProDesk, because the two machines are configured differently. Pinning the
+value in each test is the symptom. Root fix: a test process does not load `.env` at
+all, detected automatically from `sys.argv[0]` and `PYTEST_CURRENT_TEST` rather than by
+an opt-in flag — **because what failed three times was remembering**. Verified both
+directions: a script under `tests/` sees defaults, the engine still reads the file.
+
+- **Known and NOT fixed at the root, deliberately.** The runner still encodes "no
+  bars" as `prices[key] = 0.0` — a sentinel that means *absent* but reads as *free*,
+  and the direct cause of §4.7. `mark_price()` defends every consumer, which is a
+  strong perimeter, but the honest root fix is to omit the key. That is a wide change
+  to every price consumer, and it is in §4A rather than pretended away.
+- **Lesson.** A fix is root-level only if it makes the next instance impossible or
+  loud. Fixing the instance in front of you feels identical from the inside and is
+  measurably different: the sleeve's entry/exit key mismatch, four alert storms, three
+  adapters and three env-dependent tests were all one mechanism each, met four, three
+  and three times. **When a bug has a shape, the fix belongs where the shape is
+  defined.**
+
 ---
 
 ## 4A. Open defects — known, NOT fixed
@@ -728,7 +799,8 @@ and the register had drifted **13 commits** behind reality.
 |---|---|---|
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
 | ~~A fourth announce-the-state instance~~ | **CLOSED §4.17.** All 24 alert sites swept and classified; the fourth (news/context error) is fixed. | — |
-| **Tests inherit the ambient `.env`** | Three found so far (`test_live_capital`, `test_scorecard_benchmark`, `test_execution`), each passing on the dev box and failing on the ProDesk or vice versa. Nothing stops a fourth. | A test whose result depends on the machine is worse than no test: green where nobody looks. |
+| ~~Tests inherit the ambient `.env`~~ | **CLOSED §4.19.** A test process no longer loads `.env` at all, detected automatically. | — |
+| **`prices[key] = 0.0` still means "no data"** | The runner encodes a missing bar as zero — a sentinel that means *absent* and reads as *free*. It caused §4.7 and is currently contained by `mark_price()` at every consumer rather than removed at the source. The root fix is to omit the key, which touches every price consumer. | Contained, not gone. A new consumer that forgets `mark_price` reopens §4.7. |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |

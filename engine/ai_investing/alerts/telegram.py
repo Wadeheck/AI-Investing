@@ -31,16 +31,55 @@ class NullNotifier(Notifier):
 
 
 class TelegramNotifier(Notifier):
+    # LAST-DITCH DUPLICATE SUPPRESSION.
+    #
+    # Four separate announce-the-state bugs reached the user in one day: the circuit
+    # breaker every 5 minutes for 9 hours, the data guard every cycle, the engine's
+    # own "started" message 18 times during a crash loop, and a news/context error
+    # every cycle of a provider outage. Each was fixed at its call site, and a fifth
+    # will eventually be written.
+    #
+    # So the notifier itself now refuses to repeat an IDENTICAL message inside a
+    # window. This is deliberately a backstop, not the design: a call site that
+    # announces a state is still a bug and still gets fixed. But the user should
+    # never again receive eighteen copies of anything because one caller forgot.
+    #
+    # Keyed on exact text, so a message carrying changing detail (a price, a count)
+    # still gets through — the storms were all byte-identical.
+    DEDUPE_WINDOW_S = 1800.0        # 30 minutes
+    DEDUPE_MAX_KEYS = 256           # bounded: this runs for months
+
     def __init__(self, token: str, chat_id: str):
         self.token = token
         self.chat_id = chat_id
         self.enabled = bool(token) and bool(chat_id)
+        self._recent: dict[str, float] = {}
+        self.suppressed = 0          # counted so the log can admit what it dropped
+
+    def _is_duplicate(self, text: str) -> bool:
+        now = time.monotonic()
+        # monotonic, not wall clock: a clock adjustment must not unblock a storm
+        for k, t in list(self._recent.items()):
+            if now - t > self.DEDUPE_WINDOW_S:
+                del self._recent[k]
+        if text in self._recent:
+            self.suppressed += 1
+            print(f"  (telegram: suppressed a repeat of an identical message — "
+                  f"{self.suppressed} so far. A caller is announcing a STATE; "
+                  f"fix it there: {text[:60]}…)")
+            return True
+        if len(self._recent) >= self.DEDUPE_MAX_KEYS:
+            self._recent.pop(min(self._recent, key=self._recent.get), None)
+        self._recent[text] = now
+        return False
 
     def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> bool:
         """buttons: rows of (label, callback_data) — the chat bot process
         handles the resulting taps; this notifier only sends."""
         if not self.enabled:
             return False
+        if self._is_duplicate(text):
+            return True          # not an error: the message was already delivered
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         params = {
             "chat_id": self.chat_id,
