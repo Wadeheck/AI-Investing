@@ -681,10 +681,27 @@ correctly, whether the master key was the sandbox one. It is:
   click, and the only one with real-money exposure", then, tracing it, said the
   exposure was "one chat transcript". Both were wrong in opposite directions. The
   full credential pair was in the repository the whole time.
-- **Fix.** Placeholders, plus `test_no_secrets_in_example.py`, which flags any long
-  opaque mixed-alphanumeric value in that file and is verified against the exact
-  pair that leaked. Public identifiers (model ids, URLs, watchlists) are allow-listed
-  so the check is enforceable rather than noisy.
+- **Fix.** The user's call, and the right one: **`.env.example` is deleted, not
+  sanitised.** A tracked template invites a real value into a published location, and
+  that is what happened. The configuration surface is now GENERATED —
+  `scripts/env_template.py` prints all 150 variables with their defaults from
+  `config.py`, **every line commented out**, so it documents everything and sets
+  nothing. `setup.sh` generates `.env` at 0600 instead of copying.
+- **The replacement is the scanner I said should have existed.**
+  `test_no_tracked_secrets.py` sweeps every *git-tracked* file for credential-shaped
+  values — vendor prefixes (`account-`, `master-`, `sk-`, `ghp_`, `AKIA`, Telegram
+  bot tokens, PEM blocks, Longport JWTs) and any opaque value assigned to a
+  `*SECRET*`/`*TOKEN*`/`*PASSWORD*`/`*API_KEY*` name. Tracked only, because an
+  untracked secret is a local risk while a tracked one is published. Verified against
+  the exact pair that leaked.
+- **Three bugs in my own fix, all found by running it.** The scanner flagged the
+  credential prefix I had quoted in *this very section*, so the docs are redacted
+  rather than allow-listed — an exception becomes a habit. Its regex used `\s*`
+  around the separator, which matches a newline, so an empty assignment swallowed
+  the following line and reported it as that variable's value. And the generated
+  template broke the engine outright: `APPROVAL_TTL_HOURS=` makes `float("")` raise,
+  so an empty assignment is worse than an absent one — which is why every line is
+  commented rather than blank.
 - **What the fix does NOT do.** Sanitising a file does not unpublish it. The
   credential remains in git history and in any clone or fork. **Only revocation at
   Gemini removes the exposure**, which is why that is the user's action and not a
@@ -718,8 +735,8 @@ and the register had drifted **13 commits** behind reality.
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
 | **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
-| **🔴 The leaked Gemini key is still valid** | Not the master/sandbox key — that one is harmless. `account-…` (the production key) **and its secret** were committed to `.env.example` and remain in git history (§4.18). The file is sanitised; history is not, and cannot be by editing a file. | **The only real-money exposure in the system.** It is account-scoped, trade-only and IP-locked to the home address, which bounds it — but it is published. Revoke at Gemini. |
-| **Git history still carries the credential** | `git filter-repo`/BFG could purge it, which rewrites every commit hash and breaks any existing clone. Pointless before revocation and unnecessary after. | None once the key is revoked. |
+| ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
+| **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
 
 ## 5. What is unverified or uncertain
