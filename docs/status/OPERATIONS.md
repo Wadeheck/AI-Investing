@@ -233,11 +233,104 @@ rights"* — which reads like a permissions problem on GitHub and is not.
   `needs_you.py --show` and `backup.py --list` all run against the live state
   without touching it, and answer nearly every question worth asking.
 
-### Not fixed: the dashboard has no auth
+---
 
-`DASHBOARD_USER` / `DASHBOARD_PASSWORD` are empty in `.env`, so
-`http://100.64.113.103:4300` is unauthenticated. It binds behind Tailscale and
-is not on the open internet, so the exposure is anyone already on the tailnet —
-but it is now up **24/7** rather than only while a laptop was awake, and it
-shows the full book. Setting both variables and restarting
-`ai-investing-dashboard` closes it.
+## Security posture of the 24/7 box
+
+*Audited 2026-08-04, the day it became always-on. Reachable means reachable by
+someone who is not you.*
+
+### What is already right
+
+Worth stating, because the list below is all problems and the baseline is good.
+
+| | |
+|---|---|
+| SSH | keys only — `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no` |
+| Firewall | `ufw` active, `DEFAULT_INPUT_POLICY=DROP`, and every ALLOW rule is scoped **`on tailscale0`**. `sshd` binds `0.0.0.0:22` but nothing off the tailnet can reach it. |
+| Exposure | listening sockets are :22, :4300 (dashboard), :631 and :53 on loopback only |
+| Secrets | `.env` is `0600`; nothing secret is git-tracked (`.env.example` only) |
+| Money | `LIVE_TRADING=false`, and `brokers/get_broker()` is a **single choke point** — it returns `PaperBroker` unless the flag is set, so a missing SDK or a stray key cannot route a real order |
+| Telegram | the chat bot checks `sender != self.chat_id` on **both** the message and the inline-button paths before acting. Verified in `alerts/chat.py`, not just claimed in its docstring. |
+| Patching | `unattended-upgrades` enabled |
+| Key | `~/.ssh/prodesk_ed25519` is passphrase-protected, so the file alone is not access |
+| Data dirs | `data/` and the repo root tightened to `750`, `data/backups/` to `700` |
+
+### The one that actually matters: live broker credentials on a paper box
+
+`.env` holds **production** credentials — `LONGPORT_ACCESS_TOKEN`,
+`LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`, and `CRYPTO_API_KEY` /
+`_SECRET` / `_PASSWORD` — on a machine that trades nothing but paper and has
+never validated a broker adapter. `STOCK_BROKER=longbridge` is already set, so
+the only thing between those keys and a real order is one boolean.
+
+Nothing reads them today. That is the point: **the risk is entirely unearned.**
+Keep them off the box until the sandbox validation that gates live trading has
+actually happened, and the worst outcome of a compromise drops from "someone
+trades my brokerage account" to "someone reads a paper portfolio."
+
+If they must stay, scope them at the provider — trade-only, **withdrawals
+disabled**, IP-allowlisted. An exchange key that can withdraw is a different
+category of object from one that can only trade.
+
+### Passwordless sudo
+
+`sudo -n true` succeeds, so anyone holding the SSH key — including an agent
+being helpful — has uncontested root. Nothing here needs root at runtime:
+lingering is already enabled, the units are `--user`, and the firewall is set.
+Requiring a password for `sudo` costs one prompt on the rare occasions it is
+needed and removes root from the blast radius of a stolen laptop.
+
+### The dashboard gate that could not be switched on
+
+`dashboard/middleware.ts` implements Basic Auth, gated on `DASHBOARD_USER` /
+`DASHBOARD_PASSWORD`, and both are empty — so the dashboard serves the full book
+to anyone on the tailnet. That much was known.
+
+What was not: **setting them in the repo-root `.env` would have done nothing.**
+Next.js loads `.env` from `dashboard/`, there is no `.env` there, and the systemd
+unit passed no environment at all. The variables would have stayed `undefined`,
+`middleware` would have returned `NextResponse.next()`, and the dashboard would
+have looked protected while being open — the project's signature failure, a
+safeguard that reports success and does nothing.
+
+Fixed by giving the unit `EnvironmentFile=-%h/.config/ai-investing/dashboard.env`
+— a separate file, so a Node process is not handed every broker and LLM key to
+serve two strings. To close the gate:
+
+```bash
+mkdir -p ~/.config/ai-investing
+printf 'DASHBOARD_USER=eugene\nDASHBOARD_PASSWORD=<pick one>\n' \
+  > ~/.config/ai-investing/dashboard.env
+chmod 600 ~/.config/ai-investing/dashboard.env
+systemctl --user restart ai-investing-dashboard
+curl -si localhost:4300 | head -1        # must be 401, not 200
+```
+
+That last line is not optional. It is the only thing that distinguishes this
+from the state it was just in.
+
+### Backups exist on exactly one disk
+
+`scripts/backup.py` writes to `data/backups/` and nowhere else — no rsync, no
+remote, no cloud. Since nothing here is real money, the **forward record is the
+most valuable thing on the machine**, and it has no second copy. It is also the
+one asset that cannot be regenerated: re-running the engine does not reproduce a
+paper trading history.
+
+`scripts/pull_backup.sh` copies the sealed snapshots to whatever machine you run
+it from and verifies the newest one reads as a tar. It **pulls** rather than
+pushes on purpose — the ProDesk holds no credential to the archive, so anything
+that compromises it cannot delete the copies. Run it when you SSH in; it is
+manual because the SSH key has a passphrase and stripping that to satisfy a cron
+would be a worse trade.
+
+### Known and accepted
+
+- **Tailscale is the whole perimeter.** Any device on the tailnet reaches
+  everything. Tailscale ACLs would segment this; not configured.
+- **The dashboard binds `*:4300`**, not the Tailscale address. `ufw` makes this
+  moot today, but the bind is one firewall mistake away from being the exposure.
+- **`ssh -A` agent forwarding** during deploys lets a compromised ProDesk use
+  your forwarded GitHub key for as long as the session is open. Acceptable for
+  short deploy commands; do not leave such a session idle.

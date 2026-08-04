@@ -1,0 +1,33 @@
+[Unit]
+Description=AI-Investing dashboard (production)
+After=network-online.target ai-investing.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eugene/Projects/AI-Investing/dashboard
+# The Basic-Auth gate in dashboard/middleware.ts reads DASHBOARD_USER and
+# DASHBOARD_PASSWORD from the PROCESS environment. Next.js loads .env from
+# dashboard/, not from the repo root, and this unit used to pass no environment
+# at all — so setting those two variables in the repo-root .env (where every
+# other secret lives, and where .env.example documents them) silently did
+# NOTHING and the dashboard stayed open. A safeguard you can enable without
+# effect is worse than one that is absent.
+#
+# Deliberately a SEPARATE file, not the repo-root .env: the dashboard needs two
+# values, and mounting the whole .env would hand a Node process every broker and
+# LLM credential for no reason. Create it 0600 with just:
+#     DASHBOARD_USER=...
+#     DASHBOARD_PASSWORD=...
+# The leading `-` keeps the unit startable when the file is absent (no auth,
+# same as before) instead of failing closed on a box that is only on a tailnet.
+EnvironmentFile=-%h/.config/ai-investing/dashboard.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=20
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/dashboard.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target
