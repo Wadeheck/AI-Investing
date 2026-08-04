@@ -360,6 +360,24 @@ non-USD listings are excluded because `cost_price` arrives in the listing curren
 while prices here are USD-normalised; crypto is excluded because the segregated
 Gemini account is empty.
 
+**Autonomous since 2026-08-04.** `TRADE_APPROVAL=false` — the engine enters and
+exits without asking. Stop-losses and take-profits **rest at the broker**
+(`EXECUTION_STOP_AT_EXCHANGE=true`, `MIT` for stops, `LIT` for take-profits), so
+they fire on an overnight gap or while the engine is down. Verified live on the
+paper account: submit → confirmed fill → stop and TP resting → cancel → exit.
+
+All four books were reset to **USD 10,000** on 2026-08-05 (`STARTING_CASH`,
+`INVEST_STARTING_CASH`, `EVENT_START_CASH`, `CRYPTO_START_CASH`). Retired state is
+in `data/retired/`; the brain, journal and learning ledger were kept.
+
+**Expect few or no fills for now, and it is not a fault.** 12 of the 13 decisions
+clearing the confidence floor are shorts, which the venue refuses, and the single
+qualifying long is non-USD, which the live slice excludes. Check with:
+
+```bash
+grep -E "not tradable in the live slice|FILLED|PENDING" data/engine.log | tail
+```
+
 **Shorting is off in live, because neither paper venue supports it.** Checked
 2026-08-04 rather than assumed:
 

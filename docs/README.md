@@ -19,6 +19,11 @@ Organised by **what you are trying to do**, not by when it was written.
 Everything else explains *how a part works*. Those two explain *how much of it
 is proven* and *how to keep it alive*.
 
+**Is something known-broken?** `STATE_OF_THE_SYSTEM.md` **§4A — Open defects** is
+the live list of what is wrong and not yet fixed. §4 is history; §4A is now. Before
+2026-08-05 there was no such list and the honest answer to "how are the bugs
+tracked" was *commit messages* — which had drifted thirteen commits behind.
+
 **If something is wrong right now**, in this order:
 
 ```bash

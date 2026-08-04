@@ -1,6 +1,6 @@
 # State of the system
 
-*Honest engineering status as of 2026-08-04. Written to be read by someone who
+*Honest engineering status as of 2026-08-05. Written to be read by someone who
 has not been watching — including a future me. Where something is unproven it
 says so; where a number is soft it says why.*
 
@@ -13,58 +13,69 @@ An autonomous trading engine for stocks and crypto. A knowledge graph (the
 trade off that shared world model; a learning spine grades every trade against
 what it predicted and reallocates capital toward demonstrated skill.
 
-**Everything is paper.** `LIVE_TRADING=false`. No broker adapter has ever been
-pointed at a funded account. Nothing in this document should be read as
-evidence the system makes money with real money.
+**No real money is at risk, but `LIVE_TRADING` is now `true`.** Since 2026-08-04
+the 📈 book places actual orders through the Longbridge API — into a **paper
+account** (`ac: lb_papertrading`), bounded to a $10,000 slice. The other three
+books are simulated. The distinction matters both ways: real orders now exercise
+the real broker path (§5.1), and nothing in this document is evidence the system
+makes money with real money.
 
-As of 2026-08-04 both adapters **authenticate** for the first time —
-Longbridge against a *paper* account (`ac: lb_papertrading`) and Gemini against a
-deliberately *empty*, separate account. Read-only, reporting cash and zero
-positions. It proves credentials, transport and the balance call; it proves
-**nothing** about placing, filling, or cancelling an order, and an empty account
-cannot prove it. See §5.1.
+Both broker adapters authenticate, and the stock order path is verified end to end
+— submit, confirmed fill, venue-resting stop and take-profit, cancel, exit. The
+Gemini leg reaches a deliberately **empty**, segregated account, so it proves
+connectivity and nothing more. See §5.1 for exactly what remains unproven.
 
 ## 2. Where it stands today
 
+*Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
+
 ```
 GRAPH    321 nodes, 690 edges          (seed v25)
-BRAIN    5,042 articles, 1,766 events tagged   (57 now from the X capture)
-TAGGER   2% unsigned across 1,474 recent events     (was 57%)
-TESTS    24 suites, all green
-COMMITS  134
+BRAIN    6,326 articles, 2,380 events tagged
+TAGGER   1% unsigned across recent events              (was 57%)
+TESTS    27 suites, all green (local AND on the ProDesk AND in CI)
+COMMITS  158
 
-BOOKS            equity      cash     pos   at cost
-  📈 trading   $ 99,997    $ 99,997     0     -     (flat after §4.7; re-entering)
-  🏛 investing $ 99,913    $105,356     8     6
-  ⚡ sleeve    $100,437    $100,437     0     0     (+$437 realised, see below)
-  ₿ crypto     $100,000    $100,000     0     0     (bear mode, deliberately flat)
-  ------------------------------------------------
-  TOTAL        $400,347   on $400,000 staked  (+0.09%)
+BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
+  📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
+  🏛 investing paper, $10,000
+  ⚡ sleeve    paper, $10,000
+  ₿ crypto     paper, $10,000  (bear mode: 100% cash by design)
+
+AUTONOMY   TRADE_APPROVAL=false — the engine enters and exits unattended
+EXITS      stop-loss + take-profit rest AT the broker (MIT / LIT), verified live
 ```
 
-Read **equity**, not cash. Three of these books hold shorts, whose sale proceeds
-sit in cash while the shares are still owed — which is why cash exceeds equity in
-the investing book, and why cash is never the portfolio's value. Conflating the
-two caused §4.4, and valuing a short at a zero price caused §4.7.
+**The forward record before the reset**, so it is not lost by being overwritten:
+trading $99,997 · investing $99,602 (8 positions) · sleeve $93,704 · crypto
+$100,000. The sleeve's history is the only one with realised trades: **+$437**
+from three clean exits, then **−$6,734** on USO — of which roughly half was caused
+by the double-buy bug in §4.15. Retired state is in `data/retired/`, and the
+brain, journal, reliability weights and learning ledger were all **kept**:
+resetting books is not erasing what the model learned.
 
-**"at cost" is the honest caveat on the numbers above.** It counts positions
-marked at cost basis because no live price is available. As of this writing the
-feed is returning `0.0` for all 88 symbols (throttled — see §4.11), so 6 of the
-investing book's 8 positions are held at their entry price. That book's equity is
-therefore *"no worse than cost"*, not a true mark. It is reported this way
-deliberately: the alternative — dropping unpriced positions out of equity — is
-precisely the bug in §4.10.
+**The live book is currently idle, and not because of a bug.** Of 99 decisions,
+13 clear the confidence floor and **12 of them are shorts** — which neither paper
+venue permits (§4.15). The single qualifying long is `O39.SI`, excluded because the
+live slice is USD-only until non-USD is validated. A uniformly bearish model that
+cannot short has nothing to execute. Graded predictions still accumulate, which is
+why the scorecard work in §4.15 matters more than the fills.
 
-**First realised P&L in the system's history**, and it came from the event sleeve:
-three positions closed on its 2-day clock, all profitable — 9988.HK **+$326**,
-0700.HK **+$105**, 3690.HK **+$6**. Total **+$437**. Every other number in the
-table above is still unrealised or untraded, so this is the only line that has
-been settled by the market rather than by a mark.
+Read **equity**, not cash. A short's sale proceeds sit in cash while the shares
+are still owed, so cash is never a book's value. Conflating the two caused §4.4,
+and valuing a short at a zero price caused §4.7. (Moot in the 📈 book today —
+shorting is off, because neither paper venue permits it.)
 
-**The learning spine has 0 settled claims.** It is armed and tested but has
-never actually adjusted anything, because no trade has closed through it yet.
-Every claim about how the system "learns" is therefore a claim about design,
-not about observed behaviour.
+**The learning spine has run.** It has **1 settled claim**, and it is worth reading
+because it is the first evidence rather than design: `event:USO`, expected **+0.31%**,
+realised **−10.06%**, score −1.0. That single row exposed two spine defects and one
+strategy problem, all in §4.15 and §4A. One claim is not a track record; it is
+proof the instrument works.
+
+**Every number above is USD.** SGD was considered and rejected: `BASE_CURRENCY`
+has never been exercised as anything but USD, and every `RISK_`/`SAFETY_` threshold
+is denominated in it, so switching would silently redenominate the whole safety
+layer on an untested path.
 
 ## 3. Architecture in one page
 
@@ -504,6 +515,81 @@ is the most repeated one in this register.
   every stored comparison against it is now wrong** — including the ones inside
   the safety layer that exist to protect you.
 
+### 4.15 Going autonomous: eleven more defects *(2026-08-04 → 08-05)*
+
+The session that turned approval off, pointed the 📈 book at a real broker, and put
+stop-losses at the venue. Everything here was found by trying to *use* a path
+rather than by reading it — which is the only reason any of it surfaced.
+
+**The one that mattered most.** `LongbridgeBroker.submit()` reported every accepted
+order as fully filled, at the price it had merely hoped for:
+
+```python
+order.filled_qty = float(qty)
+order.filled_price = order.limit_price if is_limit else price
+order.status = OrderStatus.FILLED
+```
+
+`submit_order` only **acknowledges**; it does not fill. So a rejection would have
+been booked as a fill, a partial as complete, a resting limit as done, and every
+P&L and slippage number computed from a price that was never traded — while the
+ledger, the breaker and the learning spine all read from that book. Demonstrated
+by accident: a validation order passed `price=0.0` and the adapter reported
+*"filled 1.0 @ $0.00"*. After the fix the same call reports the real **$13.99**,
+queried from `order_detail`. Fills are now confirmed, never assumed; an unmapped
+status is never optimistically booked.
+
+| # | Defect | Why it survived |
+|---|---|---|
+| 1 | **The sleeve's re-entry guard never worked.** `sym in self.broker.get_positions()` compared `"USO"` against keys like `"stock:USO"` — always False. USO was bought twice, $66,958 into a book that sizes 33% positions. Its 10% stop then lost **−$6,734** instead of ~−$3,367. | The exit path nine lines above used `pos.asset.symbol` correctly. Exits worked; entries doubled. |
+| 2 | **CI had never passed.** Added 2026-07-24 pinning Python 3.11 while `requirements.lock.txt` pins `numpy==2.5.1` (requires ≥3.12). `pip` died in ~12s on **136 consecutive commits**. | It emailed every time. Nobody acted. Now matched to the 3.14 production runs. |
+| 3 | **`longbridge` was pinned; `longport` is imported.** Two real PyPI packages, same version line, different top-level names — so the adapter was unconstructable in any environment since it was written. | `--check-broker` had never been run, and the failure reads as "SDK missing". |
+| 4 | **The spine silently discarded claims.** `open` is keyed `policy:symbol` and assigned unconditionally, so the second USO claim replaced the first, which was never settled and remains a dangling `open` row forever. | The corpus is append-only, so corruption looks like data. |
+| 5 | **A stop-out scored the same as a scratch.** Direction and conviction drove the score; severity did not enter it. For a system whose hard rule is a max loss per position, that is a blind spot exactly where it matters. | The score was inside its documented bounds, so nothing looked wrong. |
+| 6 | **`avoid` was graded as if it predicted a fall.** Hence `short_or_avoid` scoring 0.182 across 77 calls while averaging **+3.6%** — a rising tape marking every correct avoid as a miss. The unexplained 0.404 hit rate was a category error, not a skill deficit. | One blended number that mixed two different questions. |
+| 7 | **Crypto had never received a single graded call.** The universe was whatever the causal graph named, and only BTC/ETH/SOL have nodes. All 13 coins had live scores and lost every seat to stocks in one global top-10. | "Considered 95" looked like broad coverage. |
+| 8 | **`INVEST_STARTING_CASH` did not exist.** `investor.py` read it via `getattr(settings, "invest_starting_cash", 100000.0)`, so the fallback fired every run and that book's size was unconfigurable. | A `getattr` with a default is indistinguishable from a working setting until someone changes it. |
+| 9 | **The notifier dropped messages silently.** One attempt, `return False`, no log. The boot-time "started" alert is the first outbound request after a reboot, when DNS lags — so the single most valuable message was the most likely to be lost. Observed: the 21:19 boot delivered nothing while the restarts either side both did. | Every other safeguard reports through this component. |
+| 10 | **`daily_status` reported the wrong book.** It read `paper_state.json`, frozen since the live switch, and printed `$99,997 · 0 positions` as the state of things while the live $10,000 book was absent entirely. | On the one line a person actually glances at. |
+| 11 | **The data-guard alert announced a state, not an event** — an identical Telegram every ~7 minutes for as long as a symbol stayed flagged. And the scorecard snapshotted the **raw** feed, so a guard-rejected stale close was stamped with today's date. 2800.HK is the HK/CN benchmark, so that silently froze the market return for every HK and CN call. | §4.7's lesson applied in one place and not swept for elsewhere. |
+
+**Also fixed, not defects:** `.gitignore` covered `.env` and `.env.local` only, while
+a full credential copy sat untracked and unignored in the trading box's working
+tree; venue-resting stops (`MIT`) and take-profits (`LIT`) implemented and verified
+live; position costs converted out of the listing currency and HK symbols padded
+(`700.HK` → `0700.HK`) so the engine stops mistaking its own holdings for someone
+else's.
+
+- **Lesson.** Nine of these eleven were in code that had **never been executed
+  once** — an unrun broker adapter, an unrun CI job, an unrun scoring branch, an
+  unrun config setting. This codebase's defects are not concentrated in hard logic;
+  they are concentrated in **paths nobody had walked**. Reading them found nothing
+  for weeks. Running them found eleven in a day.
+- **Second lesson.** Three of my own fixes were wrong on the first attempt — the
+  spine's severity term inverted the conviction contract, its duplicate check ran
+  after the write it was meant to prevent, and a config test passed on the dev box
+  while failing on the ProDesk. All three were caught by tests, not by review. A
+  fix is a hypothesis until something executes it.
+
+---
+
+## 4A. Open defects — known, NOT fixed
+
+The register above is history. This is the live list, and it is the honest answer
+to "how are you keeping track". Until 2026-08-05 the answer was *commit messages*,
+and the register had drifted **13 commits** behind reality.
+
+| Open | Detail | Risk today |
+|---|---|---|
+| **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
+| **A third announce-the-state instance may exist** | Found this pattern twice in one day (breaker, data guard). No systematic sweep has been done for others. | Alert fatigue, which defeats every safeguard. |
+| **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
+| **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
+| **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
+| **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
+| **Gemini master key not revoked** | The account-scoped key on the box is segregated and empty, but the original key reaching real holdings has not been revoked at the provider. Removing it from `.env` is not revocation. | Real: a live credential exists outside our control. |
+| **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
+
 ## 5. What is unverified or uncertain
 
 **Ranked by how much I would worry.**
@@ -546,25 +632,42 @@ is the most repeated one in this register.
    **Read those two zeros carefully.** The stock leg is a *paper* account and the
    crypto leg is an *empty* one, deliberately segregated from the user's real
    holdings after §4.13. They prove credentials, transport, IP allowlisting and
-   the balance call. They prove nothing about placing an order, and an empty
-   account **cannot** prove it — order validation needs a funded balance, however
-   small.
+   the balance call — nothing about placing an order.
 
-   Still unverified on both legs: order placement, fill semantics, partial fills,
-   cancellation, rejects, and the symbol-format assumptions in the HK/US routing.
-   Paper stock accounts additionally do not support OTC or pre/post-market
-   trading, so those cannot be validated this way at all.
+   **The ORDER PATH is now verified too, on 2026-08-04, end to end:**
 
-   **Cost of getting here:** `CRYPTO_SANDBOX` is now `false`, which removes one of
-   the two independent barriers in front of live crypto. `LIVE_TRADING=false` and
-   the `get_broker()` choke point are what remain. That is an acceptable trade only
-   because the account behind the key is empty and separate; it would not have been
-   against the account in §4.13.
-2. **The learning spine has never run.** 0 settled claims; neither
-   `expectations.jsonl` nor `learning_state.json` exists on disk. Its behaviour is
-   test-verified, not observed. Note the event sleeve's three profitable exits did
-   **not** settle through it — the sleeve keeps its own journal, so the first
-   realised P&L in the system taught the learner nothing.
+   ```
+   BUY  1 F  -> filled 1.0 @ $13.99   (real price from order_detail, not the mark)
+        stop rested   MIT -8%    id 1269301574736326656
+        take-profit   LIT +25%   id 1269301575151562752   both cancelled cleanly
+   SELL 2 F  -> filled 2.0 @ $14.005  entry $14.00  realised +$0.01
+   ```
+
+   Submission, fill confirmation, venue-resting exits, cancellation and the exit
+   path all exercised against the live API. That test is what exposed the fill
+   fabrication in §4.15 — the same call reported `$0.00` before the fix.
+
+   **Still unverified:** anything against a FUNDED account (slippage on size,
+   partial fills, borrow); non-USD order placement (HK/SGX — code written, no fill
+   ever placed); OTC and pre/post-market, which paper accounts do not support at
+   all; and whether a venue-resting stop actually TRIGGERS, since none has been
+   touched by price yet. Placing a stop is not the same as having one fire.
+
+   **Cost of getting here:** `CRYPTO_SANDBOX=false` and `LIVE_TRADING=true` between
+   them have removed both of the independent barriers that used to sit in front of
+   live routing. What remains is that the accounts themselves hold nothing of value
+   — a broker paper account and an empty segregated exchange account — plus a
+   $10,000 slice ceiling. **The safety now comes from the accounts, not from the
+   flags.** That is a real reduction in defence-in-depth and it is the reason the
+   Gemini key had to be segregated first.
+2. **The learning spine has run exactly once.** As of 2026-08-05:
+   1 settled claim, 2 open, both `expectations.jsonl` and `learning_state.json` now
+   on disk. The one settlement (`event:USO`, expected +0.31%, realised −10.06%) was
+   enough to expose two defects in the spine itself and one in the sleeve's
+   risk/reward — see §4.15. So its behaviour is now *observed*, on a sample of one,
+   which is a different kind of unverified from before but still unverified. Note
+   the sleeve's three earlier profitable exits did **not** settle through it: they
+   predate the wiring, so the first realised profits taught the learner nothing.
 3. **The lockbox is burned.** It was spent on the two-book configuration; the
    current four-policy system has no clean out-of-sample exam. My recommendation
    — not yet accepted — is to treat the forward paper record as the real test
