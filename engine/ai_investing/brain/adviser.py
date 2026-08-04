@@ -170,7 +170,8 @@ def advise(settings, brain, log: bool = True) -> dict:
     except Exception:
         campaign_pressure = {}
 
-    rows = []
+    rows: list[dict] = []
+    no_view: list[str] = []
     symbols = (set(asset_impacts) | set(boosts) | set(formula)
                | set(contra_buy) | set(contra_fade) | set(beneficiaries))
     # Symbols the engine actually watches but the causal graph has no node for.
@@ -234,6 +235,8 @@ def advise(settings, brain, log: bool = True) -> dict:
             score *= max(0.4, 1.0 - 0.6 * b)   # don't chase what already smells like a bubble
         score *= mood_mult
         if abs(score) < MIN_SCORE:
+            if sym in watched:
+                no_view.append(sym)      # watched, considered, no opinion — say so
             continue
         chain = _chain(graph, activations, nid) if nid is not None else []
         root = chain[0] if len(chain) > 1 else None
@@ -295,11 +298,18 @@ def advise(settings, brain, log: bool = True) -> dict:
     def _cls(r):
         return "crypto" if "/" in r["symbol"] else "stock"
 
+    in_top = {id(r) for r in top}
     watch: list[dict] = []
     for cls in ("stock", "crypto"):
         have = sum(1 for r in top if _cls(r) == cls)
-        pool = [r for r in rows
-                if _cls(r) == cls and abs(r["score"]) < floor and r not in top]
+        # NOT `abs(score) < floor`. That was the first version and it lost the most
+        # convinced calls of the minority class: a name can clear the conviction
+        # floor and still be cut by the global top-n cap, and such a row then
+        # matched neither list. Observed immediately — ETH, UNI and ATOM cleared
+        # the floor, ranked below ten stocks, and vanished, so the quota delivered
+        # 4 crypto instead of 7. Coverage means "everything not already advised",
+        # ranked by conviction.
+        pool = [r for r in rows if _cls(r) == cls and id(r) not in in_top]
         for r in pool[:max(0, n - have)]:
             r["conviction"] = False
             watch.append(r)
@@ -311,6 +321,13 @@ def advise(settings, brain, log: bool = True) -> dict:
         "watch": watch,          # considered + scored but below conviction — visible, not advised
         "considered": len(rows),
         "below_floor": len(rows) - len(top),
+        # Watched names the model has NO directional view on: |score| under
+        # MIN_SCORE, dropped before ranking. Reported rather than hidden, because
+        # "10 names it thinks will rise or fall" has an honest answer of fewer than
+        # 10 on a quiet day, and manufacturing a direction from a score of -0.001
+        # produces a coin-flip that dilutes the record instead of teaching anything.
+        # 6 of 13 coins sat here on 2026-08-04; that number moves with news flow.
+        "no_view": sorted(no_view),
         "mood": brain.regime.mood_label,
         "conviction_multiplier": mood_mult,
         "regime_note": ("risk-off tilt: defensives favored" if risk_off
