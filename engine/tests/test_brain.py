@@ -233,7 +233,10 @@ def test_adviser_ranks_and_explains():
     syms = [t["symbol"] for t in a["trades"]]
     assert "NVDA" in syms
     nvda = next(t for t in a["trades"] if t["symbol"] == "NVDA")
-    assert nvda["direction"] == "short_or_avoid"
+    # renamed from "short_or_avoid" on 2026-08-04: one meaning per label. The old
+    # name promised two different claims and the scorecard graded it as the wrong
+    # one — see test_scorecard_benchmark.py.
+    assert nvda["direction"] == "avoid"
     assert "→" in nvda["chain"]                     # causal chain present
     assert nvda["rank"] >= 1 and nvda["weight_suggestion"] <= s.risk.max_position_weight
     assert os.path.exists(s.brain.advice_path)      # persisted for the dashboard
@@ -431,7 +434,7 @@ def test_chatbot_commands_offline():
     s = Settings()
     with open(s.brain.advice_path, "w") as fh:
         json.dump({"mood": "measured", "conviction_multiplier": 0.7,
-                   "trades": [{"rank": 1, "symbol": "NVDA", "direction": "short_or_avoid",
+                   "trades": [{"rank": 1, "symbol": "NVDA", "direction": "avoid",
                                "score": -0.3, "weight_suggestion": 0.05,
                                "chain": "chip controls ↑ → semis ↓ → NVDA ↓"}]}, fh)
     bot = ChatBot(s)
@@ -523,13 +526,20 @@ def test_scorecard_judges_and_learns():
                     {"symbol": "TSLA", "direction": "long"},
                     {"symbol": "KO", "direction": "long"}]})))
     old_day = (datetime.now(timezone.utc) + timedelta(hours=8) - timedelta(days=6)).date().isoformat()
+    # SPY is the US benchmark and must be present: calls are graded on EXCESS
+    # return since 2026-08-04, so without the market's move over the same window
+    # there is nothing to claim and every verdict is correctly None. Held flat
+    # here so the excess equals the absolute move and the intent stays readable.
     sc.conn.executemany("INSERT INTO price_history(date,symbol,price) VALUES(?,?,?)",
-                        [(old_day, "NVDA", 100.0), (old_day, "TSLA", 200.0), (old_day, "KO", 60.0)])
-    sc.snapshot_prices({"NVDA": 110.0, "TSLA": 180.0, "KO": 60.05})   # +10%, -10%, flat
+                        [(old_day, "NVDA", 100.0), (old_day, "TSLA", 200.0),
+                         (old_day, "KO", 60.0), (old_day, "SPY", 500.0)])
+    sc.snapshot_prices({"NVDA": 110.0, "TSLA": 180.0, "KO": 60.05, "SPY": 500.0})
     outs = sc.score_due(horizon_days=5)
     by = {o["symbol"]: o for o in outs}
     assert by["NVDA"]["hit"] == 1 and by["TSLA"]["hit"] == 0
     assert by["KO"]["hit"] is None                     # deadband: flat is not claimed
+    assert by["NVDA"]["bench"] == "SPY" and by["NVDA"]["basis"] == "excess"
+    assert abs(by["NVDA"]["excess"] - 0.10) < 1e-6      # market flat -> excess == move
     # outcomes are frozen: scoring again scores nothing new
     assert sc.score_due(horizon_days=5) == []
     # learning: hit raises trust, miss trims it, both bounded

@@ -31,6 +31,21 @@ CAMPAIGN_HAIRCUT = 0.6         # long score x (1 - this x pressure) on campaigne
 MIN_SCORE = 0.03
 
 
+_SUFFIX_MARKET = {"HK": "HK", "SI": "SG", "SS": "CN", "SZ": "CN", "T": "JP",
+                  "KS": "KR", "TW": "TW", "PA": "EU", "DE": "EU", "AS": "EU",
+                  "L": "EU", "SW": "EU"}
+
+
+def _market_of(symbol: str) -> str:
+    """Market for a candidate the graph has no node for, so the scorecard can pick
+    the right benchmark. Ticker suffix is the only thing available here."""
+    if "/" in symbol:
+        return "CRYPTO"
+    if "." in symbol:
+        return _SUFFIX_MARKET.get(symbol.rsplit(".", 1)[-1].upper(), "US")
+    return "US"
+
+
 def _formula_views(settings) -> dict[str, float]:
     """Latest per-symbol conviction from the engine's last cycle (θ·φ squashed)."""
     try:
@@ -158,9 +173,20 @@ def advise(settings, brain, log: bool = True) -> dict:
     rows = []
     symbols = (set(asset_impacts) | set(boosts) | set(formula)
                | set(contra_buy) | set(contra_fade) | set(beneficiaries))
+    # Symbols the engine actually watches but the causal graph has no node for.
+    # Without this the universe was whatever the graph happened to name, which is
+    # why every one of the 95 considered names was a stock and crypto never
+    # appeared in a single advice list: only BTC/USD, ETH/USD and SOL/USD have
+    # graph nodes at all. These candidates are scored on the formula/technical leg
+    # only — no causal chain to show, and their `chain` says so honestly.
+    watched = set(settings.stock_watchlist) | set(settings.crypto_watchlist)
+    symbols |= {s for s in watched if s in formula}
+
     for sym in symbols:
         node = graph.node_for_symbol(sym)
-        if node is None or node.type != "asset":
+        if node is not None and node.type != "asset":
+            continue
+        if node is None and sym not in watched:
             continue
         impact = asset_impacts.get(sym, {}).get("impact", 0.0)
         pi = priced_in.get(sym, {}).get("priced_in", 0.0)
@@ -184,16 +210,23 @@ def advise(settings, brain, log: bool = True) -> dict:
         if score > 0 and camp_p > 0:
             score *= max(0.0, 1.0 - CAMPAIGN_HAIRCUT * camp_p)
         # crowding: never BUY what noise is pumping (short/fade is unaffected)
+        # A graph-less candidate has no node id, so every graph-derived haircut
+        # below simply does not apply to it. That is honest — there is no causal
+        # chain to be crowded, circular or flagged — but it also means these names
+        # skip protections the graph-backed ones get, which is why their `chain`
+        # records "formula/technical only (no causal chain)".
+        nid = node.id if node is not None else None
         crowd = sum(p for n, p in crowding.items()
-                    if n == node.id or any(e.src == node.id and e.dst == n for e in graph.edges))
+                    if nid is not None
+                    and (n == nid or any(e.src == nid and e.dst == n for e in graph.edges)))
         if score > 0 and crowd > 0:
             score -= W_CROWD * min(score, crowd)
-        circular = node.id in in_loop
+        circular = nid is not None and nid in in_loop
         if circular and score > 0:
             score *= 0.6    # 40% haircut on long conviction inside a financing circle
         # integrity flags: never recommend a FRESH long on an asset whose books
         # are in doubt — the upside case rests on numbers that may be fake
-        integ = integrity_flags.get(node.id)
+        integ = integrity_flags.get(nid) if nid is not None else None
         if integ and score > 0:
             score *= max(0.0, 1.0 - 1.5 * integ["severity"])   # sev>=0.67 zeroes the long
         b = froth.get(sym, 0.0)
@@ -202,19 +235,31 @@ def advise(settings, brain, log: bool = True) -> dict:
         score *= mood_mult
         if abs(score) < MIN_SCORE:
             continue
-        chain = _chain(graph, activations, node.id)
+        chain = _chain(graph, activations, nid) if nid is not None else []
         root = chain[0] if len(chain) > 1 else None
         # size RISK, not conviction: the same score buys half the notional in a
         # 4%-a-day asset as in a 1% one (weight scaled by 2% reference vol)
         vol = vols.get(sym, 0.02)
         vol_norm = max(0.4, min(2.0, 0.02 / vol)) if vol else 1.0
         rows.append({
-            "symbol": sym, "market": node.market, "label": node.label,
-            "direction": "long" if score > 0 else "short_or_avoid",
+            "symbol": sym,
+            "market": (node.market if node is not None
+                       else ("CRYPTO" if "/" in sym else _market_of(sym))),
+            "label": node.label if node is not None else sym,
+            # ONE MEANING PER LABEL (2026-08-04). Was "short_or_avoid", which the
+            # scorecard then graded as a prediction of a FALL — marking every
+            # correct avoid in a rising market as a miss and dragging the measured
+            # hit rate to 0.182. Nothing here shorts stocks (both paper venues
+            # refuse it; shorts failed six tests in docs/research), so a negative
+            # call means "expect this to LAG the market", and that is how it is
+            # now graded. See scorecard.verdict.
+            "direction": "long" if score > 0 else "avoid",
             "score": round(score, 4),
             "weight_suggestion": round(min(settings.risk.max_position_weight,
                                            abs(score) * 0.3 * vol_norm) * mood_mult, 4),
-            "chain": " → ".join(chain) if len(chain) > 1 else "formula/scenario driven",
+            "chain": (" → ".join(chain) if len(chain) > 1
+                      else ("formula/technical only (no causal chain)" if nid is None
+                            else "formula/scenario driven")),
             "invalidation": f"reversal of: {root}" if root else "formula conviction fading",
             "drivers": {"field": round(impact, 3), "formula": round(formula.get(sym, 0.0), 3),
                         "scenarios": round(boosts.get(sym, 0.0), 3),

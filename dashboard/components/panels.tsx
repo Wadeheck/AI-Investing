@@ -105,6 +105,9 @@ function action(d: DecisionRow): { label: string; cls: string } {
   const strong = Math.abs(d.score) >= 0.35;
   if (d.direction === "long") return strong ? { label: "Buy / long", cls: "buy" } : { label: "Lean bullish", cls: "hold" };
   if (d.direction === "short") return strong ? { label: "Sell / short", cls: "sell" } : { label: "Lean bearish", cls: "hold" };
+  // "avoid" claims UNDERPERFORMANCE, not a fall — it is graded against the market,
+  // so the label must not read like a short call.
+  if (d.direction === "avoid") return strong ? { label: "Avoid / expect to lag", cls: "sell" } : { label: "Lean avoid", cls: "hold" };
   return { label: "Stay out", cls: "hold" };
 }
 

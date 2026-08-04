@@ -239,7 +239,7 @@ class ChatBot:
         lines = [f"🧠 *Top trades* (mood {a.get('mood')}, conviction ×{a.get('conviction_multiplier')})"]
         buttons: list[list[tuple[str, str]]] = []
         for t in trades:
-            d = "🟩 LONG" if t["direction"] == "long" else "🟥 SHORT/AVOID"
+            d = "🟩 LONG" if t["direction"] == "long" else "🟥 AVOID (expect to lag)"
             lines.append(f"*#{t['rank']}* {d} *{t['symbol']}* ({t['score']:+.2f}, wt≤{t['weight_suggestion']:.0%})\n"
                          f"   _{t['chain']}_\n"
                          f"   ⛔ invalidated by: _{t.get('invalidation', '?')}_")
