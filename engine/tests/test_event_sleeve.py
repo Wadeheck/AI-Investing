@@ -68,6 +68,46 @@ def test_clock_exit_after_hold_days():
         assert r["closed"], "the hold clock must force an exit"
 
 
+def test_never_doubles_up_on_a_symbol_it_already_holds():
+    """2026-08-04: USO was bought twice, $33,479 each, ending at $66,958 — 67% of
+    a book that puts 33% in any one name.
+
+    The guard read `sym in self.broker.get_positions()`, comparing a bare symbol
+    ("USO") against a dict keyed by Asset.key ("stock:USO"). Always False. So any
+    symbol that reappeared as a fresh shock while still held was bought again, and
+    held[sym] was overwritten — losing the first entry's price and opened_day, so
+    the stop and the 2-day clock were measured from the second buy.
+
+    Nothing looked broken because the EXIT path used pos.asset.symbol correctly.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        sl = es.EventSleeve(_settings(tmp))
+        shock = {"USO": {"impact": 0.109, "node": "oil_supply"}}
+        prices = {"USO": 129.17}
+
+        first = sl.cycle(shock, prices)
+        assert [o[0] for o in first["opened"]] == ["USO"]
+        held_qty = sum(p.qty for p in sl.broker.get_positions().values())
+        entry = dict(sl._state["held"]["USO"])
+
+        # the same shock is still fresh on the next cycle — the real sequence
+        for _ in range(3):
+            again = sl.cycle(shock, prices)
+            assert not again["opened"], \
+                "a symbol already held must never be re-entered"
+
+        assert sum(p.qty for p in sl.broker.get_positions().values()) == held_qty, \
+            "position size changed without an entry being reported"
+        assert len(sl.broker.get_positions()) == 1
+        assert sl._state["held"]["USO"] == entry, \
+            "the original entry price and opened_day must survive — the stop and " \
+            "the hold clock are measured from them"
+
+        # and the keys really are the mismatched shape that caused this
+        assert list(sl.broker.get_positions()) == ["stock:USO"], \
+            "positions are keyed by Asset.key; compare symbols to symbols"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

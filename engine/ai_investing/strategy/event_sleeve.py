@@ -188,11 +188,26 @@ class EventSleeve:
         room = max(0, EVENT_N - open_n)
         if room:
             eq = self._equity(prices_by_sym)
+            # THE RE-ENTRY GUARD, AND IT NEVER WORKED (fixed 2026-08-04).
+            # `sym in self.broker.get_positions()` compared a bare symbol ("USO")
+            # against a dict keyed by Asset.key ("stock:USO"), so it was ALWAYS
+            # False. Every time a symbol reappeared as a fresh shock the sleeve
+            # bought it again: USO went in twice, $33,479 each, ending at $66,958
+            # — 67% of a book whose design puts 33% in any one name (eq/EVENT_N).
+            #
+            # It also silently overwrote held[sym], losing the first entry's price
+            # and opened_day, so the position's stop and 2-day clock were measured
+            # from the SECOND buy.
+            #
+            # Compare symbols to symbols. The exit path a few lines up got this
+            # right — it uses `pos.asset.symbol` — which is why exits worked while
+            # entries doubled up, and why nothing looked broken.
+            open_syms = {p.asset.symbol for p in self.broker.get_positions().values()}
             cands = []
             for sym, row in (shock_assets or {}).items():
                 im = float(row.get("impact", 0.0))
                 px = prices_by_sym.get(sym, 0.0)
-                if im < EVENT_MIN or px <= 0 or sym in self.broker.get_positions():
+                if im < EVENT_MIN or px <= 0 or sym in open_syms or sym in held:
                     continue
                 cands.append((im, sym, row))
             cands.sort(reverse=True)
