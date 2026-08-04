@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import random
 import urllib.request
 from abc import ABC, abstractmethod
@@ -18,6 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ai_investing.models import Asset, AssetClass, Bar
+from ai_investing.util import atomic
 
 
 class DataProvider(ABC):
@@ -195,20 +198,76 @@ class LastGoodBarCache(DataProvider):
 
     Genuinely delisted names age out via the guard's staleness check, so this
     cannot hide a real problem indefinitely.
+
+    IT MUST SURVIVE A RESTART. It did not: the cache was in-memory only, so
+    every restart emptied the one thing that protects a cold start — and a cold
+    start is precisely when the throttle fires, because it refetches all ~88
+    symbols at once. Observed 2026-08-04: after several restarts in quick
+    succession the whole watchlist returned 0.0, stocks and crypto alike, and the
+    cache had nothing to serve because the process was new. Persisting it is what
+    makes this class do the job it was written for.
     """
 
     name = "last-good-cache"
     MAX_AGE_S = 6 * 3600.0
+    KEEP_BARS = 120        # enough history for the indicators, bounded on disk
+    SAVE_EVERY_S = 240.0   # at most once a cycle; the file is ~1-2 MB
 
-    def __init__(self, inner: DataProvider):
+    def __init__(self, inner: DataProvider, path: str = ""):
         self.inner = inner
+        self.path = path
         self._cache: dict[str, tuple[float, list[Bar]]] = {}
+        self._dirty = False
+        self._last_save = 0.0
+        self._load()
+
+    # -- disk persistence ---------------------------------------------------
+    def _load(self) -> None:
+        if not self.path:
+            return
+        try:
+            with open(self.path) as fh:
+                blob = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return
+        now = time.time()
+        for key, rec in (blob.get("symbols") or {}).items():
+            try:
+                ts = float(rec["at"])
+                if now - ts >= self.MAX_AGE_S:
+                    continue          # too old to serve; let the guard see nothing
+                bars = [Bar(datetime.fromisoformat(b[0]), *(float(x) for x in b[1:6]))
+                        for b in rec["bars"]]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bars:
+                self._cache[key] = (ts, bars)
+
+    def _save(self) -> None:
+        if not (self.path and self._dirty):
+            return
+        now = time.time()
+        if now - self._last_save < self.SAVE_EVERY_S:
+            return
+        out = {"symbols": {
+            key: {"at": ts,
+                  "bars": [[b.ts.isoformat(), b.open, b.high, b.low, b.close, b.volume]
+                           for b in bars[-self.KEEP_BARS:]]}
+            for key, (ts, bars) in self._cache.items()}}
+        try:
+            atomic.write_json(self.path, out)
+            self._last_save = now
+            self._dirty = False
+        except OSError:
+            pass
 
     def get_bars(self, asset: Asset, limit: int = 200) -> list[Bar]:
         bars = self.inner.get_bars(asset, limit)
         now = time.time()
         if bars:
             self._cache[asset.key] = (now, bars)
+            self._dirty = True
+            self._save()
             return bars
         hit = self._cache.get(asset.key)
         if hit and now - hit[0] < self.MAX_AGE_S:
@@ -285,6 +344,14 @@ def get_provider(settings) -> DataProvider:
     crypto: DataProvider = (CcxtDataProvider(settings.crypto_exchange, tf)
                             if kind in ("ccxt", "yfinance", "stooq") else SyntheticDataProvider())
     # crypto pairs are already USD-quoted; only the stock leg needs converting
-    # cache first (absorb blanket feed failures), then normalise to USD
+    # cache first (absorb blanket feed failures), then normalise to USD.
+    # BOTH legs are cached and both persist to disk: the crypto leg was left
+    # uncached, so a ccxt outage put zeros straight into the books — the same
+    # blanket failure with the same consequence, just a different provider.
+    # Separate files so one leg's staleness never masquerades as the other's.
+    data_dir = os.path.dirname(os.path.abspath(settings.state_path))
     return CompositeDataProvider(
-        UsdNormalizingProvider(LastGoodBarCache(stock), settings), crypto)
+        UsdNormalizingProvider(
+            LastGoodBarCache(stock, os.path.join(data_dir, "last_good_bars_stock.json")),
+            settings),
+        LastGoodBarCache(crypto, os.path.join(data_dir, "last_good_bars_crypto.json")))

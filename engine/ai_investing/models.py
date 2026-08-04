@@ -118,6 +118,31 @@ class Position:
         return (price - self.avg_price) * self.qty
 
 
+def mark_price(raw, fallback: float) -> float:
+    """The price to VALUE a position at, or `fallback` (its cost basis) if there
+    isn't a usable one. The single valuation rule for every book.
+
+    Use this anywhere a position is being valued. Do NOT use it to gate a trading
+    decision — refusing to act on a bad price (`if px <= 0: continue`) is correct
+    and must stay. The distinction matters: skipping a *decision* is safe, but
+    skipping a *position* silently rewrites the book's value.
+
+    Each of the four books re-implemented this and each got it wrong in the same
+    direction. The `_stamp_marks` variants read `if px > 0: mv += qty * px`, which
+    OMITS an unpriced position from equity — so an unpriced short reads as a debt
+    that vanished, and an unpriced long as an asset that vanished. Cost basis
+    keeps the position in the book at the last price anyone actually paid, so an
+    outage reads as "no change" rather than as a windfall or a collapse.
+    """
+    try:
+        px = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(px) or px <= 0.0:
+        return fallback
+    return px
+
+
 @dataclass
 class Portfolio:
     cash: float

@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.paper import PaperBroker
 from ai_investing.util import atomic
-from ai_investing.models import Asset, AssetClass, Order, Side
+from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
 EVENT_MIN = float(os.environ.get("EVENT_MIN", "0.05"))
 EVENT_N = int(os.environ.get("EVENT_N", "3"))
@@ -78,15 +78,26 @@ class EventSleeve:
         """
         b = self._state.get("broker") or {}
         mv = 0.0
+        stale = 0
         for p in b.get("positions", []):
-            px = float(prices.get(p.get("symbol"), 0.0) or 0.0)
-            if px > 0:
-                p["price"] = round(px, 6)
-                p["pnl"] = round((px - float(p.get("avg_price", 0))) * float(p.get("qty", 0)), 2)
-                mv += float(p.get("qty", 0)) * px
-        if any(p.get("price") for p in b.get("positions", [])) or not b.get("positions"):
-            self._state["equity"] = round(float(b.get("cash", 0.0)) + mv, 2)
-            self._state["marked_at"] = datetime.now(timezone.utc).isoformat()
+            avg = float(p.get("avg_price", 0) or 0.0)
+            qty = float(p.get("qty", 0) or 0.0)
+            raw = prices.get(p.get("symbol"))
+            px = mark_price(raw, avg)
+            priced = mark_price(raw, 0.0) > 0.0
+            # EVERY position is valued, always. The old form only added a
+            # position to `mv` when it had a live price, which silently dropped
+            # unpriced holdings out of equity -- an unpriced short read as a debt
+            # that vanished. Cost basis keeps it in the book at the last price
+            # actually paid, and stale_mark tells a reader that is what happened.
+            p["price"] = round(px, 6)
+            p["pnl"] = round((px - avg) * qty, 2)
+            p["stale_mark"] = not priced
+            mv += qty * px
+            stale += 0 if priced else 1
+        self._state["equity"] = round(float(b.get("cash", 0.0)) + mv, 2)
+        self._state["stale_marks"] = stale
+        self._state["marked_at"] = datetime.now(timezone.utc).isoformat()
 
     def mark(self, prices: dict) -> None:
         """Value the book without trading it.

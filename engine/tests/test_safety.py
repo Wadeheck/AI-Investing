@@ -136,6 +136,41 @@ def test_a_blanket_feed_failure_serves_stale_bars_not_zero():
         "a throttled feed must not become a zero price"
 
 
+def test_last_good_bars_survive_a_restart():
+    """The cache exists to absorb a blanket feed failure, but it was in-memory
+    only — so a restart emptied it, and a restart is exactly when the throttle
+    fires (a cold start refetches all ~88 symbols at once). Observed
+    2026-08-04: after several restarts the whole watchlist returned 0.0 and the
+    cache had nothing to serve because the process was new."""
+    import tempfile
+    from datetime import datetime, timezone
+    from ai_investing.data.providers import DataProvider, LastGoodBarCache
+    from ai_investing.models import Asset, AssetClass, Bar
+
+    path = os.path.join(tempfile.mkdtemp(), "last_good.json")
+    a = Asset("TEST", AssetClass.STOCK)
+
+    class Flaky(DataProvider):
+        alive = True
+        def get_bars(self, asset, limit=200):
+            return [Bar(datetime.now(timezone.utc), 10.0, 11.0, 9.0, 10.5, 1000.0)] \
+                if self.alive else []
+
+    inner = Flaky()
+    c1 = LastGoodBarCache(inner, path)
+    c1.SAVE_EVERY_S = 0.0                       # don't wait out the write throttle
+    assert c1.get_bars(a)[-1].close == 10.5
+    assert os.path.exists(path), "a good fetch must be persisted"
+
+    # the process dies and a NEW one starts into a throttled feed
+    inner.alive = False
+    c2 = LastGoodBarCache(Flaky2 := type("F2", (DataProvider,), {
+        "get_bars": lambda self, asset, limit=200: []})(), path)
+    served = c2.get_bars(a)
+    assert served and served[-1].close == 10.5, \
+        "a fresh process must serve the last good bars, not zeros"
+
+
 def test_a_zero_price_never_values_a_position_at_zero():
     """The 2026-08-04 phantom, as a test.
 
