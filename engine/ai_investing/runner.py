@@ -171,6 +171,18 @@ class Runner:
             return self._live_universe()
         return {a.key for a in self.assets}
 
+    def _book_basis(self) -> str:
+        """Identity of the book the breaker's marks belong to.
+
+        "paper" for the simulated book — deliberately without the cash amount, so
+        an existing paper record is never re-based by an unrelated edit to
+        STARTING_CASH. A live slice carries its size, because changing the size IS
+        changing the book.
+        """
+        if self._ledger is not None:
+            return f"live:{self.settings.live_capital_base:.0f}"
+        return "live:account" if self.settings.live else "paper"
+
     def _book_portfolio(self):
         """The book, as the rest of the engine should see it.
 
@@ -374,6 +386,16 @@ class Runner:
         executed: list[Order] = []
 
         # 1) Circuit breaker: daily / trailing / inception drawdown + per-day caps.
+        # First: if the BOOK changed size (paper $100k -> a $10,000 live slice),
+        # re-base the marks. Otherwise the first honest reading of the new book
+        # registers as a catastrophic drawdown against the old one — which is
+        # exactly what happened on 2026-08-04, latching the breaker at a fictional
+        # 90%. Declared, never inferred; see CircuitBreaker.ensure_basis.
+        rebased = self.breaker.ensure_basis(self._book_basis(), equity)
+        if rebased:
+            print(f"  BREAKER    {rebased}")
+            if self.notifier.enabled:
+                self.notifier.send(f"📐 Book re-based — {rebased}")
         breaker = self.breaker.check(equity)
         if breaker.flatten:
             print(f"!! CIRCUIT BREAKER — {breaker.reason}. Flattening and halting.")

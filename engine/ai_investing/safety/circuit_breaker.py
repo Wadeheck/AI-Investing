@@ -44,7 +44,51 @@ class CircuitBreaker:
     def _default(self) -> dict:
         return {"inception_equity": None, "peak_equity": None, "day": "",
                 "day_start_equity": None, "trades_today": 0, "notional_today": 0.0,
-                "halted": False, "halt_reason": ""}
+                "halted": False, "halt_reason": "", "basis": "paper"}
+
+    def ensure_basis(self, basis: str, equity: float) -> str | None:
+        """Re-base the marks when the BOOK ITSELF changes, not the money in it.
+
+        Learned the hard way on 2026-08-04, minutes after enabling
+        LIVE_CAPITAL_BASE=10000. The marks belonged to the $100k paper book, so
+        the first honest reading of the new $10,000 book looked like a 90%
+        inception drawdown and the breaker latched — correctly, by its own logic,
+        against a comparison that had stopped meaning anything. Nothing was
+        flattened only because the book happened to be empty.
+
+        This is §4.7 with a different cause: there, a price stopped being a
+        valuation; here, `day_start_equity` stopped describing the same book. A
+        drawdown is a comparison, and a comparison between two different books is
+        not a drawdown.
+
+        The re-base is keyed on a DECLARED basis string, never inferred from the
+        size of the jump. Inferring would be the dangerous version — "equity moved
+        a lot, must be a new book" is precisely how you teach a safety system to
+        explain away a real crash.
+
+        A latched halt is NOT cleared: changing the book must not be a way to
+        launder a halt. Per-day counters ARE reset, because the trades and notional
+        belong to the book that made them — the $28,195 spent by the paper book
+        would otherwise sit on a $10,000 book whose daily cap is $10,000 and block
+        it from ever opening a position.
+        """
+        old = self.state.get("basis") or "paper"
+        if old == basis:
+            return None
+        if not (isinstance(equity, (int, float)) and math.isfinite(equity) and equity > 0):
+            return None          # never re-base onto an unreadable number (§4.7)
+        self.state.update({
+            "basis": basis,
+            "inception_equity": float(equity),
+            "peak_equity": float(equity),
+            "day_start_equity": float(equity),
+            "month_close_equity": float(equity),
+            "day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "trades_today": 0,
+            "notional_today": 0.0,
+        })
+        self._save()
+        return f"book basis {old} -> {basis}; marks re-based to ${equity:,.2f}"
 
     def _load(self) -> dict:
         try:

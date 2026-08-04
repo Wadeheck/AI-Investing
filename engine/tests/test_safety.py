@@ -269,6 +269,56 @@ def test_a_latched_halt_announces_once_not_every_cycle():
         assert not again.announce, "a latched halt must not re-announce"
 
 
+def test_changing_the_book_size_rebases_the_marks_instead_of_halting():
+    """2026-08-04, minutes after enabling LIVE_CAPITAL_BASE=10000.
+
+    The marks belonged to the $100k paper book, so the first honest reading of the
+    new $10,000 book looked like a 90% inception drawdown and the breaker latched.
+    Its logic was right; the comparison had stopped meaning anything. A drawdown
+    between two different books is not a drawdown.
+    """
+    p = _tmp()
+    cb = _cb(p, daily=0.05)
+    cb.check(100_000)                                  # the paper book
+    cb.register_trade(28_195)                          # notional it spent
+    assert cb.state["notional_today"] == 28_195
+
+    note = cb.ensure_basis("live:10000", 10_000)
+    assert note and "re-based" in note
+    for k in ("inception_equity", "peak_equity", "day_start_equity"):
+        assert cb.state[k] == 10_000, f"{k} still describes the old book"
+    assert cb.state["notional_today"] == 0.0, \
+        "$28,195 spent by the paper book would block a $10,000 book forever"
+    assert cb.state["trades_today"] == 0
+
+    d = cb.check(10_000)
+    assert d.allow_new and not d.flatten, "the new book at par must be tradable"
+    assert cb.check(9_400).flatten, "and -6% on the NEW book must still halt"
+
+    # idempotent: the same basis must not re-base again and wipe a real drawdown
+    cb2 = _cb(p, daily=0.05)
+    cb2.state["halted"] = False
+    cb2.check(9_800)
+    assert cb2.ensure_basis("live:10000", 9_800) is None
+    assert cb2.state["peak_equity"] == 10_000, "an unchanged basis must not touch the marks"
+
+    # a halt is NOT laundered by changing the book
+    p3 = _tmp()
+    cb3 = _cb(p3, daily=0.9)
+    cb3.check(100_000)
+    assert cb3.check(70_000).flatten                   # latched on inception
+    cb3.ensure_basis("live:10000", 10_000)
+    assert cb3.state["halted"], "changing book size must not clear a latched halt"
+
+    # and never re-base onto an unreadable number (§4.7)
+    p4 = _tmp()
+    cb4 = _cb(p4, daily=0.05)
+    cb4.check(100_000)
+    for junk in (float("nan"), 0.0, -5.0, None, float("inf")):
+        assert cb4.ensure_basis("live:10000", junk) is None
+        assert cb4.state["inception_equity"] == 100_000, f"{junk!r} corrupted the marks"
+
+
 def test_the_engine_never_trades_a_position_it_did_not_open():
     """A live exchange adapter hands over the WHOLE account, not the watchlist.
 
