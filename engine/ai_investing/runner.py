@@ -814,11 +814,32 @@ class Runner:
         stop_frac = self.settings.risk.per_trade_stop_loss
         if self.settings.risk.use_atr_stops and ms and ms.atr > 0:
             stop_frac = self.settings.risk.atr_stop_mult * (ms.atr / entry)
+        # The hard rule wins: whatever the ATR suggests, no position may risk more
+        # than max_loss_per_position. The in-engine stop path already clamps this
+        # (runner step 4); the venue-side stop must agree or the two disagree about
+        # where the exit is, and the tighter one is the honest answer.
+        stop_frac = min(stop_frac, self.settings.risk.max_loss_per_position)
         stop_price = entry * (1 - stop_frac)
-        if self.broker.place_stop(asset, Side.SELL, filled.filled_qty, stop_price):
-            print(f"  STOP-SET  {asset.symbol} @ ${stop_price:,.2f} (exchange)")
+        qty = filled.filled_qty
+        if self.broker.place_stop(asset, Side.SELL, qty, stop_price):
+            print(f"  STOP-SET  {asset.symbol} @ ${stop_price:,.2f} "
+                  f"(-{stop_frac:.1%}, resting at the venue)")
         else:
             self.journal.record_event("exchange_stop_unsupported", asset.symbol)
+
+        # TAKE-PROFIT, resting too. Without it the exchange holds only the downside
+        # leg, so a gap UP between cycles is left entirely to the next poll — the
+        # asymmetry the stop exists to remove, reintroduced on the other side.
+        tp_frac = self.settings.risk.take_profit
+        if self.settings.risk.use_atr_stops and ms and ms.atr > 0:
+            tp_frac = self.settings.risk.atr_take_mult * (ms.atr / entry)
+        if tp_frac > 0 and hasattr(self.broker, "place_take_profit"):
+            tp_price = entry * (1 + tp_frac)
+            if self.broker.place_take_profit(asset, Side.SELL, qty, tp_price):
+                print(f"  TP-SET    {asset.symbol} @ ${tp_price:,.2f} "
+                      f"(+{tp_frac:.1%}, resting at the venue)")
+            else:
+                self.journal.record_event("exchange_take_profit_unsupported", asset.symbol)
 
     def _flatten(self, prices: dict[str, float]) -> list[Order]:
         out: list[Order] = []

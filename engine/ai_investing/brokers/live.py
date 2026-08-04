@@ -213,13 +213,160 @@ class LongbridgeBroker(BrokerAdapter):
                 kwargs["order_type"] = OrderType.MO
             resp = self.ctx.submit_order(**kwargs)
             order.id = str(getattr(resp, "order_id", ""))
-            order.filled_qty = float(qty)
-            order.filled_price = order.limit_price if is_limit else price
-            order.status = OrderStatus.FILLED
+            # NEVER ASSUME THE FILL (fixed 2026-08-04). This used to read:
+            #
+            #     order.filled_qty = float(qty)
+            #     order.filled_price = order.limit_price if is_limit else price
+            #     order.status = OrderStatus.FILLED
+            #
+            # submit_order only ACKNOWLEDGES an order. It does not fill it. So the
+            # adapter reported every accepted order as fully filled, at the price it
+            # had merely hoped for: an exchange rejection recorded as a fill, a
+            # partial recorded as complete, a resting limit recorded as done, and
+            # every slippage and P&L figure downstream computed from a price that
+            # was never traded. The book would have been fiction while every check
+            # stayed green — and the ledger, the breaker and the learning spine all
+            # read from it.
+            self._confirm(order, price, is_limit)
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"longport: {exc}"
         return order
+
+    # Longport status -> ours. Anything unmapped is deliberately NOT treated as a
+    # fill: an unknown state must never be optimistically booked as executed.
+    _TERMINAL_FILLED = {"Filled"}
+    _TERMINAL_DEAD = {"Rejected", "Canceled", "Expired"}
+
+    def _confirm(self, order: Order, mark: float, is_limit: bool,
+                 attempts: int = 4, pause: float = 0.75) -> None:
+        """Ask the broker what actually happened, and record only that.
+
+        A market order normally fills in well under a second, but "normally" is not
+        a guarantee, so this polls briefly and then reports the true state rather
+        than guessing. A still-open order is PENDING, not FILLED — the runner and
+        the ledger can handle a pending order; they cannot handle a lie.
+        """
+        import time as _time
+
+        if not order.id:
+            order.status = OrderStatus.PENDING
+            order.reason = (order.reason or "") + " [no order id returned]"
+            return
+        last = None
+        for i in range(attempts):
+            try:
+                d = self.ctx.order_detail(order.id)
+            except Exception as exc:                     # transient: keep trying
+                last = exc
+                _time.sleep(pause)
+                continue
+            status = str(getattr(d, "status", "") or "").split(".")[-1]
+            executed = float(getattr(d, "executed_quantity", 0) or 0)
+            exec_px = float(getattr(d, "executed_price", 0) or 0)
+            order.filled_qty = executed
+            # Only trust a real execution price. Falling back to the mark is how the
+            # old code invented fills; here it is used solely to keep the field
+            # numeric when nothing has executed yet (filled_qty is 0 in that case,
+            # so no P&L is derived from it).
+            order.filled_price = exec_px if exec_px > 0 else (order.limit_price or mark)
+            if status in self._TERMINAL_FILLED and executed > 0:
+                order.status = OrderStatus.FILLED
+                return
+            if status in self._TERMINAL_DEAD:
+                order.status = OrderStatus.REJECTED if status == "Rejected" else OrderStatus.CANCELLED
+                order.reason = f"{order.reason or ''} [broker: {status}]".strip()
+                return
+            if executed > 0 and i == attempts - 1:
+                # A partial that is still working. There is no PARTIAL status in this
+                # codebase, and adding one would ripple through the journal and the
+                # dashboard for little gain: `filled_qty` already carries the truth,
+                # and every downstream calculation (notional, position, breaker,
+                # ledger) reads that rather than the enum. Marked FILLED for the
+                # quantity that ACTUALLY executed, with the shortfall in the reason.
+                order.status = OrderStatus.FILLED
+                order.reason = f"{order.reason or ''} [partial {executed:g}/{order.qty:g}]".strip()
+                return
+            if i < attempts - 1:
+                _time.sleep(pause)
+        order.status = OrderStatus.PENDING
+        order.reason = (f"{order.reason or ''} [unconfirmed after {attempts} checks"
+                        + (f": {last}" if last else "") + "]").strip()
+
+    def place_stop(self, asset, side, qty: float, stop_price: float):
+        """Rest a protective STOP at Longbridge, so it survives a crash and fires on
+        an intraday gap between cycles.
+
+        `MIT` = market-if-touched: when the trigger prints, a market order goes out.
+        That is the right instrument for a protective stop — a limit-if-touched can be
+        skipped straight through in exactly the fast move a stop exists for, and an
+        un-executed stop is not a stop.
+
+        Deliberately NOT trailing, though TSLPPCT/TSLPAMT exist. A trailing stop moves
+        the exit on its own, which would silently diverge from the level the position
+        was sized against and from what the learning ledger recorded as the claim. One
+        source of truth for the exit.
+        """
+        from decimal import Decimal
+        from longport.openapi import OrderSide, OrderType, TimeInForceType  # type: ignore
+
+        q = int(qty)
+        if q <= 0 or stop_price <= 0:
+            return None
+        try:
+            resp = self.ctx.submit_order(
+                symbol=self._symbol(asset),
+                side=OrderSide.Sell if side is Side.SELL else OrderSide.Buy,
+                order_type=OrderType.MIT,
+                submitted_quantity=Decimal(str(q)),
+                trigger_price=Decimal(str(round(stop_price, 3))),
+                time_in_force=TimeInForceType.GoodTilCanceled)
+            o = Order(asset, side, float(q), reason="exchange-stop")
+            o.id = str(getattr(resp, "order_id", ""))
+            o.status = OrderStatus.PENDING      # resting until touched — correct here
+            return o
+        except Exception as exc:
+            print(f"  !! exchange stop REJECTED for {asset.symbol} @ {stop_price}: {exc}")
+            return None
+
+    def place_take_profit(self, asset, side, qty: float, limit_price: float):
+        """Rest a take-profit at Longbridge. `LIT` = limit-if-touched: once the level
+        prints, a limit order goes out at that price.
+
+        A limit is right here and wrong for the stop above, and the asymmetry is the
+        point: on the profit side a missed fill costs an opportunity; on the loss side
+        it costs the position.
+        """
+        from decimal import Decimal
+        from longport.openapi import OrderSide, OrderType, TimeInForceType  # type: ignore
+
+        q = int(qty)
+        if q <= 0 or limit_price <= 0:
+            return None
+        px = Decimal(str(round(limit_price, 3)))
+        try:
+            resp = self.ctx.submit_order(
+                symbol=self._symbol(asset),
+                side=OrderSide.Sell if side is Side.SELL else OrderSide.Buy,
+                order_type=OrderType.LIT,
+                submitted_quantity=Decimal(str(q)),
+                trigger_price=px, submitted_price=px,
+                time_in_force=TimeInForceType.GoodTilCanceled)
+            o = Order(asset, side, float(q), reason="exchange-take-profit")
+            o.id = str(getattr(resp, "order_id", ""))
+            o.status = OrderStatus.PENDING
+            return o
+        except Exception as exc:
+            print(f"  !! exchange take-profit REJECTED for {asset.symbol} @ {limit_price}: {exc}")
+            return None
+
+    def cancel(self, order_id: str) -> bool:
+        try:
+            self.ctx.cancel_order(order_id)
+            return True
+        except Exception as exc:
+            print(f"  !! cancel failed for {order_id}: {exc}")
+            return False
 
     def validate(self) -> dict:
         return {"broker": "longbridge", "cash": self.get_cash(),
