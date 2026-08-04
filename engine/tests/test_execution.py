@@ -123,6 +123,13 @@ def test_investor_book_lifecycle():
          "thesis": "Priced for perfection.", "assumptions": "This assumes growth slows."}]}
     prices = {"NVDA": 100.0, "TSLA": 200.0}
 
+    # PIN the approval mode. This test is ABOUT the approval lifecycle, so it must
+    # not inherit it from the ambient .env — on the ProDesk TRADE_APPROVAL=false, the
+    # book correctly went autonomous, and this test failed there while passing on the
+    # dev box. Third occurrence of a test whose result depends on which machine runs
+    # it; see test_live_capital and test_scorecard_benchmark.
+    s.trade_approval = True
+
     inv = Investor(s)
     inv.daily_manage(prices, strat, N())
     # one proposal message per stock, nothing executed yet

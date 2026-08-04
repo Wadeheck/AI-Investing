@@ -33,8 +33,8 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 GRAPH    321 nodes, 690 edges          (seed v25)
 BRAIN    6,326 articles, 2,380 events tagged
 TAGGER   1% unsigned across recent events              (was 57%)
-TESTS    27 suites, all green (local AND on the ProDesk AND in CI)
-COMMITS  158
+TESTS    30 suites, all green (local AND on the ProDesk AND in CI)
+COMMITS  163
 
 BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
@@ -42,7 +42,7 @@ BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   ⚡ sleeve    paper, $10,000
   ₿ crypto     paper, $10,000  (bear mode: 100% cash by design)
 
-AUTONOMY   TRADE_APPROVAL=false — the engine enters and exits unattended
+AUTONOMY   TRADE_APPROVAL=false — all FOUR books enter and exit unattended (§4.17)
 EXITS      stop-loss + take-profit rest AT the broker (MIT / LIT), verified live
 ```
 
@@ -626,6 +626,40 @@ to receive this kind of messages"*.
   nothing. Three of the four noise incidents in this register are the same mistake
   — announcing a state instead of an event — and each one buried something real.
 
+### 4.17 The book that never went autonomous *(2026-08-05)*
+
+Found by sweeping every `notifier.send()` in the codebase — the sweep I had twice
+listed as outstanding and twice not done.
+
+- **What.** The 🏛 investing book had **no `trade_approval` check at all**. It
+  executed only on a proposal the user had tapped `approved`. So when
+  `TRADE_APPROVAL` was set to `false`, three books went autonomous and this one
+  silently kept waiting for taps that were never coming — unable to open a
+  position, while still sending "approval needed" messages.
+- **How it survived.** I traced only the 📈 book's path when flipping the flag, then
+  told the user autonomy was on. It was on for three books out of four.
+- **Fix.** Honour the setting, and route both the approved path and the autonomous
+  path through one `_open()` helper. The dry-powder reserve rule was duplicated
+  across them and would have been duplicated again — which is precisely how the
+  sleeve's entry and exit paths came to disagree about symbol keys for the life of
+  the project (§4.15/1).
+- **One more alert instance.** A news/context failure alerted **every cycle**, so a
+  provider outage meant ~12 identical messages an hour. That is the fourth
+  announce-the-state bug. The rest of the 24 alert sites check out: the strategist
+  is gated to once per SGT day, bear-mode fires on the transition, reconcile-drift
+  self-clears by rebaselining, and the watchdog has its own rate limit.
+- **A static guard, and the rule took two attempts.** The obvious rule — *assigned
+  somewhere in the class* — does **not** catch §4.16: `_flagged_symbols` is assigned
+  at the END of the very method that reads it at the start, so it looks assigned and
+  still crashes on the first pass. The rule that matches the failure is *read by any
+  method ⇒ assigned in `__init__`*, with `getattr(self, x, default)` exempt. Zero
+  offenders across the package, verified by deleting the initialiser and watching it
+  name the exact attribute.
+- **Lesson.** Sweeping is not the same as fixing the instance in front of you. Three
+  of these four alert bugs were found by a user complaining; the fourth was found in
+  ten minutes once I actually enumerated the sites. **When a bug has a shape, grep
+  for the shape.** I wrote that lesson down twice before acting on it.
+
 ---
 
 ## 4A. Open defects — known, NOT fixed
@@ -637,8 +671,9 @@ and the register had drifted **13 commits** behind reality.
 | Open | Detail | Risk today |
 |---|---|---|
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
-| **A fourth announce-the-state instance may exist** | Found three (breaker, data guard, engine-start) — the third only because the user complained. Still no systematic sweep. | Alert fatigue, which defeats every safeguard. |
-| **θ version is inflated to v21** | ~20 of those 21 increments were process exits during the §4.16 crash loop, not learning. The counter is now correct going forward but the historical number is wrong, and `journal.db` params rows recorded alongside it are duplicates of identical θ. | Cosmetic, but it misreports maturity. |
+| ~~A fourth announce-the-state instance~~ | **CLOSED §4.17.** All 24 alert sites swept and classified; the fourth (news/context error) is fixed. | — |
+| **Tests inherit the ambient `.env`** | Three found so far (`test_live_capital`, `test_scorecard_benchmark`, `test_execution`), each passing on the dev box and failing on the ProDesk or vice versa. Nothing stops a fourth. | A test whose result depends on the machine is worse than no test: green where nobody looks. |
+| **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
