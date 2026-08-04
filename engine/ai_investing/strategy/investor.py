@@ -158,29 +158,9 @@ class Investor:
             p = book.get(sym, "buy" if t["stance"] == "long" else "sell", "long")
             if p and p["status"] == "approved":
                 book.consume(p["id"])
-                equity = self._equity(prices_by_symbol)
-                qty = p.get("qty") or (equity * MAX_WEIGHT / px)
+                qty = p.get("qty") or (self._equity(prices_by_symbol) * MAX_WEIGHT / px)
                 side = Side.BUY if t["stance"] == "long" else Side.SELL
-                # DRY-POWDER RESERVE: never let approved buying drain the pot —
-                # keep CASH_RESERVE of equity in cash so the NEXT great thesis
-                # always has budget. Buys shrink to fit; scaled-out buys skip.
-                if side is Side.BUY:
-                    reserve = CASH_RESERVE * equity
-                    spendable = self.broker.get_cash() - reserve
-                    if spendable < px * qty:
-                        qty = max(0.0, spendable) / px
-                    if qty * px < 500:
-                        notifier.send(f"🏛 *Investing book — skipped {labels.get(sym, sym)}* "
-                                      f"({sym}): cash reserve floor "
-                                      f"({CASH_RESERVE:.0%} of the pot stays liquid for "
-                                      f"future opportunities). It can re-propose after an exit.")
-                        continue
-                self.broker.submit(Order(_asset(sym, self.settings.crypto_exchange),
-                                         side, qty, reason=f"thesis: {t.get('title', '')}"), px)
-                verb = "Bought" if side is Side.BUY else "Shorted"
-                notifier.send(f"🏛 *Investing book — {verb} {labels.get(sym, sym)}* ({sym}), "
-                              f"~${qty * px:,.0f}, under thesis “{t.get('title')}”. "
-                              f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop.")
+                self._open(sym, side, qty, px, t, notifier, labels, prices_by_symbol)
 
         # 3) propose entries for theses not yet expressed — one message per stock.
         # Budget-aware: never queue more buying than the pot's cash can honor.
@@ -242,6 +222,16 @@ class Investor:
                     pass
             if map_notes.get(sym):
                 extra["map_note"] = map_notes[sym]
+            # AUTONOMY (2026-08-05). This book had NO trade_approval check: it only
+            # ever executed a proposal the user had tapped `approved`. So when
+            # TRADE_APPROVAL was set to false, three books went autonomous and this
+            # one silently kept waiting for taps that were no longer coming — it
+            # could not open a position at all, while still asking permission on
+            # Telegram. Missed because only the 📈 book's path was checked.
+            if not self.settings.trade_approval:
+                self._open(sym, side, qty, px, t, notifier, labels, prices_by_symbol)
+                continue
+
             p = book.propose(sym, side, qty, px, f"thesis: {t.get('title', '')}", extra)
             notifier.send(
                 f"🏛 *Investing book — approval needed* (pretend money)\n\n"
@@ -261,6 +251,42 @@ class Investor:
         self._save()
 
     # --------------------------------------------------------------- helpers --
+    def _open(self, sym: str, side, qty: float, px: float, thesis: dict,
+              notifier, labels: dict, prices_by_symbol: dict) -> bool:
+        """Open a thesis position, honouring the dry-powder reserve.
+
+        Shared by the approved-proposal path and the autonomous path so the two
+        cannot drift apart on the reserve rule — the kind of duplication that let
+        the sleeve's entry and exit paths disagree about symbol keys for the life of
+        the project.
+
+        `side` may be a Side or the strings "buy"/"sell"; both callers exist.
+        """
+        s = Side.BUY if side in (Side.BUY, "buy") else Side.SELL
+        equity = self._equity(prices_by_symbol)
+        # DRY-POWDER RESERVE: never let buying drain the pot — keep CASH_RESERVE of
+        # equity liquid so the NEXT good thesis has budget. Buys shrink to fit;
+        # buys scaled below the minimum are skipped, not forced.
+        if s is Side.BUY:
+            spendable = self.broker.get_cash() - CASH_RESERVE * equity
+            if spendable < px * qty:
+                qty = max(0.0, spendable) / px
+            if qty * px < 500:
+                notifier.send(f"🏛 *Investing book — skipped {labels.get(sym, sym)}* "
+                              f"({sym}): cash reserve floor "
+                              f"({CASH_RESERVE:.0%} of the pot stays liquid for "
+                              f"future opportunities). It can re-propose after an exit.")
+                return False
+        o = self.broker.submit(Order(_asset(sym, self.settings.crypto_exchange),
+                                     s, qty, reason=f"thesis: {thesis.get('title', '')}"), px)
+        if not (o.filled_qty or 0) > 0:
+            return False
+        verb = "Bought" if s is Side.BUY else "Shorted"
+        notifier.send(f"🏛 *Investing book — {verb} {labels.get(sym, sym)}* ({sym}), "
+                      f"~${qty * px:,.0f}, under thesis “{thesis.get('title')}”. "
+                      f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop.")
+        return True
+
     def _held(self, symbol: str) -> bool:
         return any(p.asset.symbol == symbol and abs(p.qty) > 1e-9
                    for p in self.broker.get_positions().values())

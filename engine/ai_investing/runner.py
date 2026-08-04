@@ -147,6 +147,9 @@ class Runner:
         # is announced once instead of every cycle. Shipping the USE of this without
         # the initialisation crash-looped the engine 18 times (see STATE §4.16).
         self._flagged_symbols: set[str] = set()
+        # last news/context failure signature, so a persistent provider outage is
+        # one alert rather than one per cycle (the 4th announce-the-state instance)
+        self._last_news_error: str | None = None
 
         # --- shadow "formula-only" portfolio (ignores your input) for the comparison ---
         self._shadow_path = os.path.join(
@@ -275,7 +278,9 @@ class Runner:
             prices[a.key] = px
             moved += 1
         if moved:
-            self._spot_marked = moved
+            # counted for the log line below; deliberately not stored. It used to be
+            # written to self._spot_marked, which nothing ever read.
+            print(f"  spot-marked {moved} crypto position(s) to live price")
 
     def _mark_books(self, px_by_sym: dict) -> None:
         """Mark every book to market, independent of its trading logic.
@@ -383,8 +388,20 @@ class Runner:
                                                         price_moves)
             except Exception as exc:
                 self.journal.record_event("news_error", str(exc))
-                if self.settings.alerts.on_error:
+                # THE FOURTH announce-the-state instance, found by finally sweeping
+                # every notifier.send() in the codebase rather than waiting for the
+                # user to complain again. A provider outage lasts hours, and this
+                # fired every cycle — ~12 identical alerts an hour. Report the same
+                # failure once, and report recovery, so a persistent outage is one
+                # message and not a wall of them.
+                sig = f"{type(exc).__name__}: {exc}"[:200]
+                if self.settings.alerts.on_error and sig != self._last_news_error:
                     self.notifier.send(f"⚠️ news/context error: {exc}")
+                self._last_news_error = sig
+            else:
+                if self._last_news_error and self.settings.alerts.on_error:
+                    self.notifier.send("✅ news/context recovered.")
+                self._last_news_error = None
         if context.get("briefing"):
             print(f"[briefing] {context['briefing']}")
 
