@@ -205,6 +205,20 @@ class Settings:
     live: bool = field(default_factory=lambda: _get_bool("LIVE_TRADING", False))
     base_currency: str = field(default_factory=lambda: _get("BASE_CURRENCY", "USD"))
     starting_cash: float = field(default_factory=lambda: _get_float("STARTING_CASH", 100_000.0))
+    # How much of a LIVE account this engine may treat as its own book, in
+    # BASE_CURRENCY. 0 = off, meaning the whole account (the old behaviour).
+    #
+    # Every risk limit here is a FRACTION OF EQUITY, and with a live adapter
+    # attached, equity is whatever the account holds. A Longbridge paper account
+    # with USD 1M in it turns RISK_MAX_POSITION_WEIGHT=0.15 into a $150,000
+    # position and puts the 5% daily breaker at -$50,000 — so losing a $10,000
+    # stake in full registers as a 1% drawdown and trips nothing. The percentages
+    # are only meaningful when the denominator is the money actually at risk.
+    #
+    # Set this and the engine keeps its own ledger over a slice of the account:
+    # sizing, exposure, stops and every breaker measure against the slice, while
+    # orders still route to the real venue. See execution/capital.py.
+    live_capital_base: float = field(default_factory=lambda: _get_float("LIVE_CAPITAL_BASE", 0.0))
     stock_watchlist: list[str] = field(default_factory=lambda: _get_list("STOCK_WATCHLIST", ["AAPL", "NVDA", "TSLA", "MSFT"]))
     crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))

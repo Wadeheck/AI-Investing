@@ -121,6 +121,21 @@ class Runner:
         self.shadow_engine = DecisionEngine(default_signals(), model=self.model, user_views=UserViews())
         self.shadow_risk = RiskManager(settings.risk, regime_gate=self.regime)
 
+        # --- bounded slice of a live account (LIVE_CAPITAL_BASE) ---------------
+        self._ledger = None
+        self._ledger_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "live_book.json")
+        if settings.live and settings.live_capital_base > 0:
+            from ai_investing.execution.capital import BookLedger
+            try:
+                with open(self._ledger_path) as fh:
+                    self._ledger = BookLedger.from_dict(json.load(fh), settings.live_capital_base)
+            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                self._ledger = BookLedger(base=settings.live_capital_base)
+            print(f"  LIVE BOOK  ${settings.live_capital_base:,.0f} slice of the account, "
+                  f"realised so far ${self._ledger.realized:,.2f} — "
+                  f"{len(self._live_universe())} USD symbols tradable")
+
     def _load_shadow(self, starting_cash: float) -> PaperBroker:
         # Persist in ALL modes: the paper track record (and its formula-only
         # A/B twin) must survive restarts — the brain REMEMBERS what it holds.
@@ -131,6 +146,46 @@ class Runner:
         except (OSError, json.JSONDecodeError, KeyError):
             pass
         return PaperBroker(starting_cash, allow_short=self.settings.risk.allow_short)
+
+    def _live_universe(self) -> set[str]:
+        """What the live-routed book may trade. USD-listed stocks only.
+
+        Two live-adapter defects make anything else unsafe rather than merely
+        unsupported, and both are documented on the adapter itself:
+        `cost_price` arrives in the LISTING currency while every price here is
+        USD-normalised (so HK P&L would mix HKD with USD), and Longbridge's symbol
+        format only round-trips cleanly for `.US` names.
+
+        Crypto is excluded for a plainer reason: the segregated Gemini account is
+        empty, so those orders can only reject. The ₿ book trades them on paper
+        and is untouched by this.
+        """
+        from ai_investing.data.fx import currency_of
+        return {a.key for a in self.assets
+                if a.asset_class is AssetClass.STOCK
+                and currency_of(a.symbol, "stock") == self.settings.base_currency}
+
+    def _tradable_universe(self) -> set[str]:
+        """Keys this book has a mandate over — the gate on every exit path."""
+        if self._ledger is not None:
+            return self._live_universe()
+        return {a.key for a in self.assets}
+
+    def _book_portfolio(self):
+        """The book, as the rest of the engine should see it.
+
+        THE ONE BOUNDARY. With LIVE_CAPITAL_BASE set, the account holds far more
+        than the engine may risk, so everything downstream — sizing, exposure,
+        stops, all three breakers — must reason about the slice instead. Convert
+        here, once, and no consumer needs to know. Same reasoning as fixing FX at
+        the data layer in §4.2: a cap applied at each use site is a cap you will
+        eventually forget at one of them.
+        """
+        p = self.broker.portfolio()
+        if self._ledger is None:
+            return p
+        from ai_investing.execution.capital import own_positions
+        return self._ledger.book_portfolio(own_positions(p.positions, self._live_universe()))
 
     def _costs_for(self, asset) -> CostModel:
         from ai_investing.execution.costs import market_of_symbol
@@ -228,7 +283,7 @@ class Runner:
         safe_prices = ({k: v for k, v in prices.items() if k not in bad_data}
                        if bad_data else prices)
 
-        portfolio = self.broker.portfolio()
+        portfolio = self._book_portfolio()
         equity = portfolio.equity(safe_prices)
         mode = "LIVE" if self.settings.live else "PAPER"
         print(f"\n=== cycle {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z  [{mode}]  "
@@ -373,8 +428,8 @@ class Runner:
         # explicitly. Refusing to act strands a position the engine can no longer
         # exit if you remove a held symbol from the watchlist — reported below, and
         # the better failure of the two.
-        universe = {a.key for a in self.assets}
-        foreign = foreign_positions(portfolio.positions, universe)
+        universe = self._tradable_universe()
+        foreign = foreign_positions(self.broker.get_positions(), universe)
         if foreign:
             print(f"  !! {len(foreign)} position(s) not in this engine's universe — "
                   f"left untouched: {', '.join(sorted(foreign)[:8])}"
@@ -395,9 +450,16 @@ class Runner:
                     Order(pos.asset, side, abs(pos.qty), reason="user blocked"), prices, guard_slippage=False))
 
         # 3) Decisions — excluding data-guard-flagged and user-blocked symbols.
-        portfolio = self.broker.portfolio()
+        portfolio = self._book_portfolio()
         equity = portfolio.equity(prices)
-        active = [a for a in self.assets if a.key not in bad_data and self.user_views.is_allowed(a.symbol)]
+        # Decide only where this book may act. With a live slice attached that is
+        # USD stocks: crypto entries would route to an empty Gemini account and
+        # reject, and non-USD listings hit the currency defect on the adapter.
+        # Signals still run for every asset elsewhere — the ₿ and 🏛 books are
+        # paper and unaffected.
+        active = [a for a in self.assets
+                  if a.key not in bad_data and self.user_views.is_allowed(a.symbol)
+                  and (self._ledger is None or a.key in universe)]
         decisions = [self.engine.decide(a, bars_by_key[a.key], context) for a in active]
         features_by_key = {d.asset.key: d.features for d in decisions}
         for d in decisions:
@@ -450,13 +512,27 @@ class Runner:
             except Exception as exc:
                 print(f"  [event sleeve] skipped: {type(exc).__name__}: {exc}")
 
+        # 4c) Book realised P&L into the live slice, AFTER this cycle's fills and
+        # BEFORE anything reports equity. The account tells us position quantities;
+        # only the ledger knows what they cost, and only until they are reduced —
+        # so this must run every cycle or a closed trade's P&L is lost for good.
+        if self._ledger is not None:
+            booked = self._ledger.observe(
+                {k: p for k, p in self.broker.get_positions().items() if k in universe},
+                prices)
+            if abs(booked) > 0.005:
+                print(f"  LIVE BOOK  realised ${booked:+,.2f} this cycle "
+                      f"(total ${self._ledger.realized:+,.2f})")
+            atomic.write_json(self._ledger_path, self._ledger.to_dict())
+
         # 5) Learn from trades that just closed.
         self._learn(prices, features_by_key)
 
         # 6) Record + report.
         self._finish(prices, decisions, context, halted=False)
-        self._print_positions(self.broker.portfolio(), prices)
-        return {"halted": False, "equity": self.broker.portfolio().equity(prices), "orders": len(executed)}
+        book = self._book_portfolio()
+        self._print_positions(book, prices)
+        return {"halted": False, "equity": book.equity(prices), "orders": len(executed)}
 
     def run_forever(self) -> None:
         print(f"Autonomous loop started (every {self.settings.poll_seconds}s). Ctrl-C to stop.")
@@ -594,7 +670,7 @@ class Runner:
                     take_pct = self.settings.risk.atr_take_mult * ms.atr / price
                 stop_pct = min(stop_pct, self.settings.risk.max_loss_per_position)
                 from ai_investing.execution.explain import explain_entry
-                equity = self.broker.portfolio().equity(prices)
+                equity = self._book_portfolio().equity(prices)
                 extra = explain_entry(self.settings, sym, o.side.value, o.qty, price,
                                       o.reason, equity, stop_pct, take_pct)
                 extra["horizon"] = "short"
@@ -720,7 +796,7 @@ class Runner:
         return out
 
     def _finish(self, prices, decisions, context, halted: bool) -> None:
-        portfolio = self.broker.portfolio()
+        portfolio = self._book_portfolio()
         self.journal.record_equity(portfolio.equity(prices), portfolio.cash, len(portfolio.positions))
         self._last_positions = {k: p.qty for k, p in portfolio.positions.items()}
         self._snapshot(prices, decisions, context, halted)
@@ -735,7 +811,7 @@ class Runner:
                   f"@ ${pos.avg_price:,.2f} -> ${px:,.2f}  PnL ${pos.unrealized_pnl(px):,.0f}")
 
     def _snapshot(self, prices, decisions, context, halted: bool) -> None:
-        portfolio = self.broker.portfolio()
+        portfolio = self._book_portfolio()
         state = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "mode": "live" if self.settings.live else "paper",

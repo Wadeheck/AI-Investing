@@ -120,13 +120,65 @@ class LongbridgeBroker(BrokerAdapter):
         return asset.symbol if "." in asset.symbol else f"{asset.symbol}.US"
 
     def get_cash(self) -> float:
+        """Cash in BASE_CURRENCY.
+
+        §4.2 AGAIN, IN THE LIVE ADAPTER (found 2026-08-04). `account_balance()`
+        returns ONE entry per settlement currency, whose `currency` field is the
+        currency the totals are *consolidated into* — for the paper account, a
+        single HKD row with `total_cash=14,144,300`. The per-currency detail is in
+        `cash_infos` (USD 1,000,000 + SGD 1,000,000 + HKD 1,000,000).
+
+        The old code looked for a row whose `currency == "USD"`, found none, and
+        fell through to `balances[0].total_cash` — returning **14.1M HKD as if it
+        were USD**, overstating the account 7.8×. Exactly the class of error whose
+        lesson was already written down: a caveat in a docstring is not a
+        mitigation, and `routing.py` still carries one saying "mind
+        cross-currency".
+        """
+        from ai_investing.data import fx
+
         balances = self.ctx.account_balance()
+        base = self.settings.base_currency
+        # 1) exact per-currency cash, the only figure that needs no conversion
         for b in balances:
-            if getattr(b, "currency", None) == self.settings.base_currency:
+            for ci in (getattr(b, "cash_infos", None) or []):
+                if getattr(ci, "currency", None) == base:
+                    return float(getattr(ci, "available_cash", 0) or 0)
+        # 2) a row already consolidated into the base currency
+        for b in balances:
+            if getattr(b, "currency", None) == base:
                 return float(b.total_cash)
-        return float(balances[0].total_cash) if balances else 0.0
+        # 3) convert, and say so — never report a foreign figure as base
+        if balances:
+            b = balances[0]
+            cur = getattr(b, "currency", None) or "?"
+            amt = float(b.total_cash)
+            rate = fx.rates(self.settings).get(cur)
+            if rate:
+                return amt / rate if rate > 1 else amt * rate
+            print(f"  !! cannot convert {cur} {amt:,.0f} to {base} — reporting 0 cash "
+                  f"rather than a wrong number")
+        return 0.0
 
     def get_positions(self) -> dict[str, Position]:
+        """Positions keyed the way the rest of the engine keys them.
+
+        `p.symbol.split(".")[0]` USED TO BE HERE and quietly destroyed every
+        non-US symbol: Longbridge reports `700.HK`, which became `700`, whose key
+        `stock:700` matches nothing in a watchlist holding `0700.HK`. The engine
+        would have seen its own HK holdings as somebody else's account and — since
+        2026-08-04 — correctly refused to manage them (see
+        runner.foreign_positions), never exiting a position it opened.
+
+        Kept for US symbols only, where `AAPL.US` -> `AAPL` is what the watchlist
+        actually uses. Anything else keeps its suffix.
+
+        STILL WRONG for non-USD listings: `cost_price` is quoted in the listing
+        currency while every price in this engine is USD-normalised, so a HK
+        position's P&L would mix HKD against USD. That is why the live book is
+        restricted to USD listings for now (see runner._live_universe) instead of
+        being papered over here.
+        """
         out: dict[str, Position] = {}
         resp = self.ctx.stock_positions()
         for channel in getattr(resp, "channels", []):
@@ -134,7 +186,9 @@ class LongbridgeBroker(BrokerAdapter):
                 qty = float(p.quantity)
                 if abs(qty) < 1e-9:
                     continue
-                sym = p.symbol.split(".")[0]
+                sym = p.symbol
+                if sym.upper().endswith(".US"):
+                    sym = sym[:-3]
                 asset = Asset(sym, AssetClass.STOCK)
                 out[asset.key] = Position(asset, qty, float(getattr(p, "cost_price", 0) or 0))
         return out
