@@ -8,6 +8,7 @@ Without both, alerts silently no-op (NullNotifier).
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -44,41 +45,87 @@ class TelegramNotifier(Notifier):
     # announces a state is still a bug and still gets fixed. But the user should
     # never again receive eighteen copies of anything because one caller forgot.
     #
-    # Keyed on exact text, so a message carrying changing detail (a price, a count)
-    # still gets through — the storms were all byte-identical.
+    # KEYED TWO WAYS, because "the storms were all byte-identical" was wrong the
+    # very next day. On 2026-08-05 the watchdog sent 15 allowance warnings in 90
+    # minutes; each embedded a live token count, so no two were byte-equal and
+    # exact-text matching passed every one of them straight through. A backstop
+    # that only catches the storm you have already seen is not a backstop.
+    #
+    #   1. EXACT text  -> suppressed immediately. A literal repeat is never news.
+    #   2. SHAPE (the text with every number replaced by '#') -> allowed through
+    #      SHAPE_ALLOWANCE times per window, then suppressed.
+    #
+    # The allowance on the second is the whole trade-off. Real alerts can legitimately
+    # differ only in their numbers -- two fills of the same symbol at different
+    # prices -- and silencing the second of those would be a worse failure than
+    # the storm. A caller repeating one sentence with a ticking number FOUR times
+    # in thirty minutes is not reporting four events. Three get through; the tail
+    # of the storm does not.
     DEDUPE_WINDOW_S = 1800.0        # 30 minutes
     DEDUPE_MAX_KEYS = 256           # bounded: this runs for months
+    SHAPE_ALLOWANCE = 3             # same sentence, different numbers, per window
 
     def __init__(self, token: str, chat_id: str):
         self.token = token
         self.chat_id = chat_id
         self.enabled = bool(token) and bool(chat_id)
         self._recent: dict[str, float] = {}
+        self._shapes: dict[str, list[float]] = {}
         self.suppressed = 0          # counted so the log can admit what it dropped
 
-    def _is_duplicate(self, text: str) -> bool:
+    @staticmethod
+    def _shape(text: str) -> str:
+        """The sentence with its numbers removed.
+
+        '...vgxfw=1011k(20.2%) — projects to 262%' and the same line sixteen
+        minutes later collapse to one key. Letters are untouched, so two
+        different symbols or two different checks never collide.
+        """
+        return re.sub(r"\d+", "#", text)
+
+    def _too_noisy(self, text: str) -> bool:
         now = time.monotonic()
         # monotonic, not wall clock: a clock adjustment must not unblock a storm
         for k, t in list(self._recent.items()):
             if now - t > self.DEDUPE_WINDOW_S:
                 del self._recent[k]
+        for k, ts in list(self._shapes.items()):
+            keep = [t for t in ts if now - t <= self.DEDUPE_WINDOW_S]
+            if keep:
+                self._shapes[k] = keep
+            else:
+                del self._shapes[k]
+
         if text in self._recent:
-            self.suppressed += 1
-            print(f"  (telegram: suppressed a repeat of an identical message — "
-                  f"{self.suppressed} so far. A caller is announcing a STATE; "
-                  f"fix it there: {text[:60]}…)")
-            return True
+            return self._drop("an identical message", text)
+
+        shape = self._shape(text)
+        if len(self._shapes.get(shape, ())) >= self.SHAPE_ALLOWANCE:
+            return self._drop(f"the {self.SHAPE_ALLOWANCE + 1}th variant of one "
+                              f"sentence (only its numbers changed)", text)
+
         if len(self._recent) >= self.DEDUPE_MAX_KEYS:
             self._recent.pop(min(self._recent, key=self._recent.get), None)
+        if len(self._shapes) >= self.DEDUPE_MAX_KEYS:
+            self._shapes.pop(next(iter(self._shapes)), None)
         self._recent[text] = now
+        self._shapes.setdefault(shape, []).append(now)
         return False
+
+    def _drop(self, what: str, text: str) -> bool:
+        # NEVER SILENTLY. Suppression hides a caller's bug; saying so in the log
+        # is what stops this backstop from becoming the place storms go to die.
+        self.suppressed += 1
+        print(f"  (telegram: suppressed {what} — {self.suppressed} so far. "
+              f"A caller is announcing a STATE; fix it there: {text[:60]}…)")
+        return True
 
     def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> bool:
         """buttons: rows of (label, callback_data) — the chat bot process
         handles the resulting taps; this notifier only sends."""
         if not self.enabled:
             return False
-        if self._is_duplicate(text):
+        if self._too_noisy(text):
             return True          # not an error: the message was already delivered
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         params = {

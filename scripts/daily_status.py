@@ -39,9 +39,79 @@ def last_day(path, key="date"):
     return last
 
 
+# EVERY CHECK'S RESULT, KEYED BY A STABLE IDENTITY.
+#
+# The watchdog used to scrape this script's stdout and rate-limit on the whole
+# rendered line -- detail included. Every detail string here carries live
+# counters, so "the same issue" was never byte-equal to itself two runs apart
+# and the 6-hour re-nag never once applied: 15 identical-looking alerts in 90
+# minutes reached the user on 2026-08-05.
+#
+# The identity of a check is the CHECK, not the sentence it prints. It is
+# declared here, by the producer, and passed to the watchdog as data. Nothing
+# downstream parses prose to work out what broke.
+RESULTS: list[dict] = []
+
+
 def row(name, ok, detail):
+    RESULTS.append({"key": name, "ok": bool(ok), "detail": str(detail)})
     print(f"  {'OK  ' if ok else 'STALE'}  {name:<26} {detail}")
     return ok
+
+
+RECENT_H = 4.0                  # window used to measure the CURRENT burn rate
+
+
+def _free_token_cap() -> int:
+    """The engine's cap, not a copy of it."""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings
+        return int(Settings().llm_daily_free_tokens) or 5_000_000
+    except Exception:                                   # noqa: BLE001
+        return 5_000_000                                # documented default
+
+
+def _project_eod(usage: dict, cap: int) -> tuple[float, str]:
+    """Percent of an endpoint's daily allowance in use by 23:59 UTC.
+
+    WHY NOT A LINE THROUGH THE ORIGIN. The old estimator was
+    `used * 24 / hours_elapsed`, which assumes today's tokens arrived at a
+    steady rate. They do not: the nightly digest crons run just after 00:00
+    UTC and spend most of the day's tokens in the first ninety minutes, after
+    which the live loop trickles. Dividing a burst by a small elapsed_h
+    manufactures an emergency -- on 2026-08-05 it read 262% at 01:51 UTC and
+    decayed to 130% by 05:03 while actual use rose only 20%->27%. The endpoint
+    finished the day near 50%. Every one of those alerts was false.
+
+    So: extrapolate from the rate over the LAST few hours, not the whole day.
+    A burst that has stopped stops counting; a burn that is genuinely ongoing
+    still projects over the cap. Falls back to the old shape only when no
+    hourly history exists (a file written by an older build), and says which
+    basis it used so a surprising number can be traced.
+    """
+    by_model = usage.get("by_model") or {}
+    if not by_model:
+        return 0.0, "no use"
+    hour_now = NOW.hour + NOW.minute / 60.0
+    remaining_h = max(24.0 - hour_now, 0.0)
+    by_hour = usage.get("by_hour") or {}
+
+    worst, basis = 0.0, "elapsed-rate"
+    for model, total in by_model.items():
+        hours = by_hour.get(model) or {}
+        if hours:
+            recent = sum(t for h, t in hours.items()
+                         if hour_now - int(h) < RECENT_H)
+            # tokens/hour over the window actually covered so far today
+            window = min(RECENT_H, max(hour_now, 0.25))
+            rate = recent / window
+            projected = total + rate * remaining_h
+            basis = f"last {RECENT_H:.0f}h rate"
+        else:
+            projected = total * 24.0 / max(hour_now, 0.5)
+        worst = max(worst, 100.0 * projected / cap)
+    return worst, basis
 
 
 def main() -> int:
@@ -182,7 +252,10 @@ def main() -> int:
     # Each authorized endpoint has a free daily token allowance. Crossing it
     # starts costing money with no error and no signal, so it is metered.
     try:
-        cap = 5_000_000
+        # ONE definition of the cap. This used to hardcode 5_000_000 while the
+        # engine read LLM_DAILY_FREE_TOKENS, so setting the env var would have
+        # moved the rotation threshold and left the alert measuring the old one.
+        cap = _free_token_cap()
         u = json.load(open(D("llm_usage.json")))
         if u.get("day") == today:
             worst = 0.0
@@ -192,16 +265,10 @@ def main() -> int:
                 frac = 100.0 * tok / cap
                 worst = max(worst, frac)
                 parts.append(f"{model[-5:]}={tok / 1000:.0f}k({frac:.1f}%)")
-            # Project to end-of-day: 26% used at 10:00 UTC is on track for 62%,
-            # and knowing that BEFORE the cap is hit is the whole point. Total
-            # capacity is 3 endpoints x cap, and the chain rotates away from an
-            # exhausted one, so this warns rather than alarms.
-            elapsed_h = max(NOW.hour + NOW.minute / 60.0, 0.5)
-            proj = max((100.0 * t / cap) * 24.0 / elapsed_h
-                       for t in u.get("by_model", {}).values()) if u.get("by_model") else 0.0
+            proj, basis = _project_eod(u, cap)
             ok &= row("LLM free allowance", proj < 100,
                       f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
-                      f" — busiest projects to {proj:.0f}% by day end")
+                      f" — busiest projects to {proj:.0f}% by day end ({basis})")
         else:
             row("LLM free allowance", True, "no calls yet today")
     except (OSError, json.JSONDecodeError):
@@ -224,4 +291,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # --json: same checks, same exit code, machine-readable result.
+    # The human report still runs (it is where the checks live) but goes to
+    # stderr so stdout carries nothing but the JSON. A consumer that has to
+    # split prose from data will eventually get it wrong.
+    if "--json" in sys.argv:
+        import contextlib
+        with contextlib.redirect_stdout(sys.stderr):
+            code = main()
+        json.dump(RESULTS, sys.stdout)
+        sys.stdout.write("\n")
+        sys.exit(code)
     sys.exit(main())

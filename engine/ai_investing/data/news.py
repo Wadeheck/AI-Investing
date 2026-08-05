@@ -95,9 +95,17 @@ def _record_usage(settings, model: str, tokens: int) -> None:
             with open(path) as fh:
                 data = json.load(fh)
         if data.get("day") != day:
-            data = {"day": day, "by_model": {}}
+            data = {"day": day, "by_model": {}, "by_hour": {}}
         data.setdefault("by_model", {})
         data["by_model"][model] = data["by_model"].get(model, 0) + int(tokens)
+        # PER-HOUR, because a daily total cannot tell a burst from a burn.
+        # The nightly digests spend most of the allowance before 02:00 UTC;
+        # projecting the day from the total alone reads that as a runaway and
+        # pages the user hourly. 24 ints per model -- costs nothing, and it is
+        # the only way the health check can measure a CURRENT rate.
+        data.setdefault("by_hour", {}).setdefault(model, {})
+        hh = str(datetime.now(timezone.utc).hour)
+        data["by_hour"][model][hh] = data["by_hour"][model].get(hh, 0) + int(tokens)
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
             json.dump(data, fh, indent=1)

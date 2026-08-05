@@ -112,7 +112,7 @@ The through-line: **almost every failure here was silent, and passed its health
 checks while failing.** Not crashes — wrong answers delivered confidently.
 
 **Index.** §4.1–4.6 predate 2026-08-04. §4.7–4.14 are the phantom-valuation day.
-§4.15–4.19 are the autonomy session. §4A is the live list of what is still broken —
+§4.15–4.20 are the autonomy session. §4A is the live list of what is still broken —
 read that one first if something is wrong now.
 
 | § | Defect | Root-caused? |
@@ -127,6 +127,7 @@ read that one first if something is wrong now.
 | 4.17 | The investing book was never autonomous | ✅ one shared `_open()` for both routes |
 | 4.18 | A live API key and secret were committed to the repo | ✅ file deleted, every tracked file scanned |
 | 4.19 | Three fixes that were not root fixes | ✅ contract, backstop, and test isolation |
+| 4.20 | 15 false pages in 90 min; the rate limit had never worked | ✅ keyed on identity; shape-aware backstop; rate-based projection |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -766,6 +767,12 @@ while real alerts carry changing detail. Monotonic clock, so a clock adjustment 
 unblock a storm. This is a backstop, not the design — but the user will not receive
 eighteen copies of anything again because one caller forgot.
 
+> **Falsified the next morning — see §4.20.** "Every storm was byte-identical" was
+> true of the four storms I had seen and of no future one. The very next storm ticked
+> a token count and passed all fifteen messages through. The backstop now keys on the
+> message's *shape* as well as its exact text. Generalising from the instances you
+> happen to have is the same error this section was written to correct.
+
 **3. Three tests inheriting the operator's config were pinned one at a time.**
 `config.py` calls `_load_dotenv` at **import** time, so importing it pulled the live
 `.env` into every test process — and the same test then went green on the dev box and
@@ -786,6 +793,83 @@ directions: a script under `tests/` sees defaults, the engine still reads the fi
   adapters and three env-dependent tests were all one mechanism each, met four, three
   and three times. **When a bug has a shape, the fix belongs where the shape is
   defined.**
+
+---
+
+### 4.20 Fifteen pages in ninety minutes, for a condition that was not real *(2026-08-05)*
+
+**What the user saw.** Between 09:35 and 13:03 SGT, `AI-Investing needs attention`
+arrived every sixteen minutes — fifteen times — each reporting the LLM free allowance
+as STALE, each with a slightly higher token count, the projection falling steadily
+from **262% to 130%** as it went. The user asked what it was about. It was three
+separate bugs, any one of which alone would have produced the storm.
+
+**Bug one: the rate limit had never once worked.** `watchdog.py` was written on day
+one with the rule *"a broken thing stays broken for hours; re-sending every fifteen
+minutes trains you to ignore the channel"* and a `RENOTIFY_S = 6h` guard to enforce
+it. The guard keyed on the **rendered sentence**:
+
+```python
+fresh = [i for i in issues if now - float(sent_at.get(i, 0)) > RENOTIFY_S]
+```
+
+Every issue string in this system carries a live number — token counts, restart
+counts, free-disk percentage. `…vgxfw=1011k(20.2%)` and `…vgxfw=1041k(20.8%)` are the
+same issue, and were two different keys. **A rate limit whose key contains the thing
+that changes is not a rate limit**, and this one had been dead in every commit since
+it was written, invisibly, because nothing had yet failed for longer than one run.
+
+*Root fix.* The identity of a check is the check, not the sentence it prints.
+`daily_status.py` now declares a stable key per check and emits `--json`; the watchdog
+consumes that instead of scraping stdout for lines starting with `STALE`. Every check
+returns `(key, detail)` — rate limiting keys on the first, the user reads the second.
+The same latent bug was in the disk and crash-loop checks and is fixed with it.
+
+**Bug two: yesterday's backstop did not hold, one day later.** §4.19 added identical-
+message suppression to the notifier and this file recorded the reasoning: *"the storms
+were all byte-identical."* That was true of the four storms I had seen and false of the
+next one. Fifteen messages, no two byte-equal, straight through.
+
+*Root fix.* The notifier now keys two ways: exact text (suppressed immediately) and
+**shape** — the text with every number replaced by `#` — allowed through three times
+per window, then suppressed. The allowance is the whole trade-off: two fills of one
+symbol at different prices differ only in their numbers and must survive, while one
+sentence with a ticking number four times in thirty minutes is not four events.
+
+**Bug three: the alert was false.** The projection was `used × 24 ÷ hours_elapsed` —
+a line through the origin, which assumes the day's tokens arrive at a steady rate.
+They do not. The nightly digest crons spend most of the allowance in the ninety
+minutes after 00:00 UTC, and dividing a burst by a small `elapsed_h` manufactures an
+emergency. At 01:51 UTC it read 262%; by 05:03 it read 130% while actual use had risen
+only 20.2% → 27.4%. The endpoint was on course for **roughly half** the cap. Every one
+of the fifteen alerts was wrong, and the decay from 262 to 130 was the estimator
+correcting itself in public.
+
+*Root fix.* `_record_usage` now keeps per-hour buckets, and the projection extrapolates
+from the **last four hours** rather than from midnight: a burst that has stopped stops
+counting, a burn that is ongoing still projects over. The basis is printed with the
+number so a surprising figure can be traced. A genuine sustained overrun still pages —
+that is a test, not an assurance.
+
+**Also fixed in passing.** `daily_status.py` hardcoded `cap = 5_000_000` while the
+engine read `LLM_DAILY_FREE_TOKENS`. Setting that env var would have moved the
+rotation threshold and left the alert measuring the old one. One definition now.
+
+**Cost of the false alarm: nil, and that is the danger.** There was never any risk to
+the books — `_over_free_budget` independently rotates an endpoint away at 90% actual
+use, and that logic was correct throughout. The damage was entirely to the channel.
+Fifteen wrong pages in one morning is how a user learns to swipe the alert away, and
+the next one may not be wrong.
+
+**Lesson.** Two of these three were *safeguards that had never fired correctly* —
+the rate limit had been broken since it was written, and the backstop was defeated the
+day after it was added. Code that only runs during a failure is code that has never
+run. §4.15 said the same thing about an unexecuted broker adapter; **a guard is not
+verified until something has actually been guarded against**, and a test that stages
+the real storm is the cheapest way to make that happen before the user does.
+
+`engine/tests/test_alert_storm.py` — 16 tests, staging the actual 2026-08-05 message
+sequence against all three layers.
 
 ---
 

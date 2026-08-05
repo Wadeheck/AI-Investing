@@ -189,6 +189,34 @@ assumes that.
 | Linger | **on** — survives SSH logout and reboot |
 | Dashboard | `http://100.64.113.103:4300` |
 
+### If SSH says "Tailscale SSH requires an additional check"
+
+Seen 2026-08-05. **Nothing is down** — the engine does not use SSH, and the box stays
+reachable (`tailscale status` shows `active; direct`, ping answers). What has expired
+is the *interactive login authorization*, not the machine.
+
+The tailnet's SSH rule uses `"action": "check"`, which forces a browser re-auth every
+`checkPeriod` — **12 hours by default**. It is a deliberate Tailscale feature: a stolen
+laptop cannot hold a shell open forever. A key does not bypass it; Tailscale SSH
+intercepts port 22 before any key is considered, so `prodesk_ed25519` gets the same
+prompt.
+
+| | |
+|---|---|
+| **Unblock now** | Open the `https://login.tailscale.com/a/…` URL the SSH client prints, approve, re-run the command |
+| **Stop it recurring** | Admin console → Access Controls → change the SSH rule's `"action": "check"` to `"action": "accept"` |
+| **Keep the check, lengthen it** | Leave `"check"` and set `"checkPeriod": "720h"` (30 days) |
+
+`accept` still requires tailnet membership and an authorized device; it removes only
+the periodic browser step. That is the right trade for a headless box that must be
+reachable at any hour — a security control that locks *you* out of a machine you need
+during an incident has a cost, and it is not zero.
+
+**The residual risk is Tailscale itself.** If the tailnet is unreachable there is no
+remote path in at all — `ufw` scopes every ALLOW rule to `tailscale0`. Recovery is
+physical or via the LAN. Acceptable for a home machine; worth knowing before it
+matters.
+
 The ThinkStation is now a **dev box only**: its engine, chat and timers are
 stopped and disabled and its crontab is cleared, so nothing here writes to the
 books. The repo, `.env` and `data/` are still present for development — which
