@@ -275,6 +275,13 @@ class ChatBot:
         exists but lists every position; this is the deliberately-boring
         version for a daily glance: per book, one line of equity / cash /
         position count, then one total. No positions, no pnl breakdown."""
+        import os as _os
+        seeds = {
+            "⚡ trading": float(self.settings.starting_cash),
+            "🏛 investing": float(getattr(self.settings, "invest_starting_cash", 0) or 0),
+            "⚡ event sleeve": float(_os.environ.get("EVENT_START_CASH", 0) or 0),
+            "₿ crypto": float(_os.environ.get("CRYPTO_START_CASH", 0) or 0),
+        }
         books = []
         s = self._read("state.json")
         if s:
@@ -294,14 +301,23 @@ class ChatBot:
         if not books:
             return "No book state on disk yet — engine warming up?"
         lines = ["💰 *Assets on hand*"]
+        seed_total = 0.0
         for title, eq, cash, npos in books:
             invested = eq - cash
-            lines.append(f"{title}: *${eq:,.0f}*  (cash ${cash:,.0f} · "
+            seed = seeds.get(title, 0.0)
+            seed_total += seed
+            pnl = f"  {eq - seed:+,.0f}" if seed else ""
+            lines.append(f"{title}: *${eq:,.0f}*{pnl}  (cash ${cash:,.0f} · "
                          f"invested ${invested:,.0f} in {npos})")
         te = sum(b[1] for b in books)
         tc = sum(b[2] for b in books)
-        lines.append(f"\n*Total: ${te:,.0f}*  — ${tc:,.0f} cash, "
-                     f"${te - tc:,.0f} in the market")
+        verdict = ""
+        if seed_total:
+            d = te - seed_total
+            word = "up" if d >= 0 else "down"
+            verdict = f"  — *{word} ${abs(d):,.0f}* since the ${seed_total:,.0f} start"
+        lines.append(f"\n*Total: ${te:,.0f}*{verdict}\n"
+                     f"(${tc:,.0f} cash, ${te - tc:,.0f} in the market)")
         return "\n".join(lines)
 
     def _fmt_portfolio(self) -> str:
