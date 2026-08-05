@@ -271,6 +271,15 @@ def test_falls_back_when_no_hourly_history():
     assert basis == "elapsed-rate"
 
 
+def test_no_paging_on_the_discredited_estimator():
+    """The elapsed-rate fallback is the estimator that produced the storm. It
+    may still report a number; it must not be allowed to page."""
+    src = (ROOT / "scripts" / "daily_status.py").read_text()
+    block = src.split("--- LLM free-allowance budget ---")[1]
+    assert "trustworthy" in block and 'basis != "elapsed-rate"' in block, \
+        "a projection from the discredited basis must not set the alert"
+
+
 def test_cap_comes_from_settings_not_a_copy():
     """daily_status hardcoded 5_000_000 while the engine read the env var, so
     setting LLM_DAILY_FREE_TOKENS would have moved one and not the other."""

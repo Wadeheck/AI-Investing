@@ -266,9 +266,18 @@ def main() -> int:
                 worst = max(worst, frac)
                 parts.append(f"{model[-5:]}={tok / 1000:.0f}k({frac:.1f}%)")
             proj, basis = _project_eod(u, cap)
-            ok &= row("LLM free allowance", proj < 100,
+            # DO NOT PAGE ON AN ESTIMATOR KNOWN TO BE WRONG. The elapsed-rate
+            # fallback is the line-through-the-origin that produced 15 false
+            # alerts (§4.20); it is kept only to report a number for usage files
+            # written before hourly buckets existed. Such a file can only be
+            # today's, so this is self-expiring. The real protection against
+            # overspend is `_over_free_budget`, which rotates an endpoint away on
+            # 90% ACTUAL use and does not extrapolate at all.
+            trustworthy = basis != "elapsed-rate"
+            ok &= row("LLM free allowance", proj < 100 or not trustworthy,
                       f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
-                      f" — busiest projects to {proj:.0f}% by day end ({basis})")
+                      f" — busiest projects to {proj:.0f}% by day end ({basis}"
+                      f"{'' if trustworthy else ', not alerting: no hourly history'})")
         else:
             row("LLM free allowance", True, "no calls yet today")
     except (OSError, json.JSONDecodeError):
