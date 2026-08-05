@@ -26,6 +26,7 @@ HELP = """*AI-Investing chat* — talk to your engine.
 /pending — entries waiting for your approve/skip
 /brain — regime, emotions, mood, what's ringing in the field
 /portfolio — equity, positions, you-vs-formula
+/assets — one-glance totals: cash + holdings per book, nothing else
 /news — what was digested recently (signal vs noise)
 /simulate <headline> — ripple a hypothetical through the graph
 /view SYM=0.5 — set your tilt on an asset (-1..1)
@@ -154,7 +155,7 @@ class ChatBot:
     # -- command handlers ---------------------------------------------------------
     MENU = [[("📊 advise", "c:/advise"), ("🧠 brain", "c:/brain")],
             [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")],
-            [("⏳ pending approvals", "c:/pending")]]
+            [("💰 assets", "c:/assets"), ("⏳ pending approvals", "c:/pending")]]
 
     def handle(self, text: str) -> tuple[str, list | None]:
         """Returns (message, inline_buttons)."""
@@ -168,6 +169,8 @@ class ChatBot:
             return self._fmt_pending()
         if low.startswith("/brain"):
             return self._fmt_brain(), self.MENU
+        if low.startswith("/assets") or low.startswith("/cash"):
+            return self._fmt_assets(), self.MENU
         if low.startswith("/portfolio") or low.startswith("/pnl"):
             return self._fmt_portfolio(), self.MENU
         if low.startswith("/news"):
@@ -266,6 +269,40 @@ class ChatBot:
                 f"caution {reg.get('mood_caution')}\n"
                 f"📡 ringing now: {act or 'quiet'}\n"
                 f"🎯 scenarios fired: {fired}")
+
+    def _fmt_assets(self) -> str:
+        """/assets — the whole balance sheet in six lines. /portfolio already
+        exists but lists every position; this is the deliberately-boring
+        version for a daily glance: per book, one line of equity / cash /
+        position count, then one total. No positions, no pnl breakdown."""
+        books = []
+        s = self._read("state.json")
+        if s:
+            books.append(("⚡ trading", float(s.get("equity", 0) or 0),
+                          float(s.get("cash", 0) or 0), len(s.get("positions") or [])))
+        for icon_title, fname in (("🏛 investing", "invest_state.json"),
+                                  ("⚡ event sleeve", "event_state.json"),
+                                  ("₿ crypto", "crypto_state.json")):
+            blob = self._read(fname)
+            book = blob.get("broker") if isinstance(blob.get("broker"), dict) else blob
+            if not book:
+                continue
+            cash = float(book.get("cash", 0) or 0)
+            eq = blob.get("equity", book.get("equity"))
+            eq = float(eq) if eq is not None else cash
+            books.append((icon_title, eq, cash, len(book.get("positions") or [])))
+        if not books:
+            return "No book state on disk yet — engine warming up?"
+        lines = ["💰 *Assets on hand*"]
+        for title, eq, cash, npos in books:
+            invested = eq - cash
+            lines.append(f"{title}: *${eq:,.0f}*  (cash ${cash:,.0f} · "
+                         f"invested ${invested:,.0f} in {npos})")
+        te = sum(b[1] for b in books)
+        tc = sum(b[2] for b in books)
+        lines.append(f"\n*Total: ${te:,.0f}*  — ${tc:,.0f} cash, "
+                     f"${te - tc:,.0f} in the market")
+        return "\n".join(lines)
 
     def _fmt_portfolio(self) -> str:
         s = self._read("state.json")
