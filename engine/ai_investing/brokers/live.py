@@ -137,6 +137,36 @@ class LongbridgeBroker(BrokerAdapter):
                                   app_secret=os.environ["LONGPORT_APP_SECRET"],
                                   access_token=os.environ["LONGPORT_ACCESS_TOKEN"])
         self.ctx = TradeContext(cfg)
+        self._assert_expected_channel()
+
+    def _assert_expected_channel(self) -> None:
+        """Refuse to start against the wrong Longbridge account.
+
+        The access token alone decides whether orders hit the paper-trading
+        account or a funded one, and nothing else in the config changes when
+        the token is swapped. So on startup we ask the API which account
+        channel the token maps to and require it to match
+        LONGPORT_EXPECT_CHANNEL (default: lb_papertrading). To trade a real
+        account, set LONGPORT_EXPECT_CHANNEL to that channel explicitly.
+
+        Limitation: a channel only shows up in stock_positions() once it holds
+        a position, so a freshly-opened empty account is unverifiable — we
+        warn loudly rather than block, since it cannot be proven either way.
+        """
+        expected = os.environ.get("LONGPORT_EXPECT_CHANNEL", "lb_papertrading")
+        if not expected:  # explicit opt-out: LONGPORT_EXPECT_CHANNEL=
+            return
+        channels = [ch.account_channel for ch in self.ctx.stock_positions().channels]
+        wrong = [c for c in channels if c != expected]
+        if wrong:
+            raise RuntimeError(
+                f"Longbridge token maps to account channel(s) {wrong!r}, but "
+                f"LONGPORT_EXPECT_CHANNEL={expected!r}. Refusing to trade — "
+                f"if this is intentional (e.g. going to a funded account), set "
+                f"LONGPORT_EXPECT_CHANNEL to the new channel explicitly.")
+        if not channels:
+            print(f"  !! Longbridge: no positions yet, cannot verify the token's "
+                  f"account channel is {expected!r} — verify manually with --check-broker")
 
     def _symbol(self, asset: Asset) -> str:
         return asset.symbol if "." in asset.symbol else f"{asset.symbol}.US"
