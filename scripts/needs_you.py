@@ -61,30 +61,55 @@ def _age_h(p: Path):
         return None
 
 
+def _trade_approval_on() -> bool:
+    """Read TRADE_APPROVAL the way the engine does, .env fallback included —
+    this script runs from cron, where the engine's env is not exported."""
+    v = os.environ.get("TRADE_APPROVAL")
+    if v is None:
+        try:
+            for line in (ROOT / ".env").read_text().splitlines():
+                line = line.strip()
+                if line.startswith("TRADE_APPROVAL="):
+                    v = line.split("=", 1)[1].split("#")[0].strip()
+        except OSError:
+            pass
+    return (v or "false").lower() in ("1", "true", "yes", "on")
+
+
 def collect() -> list[dict]:
     """Everything currently waiting on the user. key = stable id for backoff."""
     asks: list[dict] = []
 
     # 1. Trade proposals awaiting approve/skip. These have real money meaning
     #    (in paper terms) and were the thing that silently sat for 18h.
-    try:
-        blob = json.loads((ROOT / "data" / "proposals.json").read_text())
-        now = datetime.now(timezone.utc)
-        for p in blob.get("proposals", []):
-            if p.get("status") != "pending":
-                continue
-            try:
-                age = (now - datetime.fromisoformat(p["ts"])).total_seconds() / 3600.0
-            except (KeyError, ValueError):
-                age = 0.0
-            asks.append({
-                "key": f"proposal:{p['id']}",
-                "text": f"*{p['side'].upper()} {p['symbol']}* qty {float(p['qty']):.2f} "
-                        f"@ ${float(p['price']):,.2f} — pending {age:.0f}h",
-                "how": "tap ⏳ pending approvals, or /pending",
-            })
-    except (OSError, json.JSONDecodeError):
-        pass
+    #    With TRADE_APPROVAL off the engine no longer waits for taps, so any
+    #    proposal still on disk is a relic from before autonomy — nagging about
+    #    it asks for a decision that no longer exists (seen 2026-08-05: eight
+    #    dead proposals in the 21:00 digest). Expired ones are equally moot.
+    if _trade_approval_on():
+        try:
+            blob = json.loads((ROOT / "data" / "proposals.json").read_text())
+            now = datetime.now(timezone.utc)
+            for p in blob.get("proposals", []):
+                if p.get("status") != "pending":
+                    continue
+                try:
+                    if datetime.fromisoformat(p["expires"]) <= now:
+                        continue
+                except (KeyError, ValueError):
+                    pass
+                try:
+                    age = (now - datetime.fromisoformat(p["ts"])).total_seconds() / 3600.0
+                except (KeyError, ValueError):
+                    age = 0.0
+                asks.append({
+                    "key": f"proposal:{p['id']}",
+                    "text": f"*{p['side'].upper()} {p['symbol']}* qty {float(p['qty']):.2f} "
+                            f"@ ${float(p['price']):,.2f} — pending {age:.0f}h",
+                    "how": "tap ⏳ pending approvals, or /pending",
+                })
+        except (OSError, json.JSONDecodeError):
+            pass
 
     # 2. X capture. Needs an interactive browser session because the no-API
     #    constraint rules out the alternative — the one channel that cannot
