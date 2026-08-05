@@ -1,4 +1,5 @@
 """₿ crypto book: mandate, bear exit, hard stop, majors-only, persistence."""
+import json
 import os
 import sys
 import tempfile
@@ -18,6 +19,23 @@ def _settings(tmp):
     s = Settings()
     s.state_path = os.path.join(tmp, "state.json")
     return s
+
+
+def _draining_stablecoins(tmp):
+    """Write the ONE extra bear signal the exit test needs, as a fixture.
+
+    Before this, the test redirected state_path into a temp dir and then read
+    the machine's LIVE crypto history anyway, so whether it passed depended on
+    the real stablecoin supply: green on the dev box's stale snapshot, red on
+    the ProDesk's live data, and able to flip on either as the market moved
+    (§4.21). A test for "two signals fire" must SUPPLY two signals.
+    """
+    d = os.path.join(tmp, "crypto_history")
+    os.makedirs(d, exist_ok=True)
+    # 32 rows: supply 2% lower than 30 days ago -> "stablecoin supply draining"
+    rows = [{"usd_bn": 100.0}] * 31 + [{"usd_bn": 98.0}]
+    with open(os.path.join(d, "stablecoins_daily.json"), "w") as fh:
+        json.dump(rows, fh)
 
 
 CALM = _bars([100.0] * 120 + [110.0])       # well above its 100d mean
@@ -54,20 +72,21 @@ def test_never_shorts():
 
 def test_bear_exit_liquidates_and_holds_cash():
     with tempfile.TemporaryDirectory() as tmp:
+        _draining_stablecoins(tmp)          # signal 2 of 2, supplied not borrowed
         st = _settings(tmp)
         book = cb.CryptoBook(st)
         book.cycle({}, BARS, PRICES)                       # build the core
         bear_bars = {s: _bars([200.0] * 120 + [100.0]) for s in cb.MAJORS}  # deep winter
         book2 = cb.CryptoBook(st)                          # reload: persistence
         r = book2.cycle({}, bear_bars, PRICES)
-        assert r["bear"], "winter must register as bear evidence"
+        assert r["bear"], "winter + draining supply must register as a bear"
         assert r["closed"], "bear exit must sell"
         assert r["cash"] > cb.START_CASH * 0.8, "most of the book should be in cash"
 
 
 def test_hard_stop_fires_on_a_10pct_loss():
     with tempfile.TemporaryDirectory() as tmp:
-        st = _settings(tmp)
+        st = _settings(tmp)                 # no history: deliberately NOT a bear
         book = cb.CryptoBook(st)
         book.cycle({}, BARS, PRICES)
         crashed = {s: 110.0 * (1 - cb.HARD_STOP - 0.01) for s in cb.MAJORS}

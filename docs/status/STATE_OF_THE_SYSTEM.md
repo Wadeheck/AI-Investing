@@ -112,7 +112,7 @@ The through-line: **almost every failure here was silent, and passed its health
 checks while failing.** Not crashes — wrong answers delivered confidently.
 
 **Index.** §4.1–4.6 predate 2026-08-04. §4.7–4.14 are the phantom-valuation day.
-§4.15–4.20 are the autonomy session. §4A is the live list of what is still broken —
+§4.15–4.21 are the autonomy session. §4A is the live list of what is still broken —
 read that one first if something is wrong now.
 
 | § | Defect | Root-caused? |
@@ -128,6 +128,7 @@ read that one first if something is wrong now.
 | 4.18 | A live API key and secret were committed to the repo | ✅ file deleted, every tracked file scanned |
 | 4.19 | Three fixes that were not root fixes | ✅ contract, backstop, and test isolation |
 | 4.20 | 15 false pages in 90 min; the rate limit had never worked | ✅ keyed on identity; shape-aware backstop; rate-based projection |
+| 4.21 | A test's verdict depended on the live crypto market | ✅ history follows `settings`; 7 read-only loaders remain in §4A |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -873,6 +874,55 @@ sequence against all three layers.
 
 ---
 
+### 4.21 A test whose result depended on the crypto market *(2026-08-05)*
+
+**Found by deploying.** `f1af4a9` passed all 33 suites on the dev box. On the ProDesk,
+`test_crypto_book.py` failed: *"winter must register as bear evidence"*. Same commit,
+same Python, same lockfile.
+
+`bear_evidence()` needs `BEAR_K = 2` of four signals. The test supplies one — synthetic
+bars deep below their 100-day mean. The other three come from `_hist()`, which built a
+path to the repo's **real** `data/crypto_history/` out of `__file__` and ignored
+`settings` completely:
+
+| Machine | Real-data signals | Total | Result |
+|---|---|---|---|
+| ThinkStation (stale snapshot) | `1 — stablecoin supply draining` | 2 | pass |
+| ProDesk (live data) | `0` | 1 | **fail** |
+
+So the test redirected `state_path` into a temp directory, took care to isolate itself,
+and then read the live crypto market anyway. **Its verdict was a function of the actual
+stablecoin supply.** It was not machine-dependent so much as *market*-dependent: it
+could have flipped on either box on any day, and the day it flipped it would have looked
+like the deploy broke something.
+
+**Root fix.** `_hist()` now resolves its directory from `settings.state_path`, exactly
+as `crypto_state.json` already did five lines below it. Production is unchanged — the
+state file lives in `data/`, so the history resolves to `data/crypto_history/` as before
+— and a test pointing `state_path` at a temp directory now genuinely gets nothing. The
+bear test writes the second signal it needs as a fixture: **a test for "two signals
+fire" must supply two signals.**
+
+**The wider shape.** A sweep found 25 modules building a data path from `__file__`.
+Seventeen are `research/` offline tools with no caller to configure — genuinely fine.
+Seven are live-path reference loaders (fundamentals, comps, ownership, estimates,
+calendars, value scanner, scalp) which are read-only and decide no trade; they are in
+§4A, not swept in one risky change. `test_data_path_isolation.py` pins that list so it
+can shrink and never grow, and fails on any new live-path module that joins.
+
+**Lesson.** This is §4.19's test-isolation defect wearing different clothes. That fix
+stopped a test process loading `.env`; it could not stop a module reaching past its
+settings to a hardcoded directory. **The mechanism was never "`.env` leaks" — it was
+"a component reads state its caller cannot control", and configuration was only the
+first place it surfaced.** A component that reads from a path its caller cannot set is
+neither testable nor configurable; those are one defect, and the untestable half is how
+you find out.
+
+Also worth stating plainly: the previous commit's *"33 suites green"* was true and
+insufficient. Green on one machine says nothing about a suite that reads that machine's
+data. **Running it somewhere else is a real test.**
+
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -884,6 +934,7 @@ and the register had drifted **13 commits** behind reality.
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
 | ~~A fourth announce-the-state instance~~ | **CLOSED §4.17.** All 24 alert sites swept and classified; the fourth (news/context error) is fixed. | — |
 | ~~Tests inherit the ambient `.env`~~ | **CLOSED §4.19.** A test process no longer loads `.env` at all, detected automatically. | — |
+| **7 live-path loaders hardcode `data/`** | `data/{calendar_events,comps,estimates,fundamentals_history,ownership,value_scanner}.py` and `scalp/live.py` build their path from `__file__`, so no caller or test can redirect them (§4.21). All are read-only reference loaders that decide no trade, which is why they were not swept in one change. | A test touching them reads live data and can flip with the market — the §4.21 failure mode. `test_data_path_isolation.py` pins the list so it cannot grow. |
 | **`prices[key] = 0.0` still means "no data"** | The runner encodes a missing bar as zero — a sentinel that means *absent* and reads as *free*. It caused §4.7 and is currently contained by `mark_price()` at every consumer rather than removed at the source. The root fix is to omit the key, which touches every price consumer. | Contained, not gone. A new consumer that forgets `mark_price` reopens §4.7. |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |

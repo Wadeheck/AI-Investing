@@ -53,11 +53,29 @@ HODL_TRIM = 0.80               # fraction of the core sold in a bear
 START_CASH = float(os.environ.get("CRYPTO_START_CASH", "100000"))
 
 
-def _hist(name: str):
-    p = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), "..", "data", "crypto_history", name)
+def _hist(settings, name: str):
+    """Read a crypto history series from THIS BOOK'S data directory.
+
+    Resolved from `settings.state_path`, exactly as `crypto_state.json` is a
+    few lines below. It used to be hardcoded to the repo's real `data/` via a
+    chain of `dirname()` calls, which ignored settings completely and had two
+    consequences:
+
+      * No test could control it. `test_crypto_book.py` redirected state_path
+        into a temp dir and still read the LIVE market history, so whether the
+        bear-exit test passed depended on the real stablecoin supply. It passed
+        on the dev box (a stale snapshot showing supply draining -> 2 signals)
+        and failed on the ProDesk (live data -> 1 signal), and on either machine
+        it could flip on any day the market moved. Found 2026-08-05 (§4.21).
+      * Two books could never read different histories, because the path could
+        not be pointed anywhere.
+
+    A component that reads from a path its caller cannot set is not testable and
+    not configurable, and those are the same defect.
+    """
+    d = os.path.dirname(os.path.abspath(settings.state_path))
     try:
-        with open(os.path.normpath(p)) as fh:
+        with open(os.path.join(d, "crypto_history", name)) as fh:
             return json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
@@ -165,19 +183,19 @@ class CryptoBook:
             closes = [b.close for b in bars[-100:]]
             if bars[-1].close < sum(closes) / len(closes):
                 fired.append("winter (BTC < 100d)")
-        rows = _hist("stablecoins_daily.json")
+        rows = _hist(self.settings, "stablecoins_daily.json")
         if rows and len(rows) > 31:
             now_, then = rows[-1]["usd_bn"], rows[-31]["usd_bn"]
             if then and (now_ / then - 1.0) < -0.01:
                 fired.append("stablecoin supply draining")
-        dv = _hist("dvol_btc.json")
+        dv = _hist(self.settings, "dvol_btc.json")
         if dv and len(dv) > 90:
             xs = [r["close"] for r in dv[-90:]]
             mu = sum(xs) / len(xs)
             sd = (sum((x - mu) ** 2 for x in xs) / max(1, len(xs) - 1)) ** 0.5
             if sd > 1e-9 and (xs[-1] - mu) / sd > 1.5:
                 fired.append("implied vol spiking")
-        etf = _hist("btc_etf_flows.json")
+        etf = _hist(self.settings, "btc_etf_flows.json")
         if etf and len(etf) >= 5:
             tot = 0.0
             for row in etf[-5:]:
