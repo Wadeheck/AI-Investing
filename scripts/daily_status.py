@@ -307,8 +307,10 @@ def main() -> int:
                    for f in glob.glob(D("digest_v2", "events_amend_crypto", "*.json"))}
         gd = [json.loads(l)["date"] for l in open(D("news_archive_gdelt_crypto.jsonl"))]
         pend = [d for d in gd if d >= "2023-07-01" and d not in amended]
-        row("crypto wave backlog", len(pend) < 250,
-            f"{len(pend)} GDELT days undigested (wave due at 250)")
+        # Waves are automated now (crypto_wave_digest.py, 6h timer, batches of
+        # 20-40). More than ~60 pending means the automation has stopped.
+        row("crypto wave backlog", len(pend) < 60,
+            f"{len(pend)} GDELT days undigested (auto-wave at 20)")
     except (OSError, json.JSONDecodeError):
         pass
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the wave backlog every 6h; digests only when a 20-day batch is ready
+
+[Timer]
+OnCalendar=*-*-* 02/6:45:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

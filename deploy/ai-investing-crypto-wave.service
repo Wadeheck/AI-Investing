@@ -1,0 +1,9 @@
+[Unit]
+Description=Crypto-backfill wave digestion (rolling 20-day batches)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/crypto_wave_digest.py
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/crypto_wave_digest.log
+StandardError=inherit
