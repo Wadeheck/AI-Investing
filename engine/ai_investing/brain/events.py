@@ -82,10 +82,15 @@ def source_trust(source: str, settings=None) -> float:
             break
     if settings is not None:
         try:
-            from ai_investing.brain.source_learning import MIN_N, learned_map
+            from ai_investing.brain.source_learning import (LAPSE_PENALTY, MIN_N,
+                                                            learned_map, rescue_map)
+            _, lapsed = rescue_map(settings)
+            pen = LAPSE_PENALTY if any(l and l.lower() in s for l in lapsed) else 0.0
             for src, entry in learned_map(settings).items():
                 if src and src.lower() in s and entry.get("n", 0) >= MIN_N:
-                    return round(0.5 * static + 0.5 * entry["trust"], 3)
+                    return round(0.5 * static + 0.5 * entry["trust"] - pen, 3)
+            if pen:      # lapsed rescue with thin recent record: below-neutral, not innocent
+                return round(static - pen, 3)
         except Exception:
             pass
     return static
@@ -497,7 +502,19 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
         ev["magnitude"] = max(0.0, min(1.0, float(ev.get("magnitude", 0.0) or 0.0)))
         ev["confidence"] = max(0.0, min(1.0, float(ev.get("confidence", 0.5) or 0.5)))
         ev["credibility"] = round(credibility(ev, headlines, settings), 3)
-        ev["is_noise"] = ev["credibility"] < threshold or ev.get("type") == "rumor_hype"
+        # noise-rescue: a source whose ignored calls keep coming true gets a
+        # lower noise bar — its "noise" has measurably been signal
+        eff_threshold = threshold
+        try:
+            from ai_investing.brain.source_learning import rescue_map
+            rescued, _ = rescue_map(settings)
+            s_low = (ev.get("source") or "").lower()
+            if any(r and r.lower() in s_low for r in rescued):
+                eff_threshold = max(0.0, threshold - 0.1)
+                ev["rescued_source"] = True
+        except Exception:
+            pass
+        ev["is_noise"] = ev["credibility"] < eff_threshold or ev.get("type") == "rumor_hype"
         ev["emotion"] = ev.get("emotion") if ev.get("emotion") in EMOTIONS else "neutral"
         ev["emotion_intensity"] = max(0.0, min(1.0, float(ev.get("emotion_intensity", 0.0) or 0.0)))
         ev["ts"] = now

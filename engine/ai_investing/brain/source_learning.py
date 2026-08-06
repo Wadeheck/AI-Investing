@@ -35,6 +35,14 @@ BATCH = 200
 DOOM_MIN_N = 6
 SHRINK = 5                 # pseudo-observations at 50% pulling small samples to neutral
 
+# Noise-rescue: a source whose IGNORED (noise-flagged) stories keep coming true
+# earns back the brain's attention — evidence-bounded, attention-capped.
+WINDOW_DAYS = 180          # evidence ages out: only outcomes this recent count
+RESCUE_MIN_N = 5           # scored noise outcomes in-window before rescue is possible
+RESCUE_RATE = 0.65         # shrunk noise hit-rate needed (vs ~0.5 base)
+RESCUE_CAP = 8             # attention is scarce: the rescued roster is this big, contested
+LAPSE_PENALTY = 0.05       # was-hot-now-cold is more suspicious than never-tried
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_outcomes (
   event_id INTEGER NOT NULL, symbol TEXT NOT NULL,
@@ -115,44 +123,111 @@ def score_events(settings, graph, horizon: int = HORIZON_DAYS, batch: int = BATC
 
 
 def learn(settings) -> dict:
-    """Aggregate outcomes into per-source learned trust + doom discount; persist."""
+    """Aggregate outcomes into per-source learned trust, doom discount, and the
+    noise-rescue roster; persist. Evidence is WINDOWED (WINDOW_DAYS): old hits
+    stop counting, so a source that goes cold falls out by construction —
+    nothing needs explicit dropping, and the decision layer stays bounded even
+    though event_outcomes keeps full history (retention rule)."""
     try:
         conn = sqlite3.connect(settings.brain.db_path)
         conn.executescript(_SCHEMA)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)).isoformat()
         rows = conn.execute(
             "SELECT source, hit, realized_ret, emotion, polarity, is_noise "
-            "FROM event_outcomes WHERE symbol != '_NONE'").fetchall()
+            "FROM event_outcomes WHERE symbol != '_NONE' AND scored_at >= ?",
+            (cutoff,)).fetchall()
         conn.close()
     except sqlite3.Error:
         return {}
+    prev = {}
+    try:
+        with open(_trust_path(settings)) as fh:
+            prev = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        pass
     per: dict[str, dict] = {}
     all_moves: list[float] = []
     for source, hit, ret, emotion, polarity, is_noise in rows:
-        s = per.setdefault(source or "?", {"n": 0, "hits": 0, "doom_moves": []})
-        if hit is not None and not is_noise:
-            s["n"] += 1
-            s["hits"] += hit
+        s = per.setdefault(source or "?", {"n": 0, "hits": 0,
+                                           "noise_n": 0, "noise_hits": 0,
+                                           "doom_moves": []})
+        if hit is not None:
+            if is_noise:
+                s["noise_n"] += 1
+                s["noise_hits"] += hit
+            else:
+                s["n"] += 1
+                s["hits"] += hit
         if ret is not None:
             all_moves.append(abs(ret))
             if emotion in ("fear", "panic") and (polarity or 0.0) < 0:
                 s["doom_moves"].append(abs(ret))
-    overall = (sum(all_moves) / len(all_moves)) if all_moves else 0.0
+
+    # -- rescue roster: sources whose ignored calls keep landing ---------------
+    candidates = []
+    for source, s in per.items():
+        if s["noise_n"] < RESCUE_MIN_N:
+            continue
+        shrunk = (s["noise_hits"] + SHRINK * 0.5) / (s["noise_n"] + SHRINK)
+        if shrunk >= RESCUE_RATE:
+            raw = s["noise_hits"] / s["noise_n"]
+            # evidence strength: volume x edge over chance — every seat contested
+            candidates.append((s["noise_n"] * (raw - 0.5), source, s, shrunk))
+    candidates.sort(reverse=True)
+    rescued = {source: {"noise_n": s["noise_n"],
+                        "noise_hit_rate": round(s["noise_hits"] / s["noise_n"], 3),
+                        "shrunk": round(shrunk, 3),
+                        "since": (prev.get("rescued", {}).get(source, {}) or {})
+                        .get("since") or datetime.now(timezone.utc).isoformat()}
+               for _, source, s, shrunk in candidates[:RESCUE_CAP]}
+
+    # -- lapse: previously rescued, no longer qualifying -----------------------
+    now_iso = datetime.now(timezone.utc).isoformat()
+    lapse_cut = (datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)).isoformat()
+    lapsed = {}
+    for source, entry in (prev.get("lapsed") or {}).items():
+        if source not in rescued and (entry.get("lapsed_at") or "") >= lapse_cut:
+            lapsed[source] = entry            # penalty persists one window, then gone
+    for source in (prev.get("rescued") or {}):
+        if source not in rescued and source not in lapsed:
+            lapsed[source] = {"lapsed_at": now_iso}
+
     out: dict[str, dict] = {}
     for source, s in per.items():
-        rate = (s["hits"] + SHRINK * 0.5) / (s["n"] + SHRINK)
-        entry = {"n": s["n"], "hit_rate": round(s["hits"] / s["n"], 3) if s["n"] else None,
+        n, hits = s["n"], s["hits"]
+        if source in rescued:
+            # a rescued source has EARNED its ignored calls: they count as track
+            # record, which also lets trust blending kick in at MIN_N sooner
+            n += s["noise_n"]
+            hits += s["noise_hits"]
+        rate = (hits + SHRINK * 0.5) / (n + SHRINK)
+        entry = {"n": n, "hit_rate": round(hits / n, 3) if n else None,
                  "trust": round(0.25 + 0.7 * rate, 3)}
-        if len(s["doom_moves"]) >= DOOM_MIN_N and overall > 1e-9:
-            ratio = (sum(s["doom_moves"]) / len(s["doom_moves"])) / overall
-            entry["doom_discount"] = round(max(0.5, min(1.0, ratio)), 3)
+        if source in rescued:
+            entry["rescued"] = True
+        if len(s["doom_moves"]) >= DOOM_MIN_N and all_moves:
+            overall = sum(all_moves) / len(all_moves)
+            if overall > 1e-9:
+                ratio = (sum(s["doom_moves"]) / len(s["doom_moves"])) / overall
+                entry["doom_discount"] = round(max(0.5, min(1.0, ratio)), 3)
         out[source] = entry
     try:
         with open(_trust_path(settings), "w") as fh:
-            json.dump({"generated": datetime.now(timezone.utc).isoformat(),
-                       "sources": out}, fh, indent=1)
+            json.dump({"generated": now_iso, "sources": out,
+                       "rescued": rescued, "lapsed": lapsed}, fh, indent=1)
     except OSError:
         pass
     return out
+
+
+def rescue_map(settings) -> tuple[set[str], set[str]]:
+    """(rescued source names, lapsed source names) — empty until learned."""
+    try:
+        with open(_trust_path(settings)) as fh:
+            d = json.load(fh)
+        return set(d.get("rescued") or {}), set(d.get("lapsed") or {})
+    except (OSError, json.JSONDecodeError):
+        return set(), set()
 
 
 def learned_map(settings) -> dict[str, dict]:
