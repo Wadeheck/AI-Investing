@@ -481,8 +481,56 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
             raw = _call_llm(_prompt(chunk, node_ids, graph), settings, max_tokens=6000,
                             tier="fast", json_mode=True)
             parsed = _extract_json(raw or "")
-            if parsed and isinstance(parsed.get("events"), list):
-                events.extend(_attach_headline(parsed["events"], chunk))
+            got = (_attach_headline(parsed["events"], chunk)
+                   if parsed and isinstance(parsed.get("events"), list) else [])
+            events.extend(got)
+            # COVERAGE ENFORCEMENT. The prompt says "account for EVERY number"
+            # but nothing verified it, and mark_digested() then buried whatever
+            # the model skipped — permanently, thanks to the cost gate. The
+            # skipped ones are exactly the boring-looking stories the
+            # noise-rescue loop needs scored (source_learning.py): a story can
+            # be JUDGED noise, but it must never be silently unjudged.
+            covered = set()
+            for ev in got:
+                try:
+                    covered.add(int(ev.get("n", 0)))
+                except (TypeError, ValueError):
+                    pass
+            missing = [h for j, h in enumerate(chunk, 1) if j not in covered]
+            if missing:                      # one focused retry on just the misses
+                raw = _call_llm(_prompt(missing, node_ids, graph), settings,
+                                max_tokens=6000, tier="fast", json_mode=True)
+                parsed = _extract_json(raw or "")
+                got = (_attach_headline(parsed["events"], missing)
+                       if parsed and isinstance(parsed.get("events"), list) else [])
+                events.extend(got)
+                covered = set()
+                for ev in got:
+                    try:
+                        covered.add(int(ev.get("n", 0)))
+                    except (TypeError, ValueError):
+                        pass
+                still = [h for j, h in enumerate(missing, 1) if j not in covered]
+                if still:                    # keyword floor: low fidelity, but graded
+                    fb = _fallback_extract(still, graph)
+                    for ev in fb:
+                        ev["coverage_fallback"] = True
+                        events.append(ev)
+                    fb_titles = {ev.get("headline", "") for ev in fb}
+                    for h in still:          # absolute floor: an unsigned stub that
+                        if h.get("title", "") in fb_titles:   # _resolve_unsigned will
+                            continue                          # escalate — never silent
+                        title = h.get("title", "")
+                        events.append({
+                            "summary": title, "headline": title,
+                            "source": h.get("source", ""), "type": "other",
+                            "nodes": [n for n in graph.match_text(
+                                f"{title} {h.get('summary', '')}")
+                                if graph.nodes[n].type != "asset"][:3],
+                            "polarity": 0.0, "magnitude": 0.15, "confidence": 0.2,
+                            "manipulation_likelihood": 0.2, "emotion": "neutral",
+                            "emotion_intensity": 0.1, "coverage_fallback": True,
+                        })
         if not events:
             events = None
     if events is None:
