@@ -80,9 +80,14 @@ def main() -> int:
         if not text:
             skipped["empty"] += 1
             continue
-        if PROMO.search(text) and len(text) < 220:
+        # Promo-looking posts are FLAGGED, not dropped. Capture must not
+        # render verdicts nothing will ever grade: the digester's credibility
+        # stack (manipulation_likelihood, hype penalty, low-trust chorus) is
+        # the judge, source_learning grades the judge, and noise-rescue can
+        # promote the shill-sounding caller who keeps being right.
+        promo = bool(PROMO.search(text) and len(text) < 220)
+        if promo:
             skipped["promo"] += 1
-            continue
         ts = None
         if r.get("t"):
             try:
@@ -97,12 +102,15 @@ def main() -> int:
         title = clean[:180]
         summary = clean[180:600] if len(clean) > 180 else ""
         known.add(sid)
-        by_date.setdefault(ts.date().isoformat(), []).append({
+        rec = {
             "title": title, "summary": summary,
             "published": ts.strftime("%a, %d %b %Y %H:%M:%S GMT"),
             "ts": ts.isoformat(timespec="seconds"),
             "source": f"x.com/{handle}",
-            "url": f"https://x.com/{handle}/status/{sid}"})
+            "url": f"https://x.com/{handle}/status/{sid}"}
+        if promo:
+            rec["promo_suspect"] = True
+        by_date.setdefault(ts.date().isoformat(), []).append(rec)
 
     n = 0
     with open(ARCHIVE, "a") as fh:
@@ -113,8 +121,8 @@ def main() -> int:
                                  "capture": note or "browser session",
                                  "headlines": heads}, ensure_ascii=False) + "\n")
     print(f"ingested {n} new posts across {len(by_date)} dates "
-          f"(skipped: {skipped['dupe']} dupes, {skipped['promo']} promo, "
-          f"{skipped['empty']} empty)")
+          f"(skipped: {skipped['dupe']} dupes, {skipped['empty']} empty; "
+          f"{skipped['promo']} promo-flagged but kept)")
     return 0
 
 
