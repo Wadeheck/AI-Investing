@@ -1,0 +1,10 @@
+[Unit]
+Description=AI-Investing X harvest (headless, via saved session cookies)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+Environment=X_CAPTURE_BROWSER=firefox
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/x_auto_capture.py --days 3
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/x_auto_capture.log
+StandardError=inherit
