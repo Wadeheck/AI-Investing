@@ -179,10 +179,27 @@ def main() -> int:
     a = age_h(D("macro_cache.json"))
     ok &= row("macro anchors (6h)", a is not None and a < 8,
               f"VIX/DXY/FRED {a:.1f}h ago" if a else "missing")
-    g_last = last_day(D("news_archive_gdelt_crypto.jsonl"))
     gd_run = subprocess.run(["pgrep", "-f", "gdelt_crypto_fetch"],
                             capture_output=True).returncode == 0
-    row("GDELT crawler", True, f"{'running' if gd_run else 'paused'}, newest day {g_last}")
+    # "newest day" hid the real state: the archive is 78 scattered gaps, not a
+    # frontier — the max date said 2025-12 while whole years were missing.
+    # Count coverage against the crawler's own target range instead.
+    try:
+        from datetime import date as _date, timedelta as _td
+        covered = set()
+        for _l in open(D("news_archive_gdelt_crypto.jsonl")):
+            try:
+                covered.add(json.loads(_l)["date"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+        _start = _date(2023, 7, 1)   # gdelt_crypto_fetch.START
+        _total = ( _date.today() - _start).days
+        _miss = sum(1 for i in range(_total)
+                    if (_start + _td(days=i)).isoformat() not in covered)
+        detail = f"{len(covered)}/{_total} days fetched, {_miss} to go"
+    except OSError:
+        detail = "archive unreadable"
+    row("GDELT crawler", True, f"{'running' if gd_run else 'paused'}, {detail}")
 
     # --- digestion ---
     ev = D("digest_v2", "events", f"{yday}.json")
