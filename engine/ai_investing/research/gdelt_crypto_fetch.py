@@ -6,10 +6,16 @@ data/news_archive_gdelt_crypto.jsonl in the live-archive schema. Resumable:
 days already in the file are skipped. Never deletes anything (retention rule).
 
 Usage:  python3 -m ai_investing.research.gdelt_crypto_fetch
+        --loop    repeated passes with rests until the archive is gapless
+        --gentle  one fetch every 2-6 minutes (randomised), long cool-offs on
+                  429s. ~4 min/day average: a full 864-day backlog is roughly
+                  2.5 days of wall clock. The Aug-1 run at 10s/fetch got every
+                  request from 2025-12 backwards refused; slower IS faster here.
 """
 from __future__ import annotations
 
 import json
+import random
 import sys
 import time
 import urllib.parse
@@ -20,6 +26,13 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 OUT = DATA_DIR / "news_archive_gdelt_crypto.jsonl"
 START = date(2023, 7, 1)
+GENTLE = "--gentle" in sys.argv
+
+
+def _pace() -> float:
+    """Seconds to wait between day-fetches. Gentle: 2-6 min, randomised so we
+    never look like a metronome to their limiter."""
+    return random.uniform(120, 360) if GENTLE else 10.0
 
 QUERY = ('(bitcoin OR ethereum OR stablecoin OR "crypto exchange" OR binance OR '
          'coinbase OR "SEC crypto" OR "crypto regulation" OR "crypto ETF" OR '
@@ -52,7 +65,7 @@ def fetch_day(d: date) -> list[dict] | None:
             break
         except urllib.error.HTTPError as exc:
             if exc.code == 429:              # rate-limited: back off hard, retry same day
-                time.sleep(45 * (attempt + 1))
+                time.sleep((300 if GENTLE else 45) * (attempt + 1))
                 continue
             print(f"{d}: HTTP {exc.code} — skipping this run", flush=True)
             return None
@@ -92,12 +105,18 @@ def run() -> int:
     todo.reverse()   # newest first: even a throttled partial pass banks the most current news
     print(f"gdelt crypto backfill: {len(done)} days covered, {len(todo)} to fetch (newest first)", flush=True)
     fetched = 0
+    misses = 0   # consecutive failed days: the limiter is telling us to go away
     with OUT.open("a") as fh:
         for d in todo:
             heads = fetch_day(d)
-            time.sleep(10.0)                 # GDELT free tier is touchy — go slow, this is a marathon
+            time.sleep(_pace())              # GDELT free tier is touchy — go slow, this is a marathon
             if heads is None:
+                misses += 1
+                if misses >= 5:
+                    print(f"5 consecutive refusals — ending this pass to cool off", flush=True)
+                    break
                 continue
+            misses = 0
             fh.write(json.dumps({"date": d.isoformat(), "headlines": heads}) + "\n")
             fh.flush()
             fetched += 1
@@ -119,6 +138,6 @@ if __name__ == "__main__":
             if remaining == 0:
                 print("archive GAPLESS — exiting", flush=True)
                 break
-            time.sleep(900)                  # 15 min rest between passes
+            time.sleep(random.uniform(1800, 3600) if GENTLE else 900)  # rest between passes
     else:
         sys.exit(run())
