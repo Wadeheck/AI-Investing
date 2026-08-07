@@ -1,0 +1,10 @@
+[Unit]
+Description=First Sunday of the month, 03:00 — hours of compute, so monthly and at night
+
+[Timer]
+OnCalendar=Sun *-*-01..07 03:00:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

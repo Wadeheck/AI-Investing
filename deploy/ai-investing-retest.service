@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly research gauntlet re-run (rejected ideas keep auditioning)
+
+[Service]
+Type=oneshot
+Nice=15
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/research_retest.py
+TimeoutStartSec=7h
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/research_retest_runs.log
+StandardError=inherit

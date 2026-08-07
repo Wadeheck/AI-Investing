@@ -420,7 +420,10 @@ BASE = dict(w_field=1.0, w_formula=0.6, entry=0.10, hop_decay=0.6, max_hops=3,
             event_n=3,                      # max concurrent event positions
             event_hold=3,                   # trading days held, then out
             event_lev=1.0,                  # leverage on the sleeve's own equity
+            event_lev_gate=-99.0,           # R38: gear ONLY when risk field >= this
+                                            # (-99 = ungated, the rejected R36 shape)
             event_short=0,                  # allow shorting bad-news shocks
+            event_short_winter=0,           # R39: shorts allowed only in crypto winter
             core_ma=100,                    # SPY moving-average lookback for the gate
             core_band=0.0,                  # hysteresis: enter winter below ma*(1-band), exit above ma
             core_defensive="",              # R34: where winter proceeds shelter — ""=cash,
@@ -856,7 +859,7 @@ def run_replay(ds, cfg, i0, i1):
         # crypto_trend adds a second winter signal: BTC under its 100d average.
         prev_imp = {s: asset_imp.get(s, {}).get("impact", 0.0) for s in symbols}
         winter = False
-        if cfg["crypto_trend"] and btc and i >= 100:
+        if (cfg["crypto_trend"] or cfg["event_short_winter"]) and btc and i >= 100:
             ma = close[btc].iloc[i - 100:i].mean()
             winter = not np.isnan(px[btc]) and px[btc] < ma
         # HARD RULE applies to the HODL core too — a resting stop checked over
@@ -1144,13 +1147,17 @@ def run_replay(ds, cfg, i0, i1):
                     im = shock.get(s2, {}).get("impact", 0.0)
                     if abs(im) < cfg["event_min"]:
                         continue
-                    if im < 0 and not cfg["event_short"]:
+                    if im < 0 and not (cfg["event_short"]
+                                       and (not cfg["event_short_winter"] or winter)):
                         continue
                     cands.append((abs(im), im, s2))
                 cands.sort(reverse=True)
                 room = int(cfg["event_n"]) - len(ebook["pos"])
+                # R38: leverage is a fair-weather tool — gear only while the risk
+                # field is at/above the gate; in stress the sleeve runs unlevered.
+                eff_lev = cfg["event_lev"] if risk >= cfg["event_lev_gate"] else 1.0
                 for _, im, s2 in cands[:room]:
-                    notional = min(cfg["event_lev"] * eeq / max(1, int(cfg["event_n"])),
+                    notional = min(eff_lev * eeq / max(1, int(cfg["event_n"])),
                                    ebook["cash"] * 0.9)
                     if notional < 500:
                         continue
@@ -1331,6 +1338,13 @@ ROUNDS = [
         "event_lev": [1.5, 2.0]}),
     ("R37 event sleeve shorts (react to bad-news shocks in both directions)", {
         "event_short": [1]}),
+    ("R38 conditional event leverage (R36 rejected ALL-WEATHER gearing; retry it "
+     "as a fair-weather tool — gear only while the risk field is calm, unlevered "
+     "in stress)", {
+        "event_lev": [1.5, 2.0], "event_lev_gate": [-0.1, 0.0]}),
+    ("R39 winter-gated event shorts (R37 rejected all-weather shorts; retry them "
+     "only inside crypto winter, when bad-news shocks have a tailwind)", {
+        "event_short": [1], "event_short_winter": [1]}),
     ("R33 stock-core winter gate (SPY under its 100d trims the core, recovery "
      "redeploys — the crypto machinery's equity mirror; requires stock_core>0 "
      "to matter)", {
@@ -1348,7 +1362,7 @@ NUMERIC = ("w_field", "w_formula", "entry", "hop_decay", "emotion_gain", "figure
            "trail_atr", "w_vix", "w_fx", "stock_core", "core_dstop", "tact_take",
            "w_lsr", "w_oi", "w_etf", "w_stab", "w_dvol", "w_cot", "hodl_trim",
            "w_wash", "pump_frac", "w_mhm", "vol_target", "core_trim",
-           "event_min", "event_lev")
+           "event_min", "event_lev", "event_lev_gate")
 
 
 def plateau_ok(grid, keys, sweep, win_vals, incumbent_obj):
