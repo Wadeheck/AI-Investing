@@ -10,8 +10,14 @@ Same brain, faster clock. Own capital, own book file, own rules:
     shock distribution; p99 is 0.11)
   - at most EVENT_N concurrent positions, equal slices of the sleeve's equity
   - exit after EVENT_HOLD trading days, or on the user's 10% hard stop
-  - LONG ONLY and UNLEVERED: the gauntlet rejected shorts (R37) and leverage
-    (R36) on their own merits — do not re-enable without re-testing
+  - LONG ONLY and UNLEVERED by default: the gauntlet rejected all-weather
+    shorts (R37) and leverage (R36) on their own merits. The CONDITIONAL
+    variants are wired but OFF: EVENT_LEV>1 gears entries only while the risk
+    field is >= EVENT_LEV_GATE (R38), EVENT_SHORT=1 allows bad-news shorts
+    only in crypto winter (R39, EVENT_SHORT_WINTER=0 removes the winter gate
+    — that shape was R37, rejected). Flip these envs ONLY after the monthly
+    gauntlet re-run ADOPTS the matching round; the sim and this code
+    deliberately share semantics so a verdict there is a license here.
   - exits never ask permission; entries respect the same approval setting as
     the other books when TRADE_APPROVAL is on (handled by the caller)
 
@@ -36,6 +42,11 @@ EVENT_N = int(os.environ.get("EVENT_N", "3"))
 EVENT_HOLD_DAYS = int(os.environ.get("EVENT_HOLD_DAYS", "2"))
 HARD_STOP = 0.10          # USER HARD RULE: max 10% loss on any position
 START_CASH = float(os.environ.get("EVENT_START_CASH", "100000"))
+# R38/R39 conditional variants — defaults are the adopted (R35) shape: off.
+EVENT_LEV = float(os.environ.get("EVENT_LEV", "1.0"))
+EVENT_LEV_GATE = float(os.environ.get("EVENT_LEV_GATE", "0.0"))
+EVENT_SHORT = os.environ.get("EVENT_SHORT", "0").lower() in ("1", "true", "yes")
+EVENT_SHORT_WINTER = os.environ.get("EVENT_SHORT_WINTER", "1").lower() in ("1", "true", "yes")
 
 
 def _asset(sym: str, exchange: str) -> Asset:
@@ -139,8 +150,11 @@ class EventSleeve:
 
     # -- one pass per engine cycle -------------------------------------------
     def cycle(self, shock_assets: dict, prices_by_sym: dict, notifier=None,
-              labels: dict | None = None, regime: str = "neutral") -> dict:
-        """shock_assets: brain state["shock_assets"] — FRESH impacts only."""
+              labels: dict | None = None, regime: str = "neutral",
+              risk: float = 0.0, winter: bool = False) -> dict:
+        """shock_assets: brain state["shock_assets"] — FRESH impacts only.
+        risk: the brain's live risk-field value (R38 leverage gate input).
+        winter: BTC under its 100d average (R39 shorts gate input)."""
         labels = labels or {}
         opened, closed = [], []
         held = self._state.setdefault("held", {})     # sym -> {entry, opened_iso, bars}
@@ -156,7 +170,8 @@ class EventSleeve:
             meta = held.get(pos.asset.symbol, {})
             if px <= 0 or pos.qty == 0:
                 continue
-            move = (px - pos.avg_price) / pos.avg_price
+            short = pos.qty < 0
+            move = ((pos.avg_price - px) if short else (px - pos.avg_price)) / pos.avg_price
             age = len([d for d in days if d >= meta.get("opened_day", today)]) - 1
             reason = None
             if move <= -HARD_STOP:
@@ -165,7 +180,8 @@ class EventSleeve:
                 reason = f"clock {age}d {move*100:+.1f}%"
             if reason:
                 pnl = (px - pos.avg_price) * pos.qty
-                self.broker.submit(Order(pos.asset, Side.SELL, abs(pos.qty),
+                self.broker.submit(Order(pos.asset, Side.BUY if short else Side.SELL,
+                                         abs(pos.qty),
                                          reason=f"event sleeve: {reason}"), px)
                 settled = (self.ledger.settle("event", pos.asset.symbol, move,
                                               held_days=age, exit_reason=reason)
@@ -183,7 +199,9 @@ class EventSleeve:
                     notifier.send(f"⚡️ *Event sleeve — closed {labels.get(pos.asset.symbol, pos.asset.symbol)}*"
                                   f" ({pos.asset.symbol}): {reason} (pretend money).")
 
-        # 2) entries — biggest fresh shocks above the floor, long only
+        # 2) entries — biggest fresh shocks above the floor. Long only by
+        # default; negative shocks become shorts only when EVENT_SHORT is on
+        # AND (winter, unless the winter gate is explicitly removed).
         open_n = len(self.broker.get_positions())
         room = max(0, EVENT_N - open_n)
         if room:
@@ -203,22 +221,30 @@ class EventSleeve:
             # right — it uses `pos.asset.symbol` — which is why exits worked while
             # entries doubled up, and why nothing looked broken.
             open_syms = {p.asset.symbol for p in self.broker.get_positions().values()}
+            shorts_ok = EVENT_SHORT and (winter or not EVENT_SHORT_WINTER)
             cands = []
             for sym, row in (shock_assets or {}).items():
                 im = float(row.get("impact", 0.0))
                 px = prices_by_sym.get(sym, 0.0)
-                if im < EVENT_MIN or px <= 0 or sym in open_syms or sym in held:
+                if px <= 0 or sym in open_syms or sym in held:
                     continue
-                cands.append((im, sym, row))
+                if im < EVENT_MIN and not (shorts_ok and im <= -EVENT_MIN):
+                    continue
+                cands.append((abs(im), im, sym, row))
             cands.sort(reverse=True)
             trust = self.ledger.size_multiplier("event", regime) if self.ledger else 1.0
-            for im, sym, row in cands[:room]:
-                notional = min(eq * trust / max(1, EVENT_N), self.broker.get_cash() * 0.9)
+            # R38: leverage is a fair-weather tool — gear only while the risk
+            # field holds at/above the gate; in stress the sleeve is unlevered.
+            eff_lev = EVENT_LEV if (EVENT_LEV > 1.0 and risk >= EVENT_LEV_GATE) else 1.0
+            for _, im, sym, row in cands[:room]:
+                notional = min(eq * trust * eff_lev / max(1, EVENT_N),
+                               self.broker.get_cash() * 0.9)
                 if notional < 500:
                     continue
                 px = prices_by_sym[sym]
                 o = self.broker.submit(
-                    Order(_asset(sym, self.settings.crypto_exchange), Side.BUY,
+                    Order(_asset(sym, self.settings.crypto_exchange),
+                          Side.BUY if im > 0 else Side.SELL,
                           notional / px, reason=f"event sleeve: fresh shock {im:+.3f}"), px)
                 if o.filled_qty:
                     held[sym] = {"entry": px, "opened_day": today, "shock": round(im, 4)}

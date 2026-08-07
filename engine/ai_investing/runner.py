@@ -613,9 +613,17 @@ class Runner:
                 px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
                 from ai_investing.learning.spine import regime_of
                 ra = ((context.get("brain") or {}).get("regime") or {}).get("risk_appetite")
+                # R38/R39 gate inputs, from data the engine already pulls every
+                # cycle/day: the live risk field, and BTC vs its 100d average.
+                winter = False
+                btc_bars = next((bars_by_key.get(a.key) or [] for a in self.assets
+                                 if a.symbol == "BTC/USD"), [])
+                if len(btc_bars) >= 100:
+                    closes = [b.close for b in btc_bars[-100:]]
+                    winter = btc_bars[-1].close < sum(closes) / len(closes)
                 ev_res = EventSleeve(self.settings).cycle(
                     context["brain"]["shock_assets"], px_by_sym, self.notifier,
-                    regime=regime_of(ra))
+                    regime=regime_of(ra), risk=float(ra or 0.0), winter=winter)
                 if ev_res["opened"] or ev_res["closed"]:
                     print(f"  [event sleeve] +{len(ev_res['opened'])} "
                           f"-{len(ev_res['closed'])} | equity ${ev_res['equity']:,.0f}")
