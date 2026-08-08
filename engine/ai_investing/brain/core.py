@@ -63,6 +63,22 @@ class Brain:
         new_heads, backlog = fresh[:30], max(0, len(fresh) - 30)
         self.last_new_headlines = new_heads
         events = events_mod.extract_events(new_heads, self.graph, self.settings) if new_heads else []
+
+        # YOUR VERDICTS, APPLIED BEFORE ANYTHING PROPAGATES (brain/consult.py).
+        # A reading you disagreed with sends a damped impulse into the graph, so
+        # the tap moves node activations, asset impacts, conviction and position
+        # size on THIS cycle — not in a weekly report. Returns the overrides the
+        # runner must tell you about; damping itself is deliberately silent.
+        self.consult_overrides: list[dict] = []
+        self.consult_asks: list[dict] = []
+        if events and getattr(cfg, "consult_enabled", True):
+            try:
+                from ai_investing.brain import consult
+                self.consult_overrides = consult.damp(events, self.settings)
+                self.consult_asks = consult.harvest(events, self.settings, new_heads)
+            except Exception as exc:      # degrade, never silently
+                print(f"  [consult] skipped: {type(exc).__name__}: {exc}")
+
         if events:
             self.store.save_events(events)
         self.store.mark_digested(new_heads)
@@ -219,6 +235,10 @@ class Brain:
         state["circular_financing"] = self.graph.detect_circular_financing()
         state["integrity_flags"] = getattr(self, "_integrity", {})
         state["shock_assets"] = getattr(self, "_shock_assets", {})   # fresh-shock read for the event sleeve
+        # what the runner must put in front of you: new readings to judge, and
+        # any reading that outvoted a previous 👎 (brain/consult.py)
+        state["consult_asks"] = getattr(self, "consult_asks", [])
+        state["consult_overrides"] = getattr(self, "consult_overrides", [])
         state["calibration"] = self.calibration_summary   # proof-of-reflexes status
         if emotions:
             state["emotion_field"] = dict(sorted(

@@ -407,6 +407,23 @@ class Runner:
 
         # Once a day (SGT): plain-language overview — strongest ripples, the
         # standing 6-month strategy (challenged, not rewritten), then the ideas.
+        # THE ONE THING THE BOT ASKS YOU (brain/consult.py). Not "approve this
+        # order" — "do you agree with this read of the news". Sent before the
+        # books trade, so a tap that lands quickly still shapes today's sizing.
+        # Overrides go FIRST: being outvoted is the more urgent message, and
+        # burying it under a new question is how it becomes invisible.
+        if context.get("brain"):
+            try:
+                from ai_investing.brain import consult
+                for notice in context["brain"].get("consult_overrides") or []:
+                    self.notifier.send(consult.override_text(notice),
+                                       consult.override_buttons(notice))
+                for rec in context["brain"].get("consult_asks") or []:
+                    self.notifier.send(consult.ask_text(rec), consult.ask_buttons(rec))
+                    print(f"  [consult] asked: {rec['claim'][:70]}")
+            except Exception as exc:
+                print(f"  [consult] send skipped: {type(exc).__name__}: {exc}")
+
         if context.get("brain"):
             # SAFE prices only. A guard-flagged tick stamped with today's date is
             # worse than a missing one: 2800.HK is the HK/CN benchmark, so a frozen

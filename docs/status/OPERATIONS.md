@@ -424,6 +424,58 @@ exits without asking. Stop-losses and take-profits **rest at the broker**
 they fire on an overnight gap or while the engine is down. Verified live on the
 paper account: submit → confirmed fill → stop and TP resting → cancel → exit.
 
+### What the bot asks you (inference consultation)
+
+Autonomy left a gap: with `TRADE_APPROVAL=false` the bot stopped asking anything
+about its *reasoning*, and the per-trade prompt it replaced was the wrong
+question anyway — by the time you see "buy NVDA for $4,200", the only honest
+answer is whether you trust the sizing formula. The judgement you can actually
+add is upstream, on the **leap** from news to meaning.
+
+So the one unprompted question is now:
+
+```
+🧠 Do you agree with this read?
+📰 What I saw:      2-3 headlines
+🔍 My read:         the inference it drew
+🤔 Resting on:      the assumption that inference needs
+                    [👍 agree] [😐 not sure] [👎 disagree]
+```
+
+A tap is a **weight, not a veto**, and it lands on the next cycle — it scales
+the impulse that reading sends into the graph, so node activations, asset
+impacts, conviction and position size all move with it.
+
+| tap | effect |
+|---|---|
+| 👍 agree | ×1.30 — positions resting on the read size up (risk limits still cap) |
+| 😐 not sure | ×0.85 — real scepticism, not silence |
+| 👎 disagree | ×0.45, and it may only be outvoted by fresh evidence past `max(0.60, 1.5 × the disputed conviction)` — **and you are told when that happens** |
+| 👎 again | blocked outright for the TTL; no override at any conviction |
+| no answer | ×1.00 — silence is neither consent nor dissent |
+
+Opposite-signed news on a damped node is **never** damped: that is the evidence
+that should change your mind, and silencing it would be the worst failure here.
+
+`/inferences` (or ⚖️ my reads) shows what's open, what you've weighted, and your
+running record. Unanswered reads join the `needs_you.py` digest — unlike a dead
+trade proposal they are live work, since they steer at full weight until you
+weigh in. Every ask, tap and override appends to `data/inference_log.jsonl`.
+
+Knobs: `CONSULT_ENABLED`, `CONSULT_ASK_BAR` (0.35), `CONSULT_MAX_ASKS` (2 per
+cycle — a hard cap, flooding you is the failure mode being fixed),
+`CONSULT_TTL_HOURS` (72).
+
+**Not calibrated yet.** `consult.trust_factor()` is the hook for learning how
+much your taps are worth from the log; it returns 1.0 (or an operator override in
+`data/inference_trust.json`) until a price-based grader exists. It is deliberately
+not faked: grading your objection against the brain's own field — which your
+objection already damped — is circular and would read as learning while
+manufacturing agreement with itself.
+
+Legacy per-trade approval still exists behind `TRADE_APPROVAL=true` (`/pending`),
+but is off the button menu.
+
 All four books were reset to **USD 10,000** on 2026-08-05 (`STARTING_CASH`,
 `INVEST_STARTING_CASH`, `EVENT_START_CASH`, `CRYPTO_START_CASH`). Retired state is
 in `data/retired/`; the brain, journal and learning ledger were kept.

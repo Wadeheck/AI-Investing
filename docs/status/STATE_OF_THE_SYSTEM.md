@@ -43,6 +43,9 @@ BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   ₿ crypto     paper, $10,000  (bear mode: 100% cash by design)
 
 AUTONOMY   TRADE_APPROVAL=false — all FOUR books enter and exit unattended (§4.17)
+YOUR SAY   the bot asks about its READ of the news, not its orders — 👍😐👎 on
+           the inference + assumption, which weights the impulse the next cycle
+           (brain/consult.py, /inferences, OPERATIONS "What the bot asks you")
 EXITS      stop-loss + take-profit rest AT the broker (MIT / LIT), verified live
 ```
 

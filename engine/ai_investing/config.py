@@ -198,6 +198,13 @@ class BrainConfig:
     # an empty list ("cash is a position") is legitimate output
     advise_min_conviction: float = field(default_factory=lambda: _get_float("BRAIN_ADVISE_MIN_CONVICTION", 0.10))
     credibility_threshold: float = field(default_factory=lambda: _get_float("BRAIN_CREDIBILITY_THRESHOLD", 0.35))
+    # inference consultation (brain/consult.py): the bot asks you to judge its
+    # READ of the news, not its orders. Raise the bar or drop the cap to be
+    # asked less; set the cap to 0 to switch the channel off entirely.
+    consult_enabled: bool = field(default_factory=lambda: _get_bool("CONSULT_ENABLED", True))
+    consult_ask_bar: float = field(default_factory=lambda: _get_float("CONSULT_ASK_BAR", 0.35))
+    consult_max_asks: int = field(default_factory=lambda: _get_int("CONSULT_MAX_ASKS", 2))
+    consult_ttl_hours: float = field(default_factory=lambda: _get_float("CONSULT_TTL_HOURS", 72))
     max_hops: int = field(default_factory=lambda: _get_int("BRAIN_MAX_HOPS", 3))
     decay: float = field(default_factory=lambda: _get_float("BRAIN_DECAY", 0.6))
 

@@ -207,6 +207,12 @@ Return ONLY JSON:
                    POSITIVE — "direction" already carries the sign>,
       "magnitude": <0..1, how big a deal this is if true>,
       "confidence": <0..1, how sure you are of the reading>,
+      "assumption": "<one line: the thing that must be TRUE for your reading to hold,
+                   stated so a non-expert can disagree with it. Not a hedge and not a
+                   restatement of the news — the load-bearing belief. For an OPEC cut
+                   read as 'less oil supply': 'that the announced cuts are actually
+                   delivered, and demand does not soften to meet them'. This is shown
+                   to the user, who judges the LEAP rather than the trade>",
       "manipulation_likelihood": <0..1, odds this is hype/planted/pump material rather
                                   than organic verified news>,
       "emotion": "<dominant crowd emotion: {", ".join(EMOTIONS)}>",
@@ -545,6 +551,7 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
         if not isinstance(ev, dict):
             continue
         ev.setdefault("summary", ev.get("headline", ""))
+        ev["assumption"] = str(ev.get("assumption") or "")[:400]   # shown to the user in consult asks
         ev["nodes"] = [n for n in (ev.get("nodes") or []) if n in graph.nodes]
         ev["polarity"] = _polarity_of(ev)
         ev["magnitude"] = max(0.0, min(1.0, float(ev.get("magnitude", 0.0) or 0.0)))

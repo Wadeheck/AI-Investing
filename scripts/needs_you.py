@@ -111,6 +111,28 @@ def collect() -> list[dict]:
         except (OSError, json.JSONDecodeError):
             pass
 
+    # 1b. Inference reads awaiting 👍😐👎. Unlike a dead trade proposal, an
+    #     unanswered read is ALWAYS live work: it is already steering money at
+    #     full weight until you weigh in, so silence here has a cost.
+    try:
+        blob = json.loads((ROOT / "data" / "inferences.json").read_text())
+        now = datetime.now(timezone.utc)
+        for r in blob.get("inferences", []):
+            if r.get("verdict"):
+                continue
+            try:
+                if datetime.fromisoformat(r["expires"]) <= now:
+                    continue
+            except (KeyError, ValueError):
+                pass
+            asks.append({
+                "key": f"inference:{r['id']}",
+                "text": f"*Do you agree with this read?* {r.get('claim', '')[:120]}",
+                "how": "tap ⚖️ my reads, or /inferences",
+            })
+    except (OSError, json.JSONDecodeError):
+        pass
+
     # 2. X capture. Needs an interactive browser session because the no-API
     #    constraint rules out the alternative — the one channel that cannot
     #    self-heal, so it must be asked for explicitly.

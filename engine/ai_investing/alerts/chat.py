@@ -23,7 +23,9 @@ import urllib.request
 HELP = """*AI-Investing chat* — talk to your engine.
 
 /advise — the current top-10 trade list, with reasons
-/pending — entries waiting for your approve/skip
+/inferences — my reads of the news awaiting your 👍😐👎, what
+   you've already weighted, and your running record
+/pending — legacy per-trade approvals (only if TRADE_APPROVAL=true)
 /brain — regime, emotions, mood, what's ringing in the field
 /portfolio — equity, positions, you-vs-formula
 /assets — one-glance totals: cash + holdings per book, nothing else
@@ -33,6 +35,11 @@ HELP = """*AI-Investing chat* — talk to your engine.
 /block SYM · /unblock SYM — never / again trade a symbol
 /stance aggressive|normal|cautious|defensive|cash
 /help — this menu
+
+The one thing I ask you unprompted is whether you agree with a READ
+of the news — headlines, my inference, the assumption it rests on.
+👍 sizes it up, 😐 and 👎 damp it, 👎 twice blocks it outright. I can
+only outvote a 👎 on much stronger evidence, and I'll say when I do.
 
 Most replies come with tap buttons, so you rarely need to type
 commands. Anything else: just ask in plain words — I'll answer from
@@ -155,7 +162,7 @@ class ChatBot:
     # -- command handlers ---------------------------------------------------------
     MENU = [[("📊 advise", "c:/advise"), ("🧠 brain", "c:/brain")],
             [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")],
-            [("💰 assets", "c:/assets"), ("⏳ pending approvals", "c:/pending")]]
+            [("💰 assets", "c:/assets"), ("⚖️ my reads", "c:/inferences")]]
 
     def handle(self, text: str) -> tuple[str, list | None]:
         """Returns (message, inline_buttons)."""
@@ -167,6 +174,8 @@ class ChatBot:
             return self._fmt_advice()
         if low.startswith("/pending"):
             return self._fmt_pending()
+        if low.startswith(("/inferences", "/reads", "/inference")):
+            return self._fmt_inferences()
         if low.startswith("/brain"):
             return self._fmt_brain(), self.MENU
         if low.startswith("/assets") or low.startswith("/cash"):
@@ -198,6 +207,9 @@ class ChatBot:
             return self._apply_view(f"/block {rest}"), None
         if kind in ("ap", "rj"):
             return self._decide_proposal(rest, approved=(kind == "ap")), None
+        if kind in ("ia", "im", "ix"):
+            return self._decide_inference(
+                rest, {"ia": "agree", "im": "neutral", "ix": "disagree"}[kind]), None
         return "That button confused me — try /help.", self.MENU
 
     def _book(self):
@@ -213,6 +225,77 @@ class ChatBot:
                     "Executes on the next engine cycle (sized fresh at market). "
                     "_Risk & safety limits still cap it._")
         return f"❌ Skipped {p['symbol']} — I won't re-ask until this idea expires."
+
+    # -- inference consultation (brain/consult.py) ---------------------------
+    def _decide_inference(self, iid: str, verdict: str) -> str:
+        """Confirm the tap by saying what it just DID. A reply of 'noted' is how
+        a steering control starts feeling like a survey."""
+        from ai_investing.brain import consult
+        book = consult.ConsultBook(self.settings)
+        rec = book.decide(iid, verdict)
+        if rec is None:
+            return ("That read already expired — /inferences shows what's live. "
+                    "_An expired read carries no weight either way._")
+        w = consult.weight_for(rec, consult.trust_factor(self.settings))
+        claim = rec["claim"][:120]
+        if w == consult.BLOCKED:
+            return (f"🚫 *Blocked* — that's your second 👎 on _{claim}_\n\n"
+                    f"It now contributes *nothing* for the next "
+                    f"{book.ttl_hours:g}h, and no amount of fresh evidence can "
+                    "override it. Positions already resting on it get no new size.")
+        if verdict == "agree":
+            return (f"👍 Noted and *weighted up ×{w:.2f}* — _{claim}_\n\n"
+                    "Everything downstream of this read sizes bigger from the next "
+                    "cycle. _Risk and safety limits still cap it._")
+        if verdict == "neutral":
+            return (f"😐 *Weighted down ×{w:.2f}* — _{claim}_\n\n"
+                    "Not a veto: your scepticism shrinks it, the reading still counts. "
+                    "_'Not sure' is a real signal here, not a shrug._")
+        bar = max(consult.OVERRIDE_FLOOR,
+                  float(rec.get("conviction", 0.0)) * consult.OVERRIDE_MULT)
+        return (f"👎 *Damped ×{w:.2f}* — _{claim}_\n\n"
+                f"Effective from the next cycle: every position resting on this read "
+                f"sizes down, and weak ones stop clearing the bar.\n"
+                f"I'll only go against you if fresh evidence pushes this past "
+                f"*{bar:.2f}* conviction — and I'll tell you when it does. "
+                "_Tap 👎 again on that message to block it outright._")
+
+    def _fmt_inferences(self) -> tuple[str, list | None]:
+        """/inferences — what's open, what you've damped, and your running record."""
+        from ai_investing.brain import consult
+        book = consult.ConsultBook(self.settings)
+        book.prune()
+        trust = consult.trust_factor(self.settings)
+        live = book.live()
+        lines, buttons = [], []
+
+        openq = [r for r in live if not r.get("verdict")]
+        if openq:
+            lines.append("🧠 *Waiting on your read:*")
+            for r in openq:
+                lines.append(f"\n• _{r['claim'][:160]}_\n  🤔 {r['assumption'][:140]}")
+                buttons.append([("👍 agree", f"ia:{r['id']}"),
+                                ("😐 not sure", f"im:{r['id']}"),
+                                ("👎 disagree", f"ix:{r['id']}")])
+        else:
+            lines.append("🧠 Nothing waiting on your read.")
+
+        decided = [r for r in live if r.get("verdict")]
+        if decided:
+            lines.append("\n⚖️ *Currently weighted by you:*")
+            for r in decided:
+                w = consult.weight_for(r, trust)
+                tag = "🚫 blocked" if w == consult.BLOCKED else f"×{w:.2f}"
+                ov = f" · outvoted {r['overrides']}×" if r.get("overrides") else ""
+                lines.append(f"• {tag}{ov} — _{r['claim'][:120]}_")
+
+        c = book.record()
+        lines.append(
+            f"\n📊 *Your record:* {c['asked']} asked · 👍{c['agree']} 😐{c['neutral']} "
+            f"👎{c['disagree']} · {c['blocked']} blocked · outvoted {c['overrides']}×")
+        if trust != 1.0:
+            lines.append(f"_Your taps currently pull ×{trust:.2f} of standard._")
+        return "\n".join(lines), (buttons or self.MENU)
 
     def _fmt_pending(self) -> tuple[str, list | None]:
         pend = self._book().pending()
