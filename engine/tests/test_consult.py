@@ -132,6 +132,23 @@ def test_harvest_asks_only_about_strong_confident_uncovered_reads():
         assert again == [], "one live question per node+direction — never ask twice"
 
 
+def test_the_bar_is_low_enough_that_real_news_actually_asks():
+    """The channel must not ship MUTE — the one failure indistinguishable from
+    working. `impulse` is polarity x magnitude x credibility x confidence, four
+    sub-1 terms, so it lands far lower than a naive 'conviction in [-1,1]' guess:
+    the first bar here was 0.35 and only EIGHT of 2,564 real events cleared it in
+    a month. This pins the bar against a plainly notable story — a confident,
+    well-sourced, materially-sized event — which must always be askable.
+    """
+    notable = 1.0 * 0.6 * 0.7 * 0.8          # magnitude x credibility x confidence
+    assert notable >= consult.ASK_BAR, (
+        f"a clearly notable event scores {notable:.3f} but the bar is "
+        f"{consult.ASK_BAR} — the bot would never ask anything")
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _settings(tmp)
+        assert consult.harvest([_event(-notable)], s), "and it must actually file"
+
+
 def test_harvest_respects_the_per_cycle_cap():
     with tempfile.TemporaryDirectory() as tmp:
         s = _settings(tmp)

@@ -202,7 +202,10 @@ class BrainConfig:
     # READ of the news, not its orders. Raise the bar or drop the cap to be
     # asked less; set the cap to 0 to switch the channel off entirely.
     consult_enabled: bool = field(default_factory=lambda: _get_bool("CONSULT_ENABLED", True))
-    consult_ask_bar: float = field(default_factory=lambda: _get_float("CONSULT_ASK_BAR", 0.35))
+    # 0.20 measured against the real impulse distribution, not guessed — see the
+    # ASK_BAR note in brain/consult.py. ~2.6 asks per active day; raise to be
+    # asked less (0.25 -> ~1.9/day), lower to be asked more (0.15 -> ~3.9/day).
+    consult_ask_bar: float = field(default_factory=lambda: _get_float("CONSULT_ASK_BAR", 0.20))
     consult_max_asks: int = field(default_factory=lambda: _get_int("CONSULT_MAX_ASKS", 2))
     consult_ttl_hours: float = field(default_factory=lambda: _get_float("CONSULT_TTL_HOURS", 72))
     max_hops: int = field(default_factory=lambda: _get_int("BRAIN_MAX_HOPS", 3))

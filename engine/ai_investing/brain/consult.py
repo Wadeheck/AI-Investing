@@ -70,7 +70,19 @@ OVERRIDE_MULT = 1.5
 OVERRIDE_FLOOR = 0.60
 
 DEFAULT_TTL_H = 72.0         # a market read goes stale in about three days
-ASK_BAR = 0.35               # |impulse| below this never moves enough to be worth a ping
+# MEASURED, NOT GUESSED (2026-08-08). The first value here was 0.35, reasoned
+# from "impulse is roughly a conviction in [-1,1]". It is not: impulse is
+# polarity x magnitude x credibility x confidence, a product of four sub-1 terms,
+# so it piles up near zero. Against 2,564 real events in brain.db the whole
+# 30-day distribution was p50 0.022, p99 0.277, max 0.562 — EIGHT events cleared
+# 0.35 in a month, and none at all in the last four days. The channel would have
+# shipped mute, which is the one failure mode indistinguishable from working.
+#
+# Replayed over the real stream with covered()/TTL dedup applied, asks per active
+# day come out: 0.10 -> 5.4   0.15 -> 3.9   0.20 -> 2.6   0.25 -> 1.9
+# 0.20 sits where the user asked to be: a couple a day, none on quiet days, more
+# when the news is genuinely busy. The confidence gate below trims it further.
+ASK_BAR = 0.20               # |impulse| below this never moves enough to be worth a ping
 ASK_MIN_CONFIDENCE = 0.50    # do not ask you to ratify a guess the bot isn't sure of
 MAX_ASKS_PER_CYCLE = 2       # a hard cap: flooding you IS the failure mode being fixed
 

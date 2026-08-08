@@ -462,7 +462,7 @@ running record. Unanswered reads join the `needs_you.py` digest — unlike a dea
 trade proposal they are live work, since they steer at full weight until you
 weigh in. Every ask, tap and override appends to `data/inference_log.jsonl`.
 
-Knobs: `CONSULT_ENABLED`, `CONSULT_ASK_BAR` (0.35), `CONSULT_MAX_ASKS` (2 per
+Knobs: `CONSULT_ENABLED`, `CONSULT_ASK_BAR` (0.20 — measured: ~2.6 asks per active day; 0.25 → ~1.9, 0.15 → ~3.9), `CONSULT_MAX_ASKS` (2 per
 cycle — a hard cap, flooding you is the failure mode being fixed),
 `CONSULT_TTL_HOURS` (72).
 
