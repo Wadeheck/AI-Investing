@@ -134,6 +134,7 @@ list of what is still broken — read that one first if something is wrong now.
 | 4.20 | 15 false pages in 90 min; the rate limit had never worked | ✅ keyed on identity; shape-aware backstop; rate-based projection |
 | 4.21 | A test's verdict depended on the live crypto market | ✅ history follows `settings`; 7 read-only loaders remain in §4A |
 | 4.22 | The "proposed graph edges" ask counted the trade audit log | ✅ repointed at llm edges, with review, tombstones and a rate; the 35×-spec proposal rate is now §4A |
+| 4.23 | 8 of 9 live orders rejected — limit prices sent off-tick | ✅ `snap_to_tick`, proven against the venue; the submitted price is now journalled |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -1002,6 +1003,68 @@ think I can just reply via Telegram."* All three doubts were correct.
   had shipped without an answer for a week, because the rule was applied to the alert's
   wording and never to whether the action it named was possible.
 
+### 4.23 Eight live orders were lost to a third decimal *(2026-08-10)*
+
+**Found by the user asking a question no check asks** — *"you sure you have gathered
+enough data and insight to make the improvement?"* — after an earlier trace had
+proposed this fix on circumstantial evidence. The challenge was correct: the
+evidence was suggestive, and the change was to a live money path.
+
+- **What.** `brokers/live.py` submitted `round(order.limit_price, 3)`. US equities
+  trade on a **$0.01** tick, so a third decimal is an illegal price and Longbridge
+  rejects it outright with `code=602035`, *"Wrong bid size, please change the price"*.
+  A limit order was therefore legal only when its third decimal happened to be
+  zero — about **one attempt in ten**.
+- **Scale.** Every live order the engine has ever placed: **nine attempts,
+  eight rejected, one filled.** Between 2026-08-05 and 08-10 the live book holds
+  a single AAPL share, and that fill was not the system working — it was the tenth
+  roll of a ten-sided die. The most recent loss was USO on 08-10, hours before the
+  cause was found.
+- **Why it survived.** The rejections *looked* explained. The journal recorded
+  quantities like `1.3192` against an error saying "Wrong bid **size**", which reads
+  as an obvious fractional-share problem — and `submit()` already does
+  `qty = int(order.qty)`, so all nine attempts sent exactly **1 share**. Quantity was
+  never the difference. The journal was recording the *request* quantity in the same
+  column as the *fill* quantity, and the plausible reading of a real error message
+  pointed at the wrong cause for five days.
+- **Why it could not be diagnosed.** `record_order` stored the **fill** price
+  (`0.0` on a reject) and nothing about the request. **The submitted price — the one
+  number that identifies this — existed nowhere.** A rejected order you cannot
+  reconstruct is an order you cannot learn from.
+- **Settled by asking the venue, not by reasoning.** `scripts/probe_tick_size.py`
+  sent orders identical in symbol, side, quantity and second, differing only in the
+  third decimal:
+
+  ```
+  AAPL.US BUY 1 @ 276.09   -> ACCEPTED
+  AAPL.US BUY 1 @ 276.093  -> REJECTED 602035
+  AAPL.US BUY 1 @ 276.09   -> ACCEPTED   (276.093 through snap_to_tick)
+  ```
+
+  The third is the fix answering the same venue that rejected the second. All rested
+  10% below market so none could fill, all were cancelled, and the account still held
+  exactly the one share it started with.
+- **Fix.** `snap_to_tick()` rounds onto the instrument's real grid: a penny for US
+  (a hundredth of a cent under $1, where a penny would be a 2.5% jump), the HKEX
+  spread table for HK, SGX minimum bid sizes for SG, and a penny for anything
+  unrecognised — deliberately the **coarser** default, because too coarse shifts a
+  price by one tick while too fine is what cost eight orders. A buy rounds down and
+  a sell rounds up, so snapping can only ever make an order *less* likely to fill,
+  never quietly raise what we agreed to pay. `Order` now carries
+  `submitted_price`/`submitted_qty`, stamped by the **adapter** before the API call
+  so the exception path records the request too, and `journal.orders` gains
+  `req_qty`, `submitted_qty`, `submitted_price`, `order_type`, `limit_price`.
+- **Lesson.** §4.15 said nine of eleven defects were in code that had never been
+  executed. This one had been executed nine times and *still* hid, because the error
+  message was plausible enough to stop the search. **A real error message pointing at
+  the wrong cause is worse than no message**, and the only way through it was to stop
+  theorising and ask the venue a question with one variable in it.
+- **Second lesson.** The probe took minutes and the wrong theory had stood for five
+  days. Where a live counterparty can be asked directly, ask it — and build the
+  asking into the repo (`probe_tick_size.py` refuses any channel but
+  `lb_papertrading`, does nothing without `--send`, cancels in a `finally`, and
+  re-lists open orders afterwards) so the next venue-side puzzle is cheap too.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1011,7 +1074,8 @@ and the register had drifted **13 commits** behind reality.
 | Open | Detail | Risk today |
 |---|---|---|
 | **The digester proposes edges 35× faster than the spec assumes** | `DIGESTION_SPEC.md` §A10 justifies applying llm edges automatically because *"a bad proposal is damped by the cap"* and *"Rare: expect ≤1 per week"*. Actual: 96 in 7 days, 35/week over 28. §4.22 built the measurement and the review, which is the symptom; the cause is the digester's proposal bar, and setting it is a judgement about how much self-wiring is wanted — not a bug to be quietly patched. **Unreviewed backlog: 140.** | LLM wiring is 18% of the graph and grows ~35/week against a fixed 656 curated edges. Nothing can grade these (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), so the cap and human review are the whole control surface. Left as it is, self-added wiring outnumbers curated wiring inside a year. |
-| **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
+| **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | **Now measured.** Of 33 distinct conviction-long calls (hit 0.742, avg +2.37% over 5d), 21 were never held in any book, averaging +3.01%. The largest were `2899.HK` (+10.6%, +10.0%, +8.5%) and `O39.SI` (+6.0%, +6.0%, +5.2%, +4.1%) — all correct, all blocked by this rule. |
+| **The adviser predicts well; the books do not trade it** | Graded calls come from the brain's adviser (`brain/store.py`, `advice_log`); the books trade the formula engine's decisions (`runner.py`, `journal.db decisions`). They are separate systems and they disagree — `GLD` was a conviction long at +7.2% while the trading book scored it short/flat all week. Deduped: **long calls hit 0.672 (n=102), short/avoid hit 0.260 (n=129) with the tape +3.20% against them.** | The 0.404 headline blends a genuinely skilled long model with an actively anti-predictive short model, and the accurate signal is not the one wired to the money. A judgement call, not a bug — which is why it is here and not fixed. |
 | ~~A fourth announce-the-state instance~~ | **CLOSED §4.17.** All 24 alert sites swept and classified; the fourth (news/context error) is fixed. | — |
 | ~~Tests inherit the ambient `.env`~~ | **CLOSED §4.19.** A test process no longer loads `.env` at all, detected automatically. | — |
 | **7 live-path loaders hardcode `data/`** | `data/{calendar_events,comps,estimates,fundamentals_history,ownership,value_scanner}.py` and `scalp/live.py` build their path from `__file__`, so no caller or test can redirect them (§4.21). All are read-only reference loaders that decide no trade, which is why they were not swept in one change. | A test touching them reads live data and can flip with the market — the §4.21 failure mode. `test_data_path_isolation.py` pins the list so it cannot grow. |
