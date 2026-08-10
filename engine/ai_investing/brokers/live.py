@@ -41,6 +41,17 @@ def tick_size(symbol: str, price: float) -> float:
     return 0.0001 if price < 1.0 else 0.01
 
 
+def _tick_decimal(price: float, symbol: str, side: Side):
+    """snap_to_tick as a Decimal ready for the API, with no trailing-zero noise.
+
+    One helper for all three order paths — entry, stop and take-profit — because
+    the alternative is what actually happened: the tick rule was fixed in submit()
+    and left wrong in the two that protect the position."""
+    from decimal import Decimal
+    px = snap_to_tick(price, symbol, side)
+    return Decimal(f"{px:.4f}".rstrip("0").rstrip("."))
+
+
 def snap_to_tick(price: float, symbol: str, side: Side) -> float:
     """Round a limit price onto a legal tick, never becoming more aggressive.
 
@@ -346,8 +357,8 @@ class LongbridgeBroker(BrokerAdapter):
                 # limit order only got through when the third decimal happened to
                 # be zero — about one attempt in ten, which is exactly the record:
                 # eight rejects and one fill between 2026-08-05 and 08-10.
-                px = snap_to_tick(order.limit_price, self._symbol(order.asset), order.side)
-                kwargs["submitted_price"] = Decimal(f"{px:.4f}".rstrip("0").rstrip("."))
+                kwargs["submitted_price"] = _tick_decimal(
+                    order.limit_price, self._symbol(order.asset), order.side)
             else:
                 kwargs["order_type"] = OrderType.MO
             # Stamped BEFORE the call, so a rejection carries what was sent. The
@@ -417,13 +428,27 @@ class LongbridgeBroker(BrokerAdapter):
                 side=OrderSide.Sell if side is Side.SELL else OrderSide.Buy,
                 order_type=OrderType.MIT,
                 submitted_quantity=Decimal(str(q)),
-                trigger_price=Decimal(str(round(stop_price, 3))),
+                # Same tick rule as submit(). §4.23 was fixed in ONE of the three
+                # places that price an order, which is §4.7's lesson wearing new
+                # clothes — and this is the worst of the three to get wrong: a
+                # rejected entry costs an opportunity, a rejected STOP leaves a
+                # position open with nothing under it. Snapping a protective sell
+                # stop rounds the trigger UP, i.e. a tick earlier, so the error is
+                # always on the side of more protection.
+                trigger_price=_tick_decimal(stop_price, self._symbol(asset), side),
                 time_in_force=TimeInForceType.GoodTilCanceled)
             o = Order(asset, side, float(q), reason="exchange-stop")
             o.id = str(getattr(resp, "order_id", ""))
             o.status = OrderStatus.PENDING      # resting until touched — correct here
             return o
         except Exception as exc:
+            # Kept on the adapter so the CALLER can journal it. The runner records
+            # only `exchange_stop_unsupported` + the symbol, so when the live
+            # AAPL stop failed on 2026-08-05 the reason went to stdout and died
+            # with the next log rotation — leaving a live position with nothing
+            # under it and no way to find out why. An unprotected position is the
+            # last thing that should fail quietly.
+            self.last_stop_error = f"{type(exc).__name__}: {exc}"
             print(f"  !! exchange stop REJECTED for {asset.symbol} @ {stop_price}: {exc}")
             return None
 
@@ -441,7 +466,7 @@ class LongbridgeBroker(BrokerAdapter):
         q = int(qty)
         if q <= 0 or limit_price <= 0:
             return None
-        px = Decimal(str(round(limit_price, 3)))
+        px = _tick_decimal(limit_price, self._symbol(asset), side)   # see place_stop
         try:
             resp = self.ctx.submit_order(
                 symbol=self._symbol(asset),

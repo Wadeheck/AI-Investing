@@ -118,6 +118,65 @@ worse. Wait for the limit to reset; the books hold at cost until it does. Only
 investigate if the breaker halted, or if `stale_marks` stays non-zero for hours
 after the guard stops flagging.
 
+## When the next LIVE order goes out — what to check *(added 2026-08-11)*
+
+Live entries are rare: **nine attempts in the project's life, eight rejected**
+(§4.23 — limit prices sent off-tick, fixed and proven against the venue on
+2026-08-10). The fix has been verified with a probe but **has never been
+exercised by the engine's own order path**, so the next real order is the test.
+Nothing needs doing in the meantime; this is what to look at when it happens.
+
+```bash
+# 1. did it get filled, and what did we actually send?
+cd ~/Projects/AI-Investing && .venv/bin/python -c "
+import sqlite3; c=sqlite3.connect('data/journal.db')
+for r in c.execute('SELECT ts,symbol,side,status,req_qty,submitted_qty,'
+                   'submitted_price,order_type,limit_price,price,reason '
+                   'FROM orders WHERE live=1 ORDER BY ts DESC LIMIT 5'):
+    print(r)"
+```
+
+**1. `submitted_price` must be on a legal tick.** This column is new (§4.23); it
+is the number that was missing for five days. For a US name it must have **at
+most two decimals**. A third decimal means `snap_to_tick` has a gap — capture the
+row before anything overwrites it.
+
+**2. `status` should be `filled`, not `rejected`.** If it is rejected, read
+`reason`. `code=602035 "Wrong bid size"` means the tick fix did not hold. Any
+*other* code is a new failure and should be treated as unknown, not assumed
+related — that assumption is what cost five days last time.
+
+**3. Then check the STOP actually rested.** This is the one that matters most,
+and the one currently known to be broken:
+
+```bash
+.venv/bin/python -c "
+import os,sys; sys.path.insert(0,'engine'); import ai_investing.config
+from longport.openapi import Config, TradeContext
+t=TradeContext(Config.from_apikey(app_key=os.environ['LONGPORT_APP_KEY'],
+  app_secret=os.environ['LONGPORT_APP_SECRET'],
+  access_token=os.environ['LONGPORT_ACCESS_TOKEN']))
+for o in t.today_orders():
+    print(o.symbol, o.side, o.order_type, o.quantity, o.price, o.status)"
+```
+
+You want a resting `MIT` (stop) and usually a `LIT` (take-profit) alongside the
+fill. **As of 2026-08-11 the live AAPL position has neither** — `place_stop`
+failed on 2026-08-05, the runner recorded only `exchange_stop_unsupported` with
+no reason, and the explanation went to stdout and died in a log rotation. The
+stop price that day (282.38) was tick-legal, so **that failure was something
+else and its cause is still unknown**. Both paths now snap to the tick and the
+runner now journals the reason and prints `!! NO VENUE STOP`, so the next
+failure will say why. Look for that line.
+
+**4. The engine log** shows `STOP-SET <sym> @ $X (-Y%, resting at the venue)` on
+success. Its absence after a fill is the tell.
+
+> Grep `exchange_stop_unsupported` in `journal.db events` for the history. An open
+> position with no venue stop is a risk state, not a footnote: the engine's own
+> cycle stop still applies, but it only fires when a cycle runs, which is exactly
+> the protection an overnight gap defeats.
+
 ## What will actually message you
 
 Every alert must answer *"what do I do about this?"*. Anything that does not is

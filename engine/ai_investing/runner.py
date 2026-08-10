@@ -934,7 +934,16 @@ class Runner:
             print(f"  STOP-SET  {asset.symbol} @ ${stop_price:,.2f} "
                   f"(-{stop_frac:.1%}, resting at the venue)")
         else:
-            self.journal.record_event("exchange_stop_unsupported", asset.symbol)
+            # WITH THE REASON. "unsupported" alone is what this recorded when the
+            # live AAPL stop failed on 2026-08-05, and the position has sat
+            # unprotected since with no record of why.
+            why = getattr(self.broker, "last_stop_error", "") or "no reason reported"
+            self.journal.record_event(
+                "exchange_stop_unsupported",
+                f"{asset.symbol} @ {stop_price:.4f}: {why}"[:400])
+            # An open position with no stop is a risk state, not a footnote.
+            print(f"  !! NO VENUE STOP for {asset.symbol} — position is unprotected "
+                  f"at the venue ({why})")
 
         # TAKE-PROFIT, resting too. Without it the exchange holds only the downside
         # leg, so a gap UP between cycles is left entirely to the next poll — the

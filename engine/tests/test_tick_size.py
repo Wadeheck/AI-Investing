@@ -94,6 +94,33 @@ def test_every_snapped_price_is_legal_across_a_sweep():
             px *= 1.7
 
 
+def test_all_three_order_paths_share_the_tick_rule():
+    """The entry, the stop and the take-profit each price an order, and §4.23 was
+    first fixed in only ONE of them. A rejected entry costs an opportunity; a
+    rejected STOP leaves a position open with nothing under it, so the two that
+    protect the book must not be able to drift from the one that opens it."""
+    import inspect
+
+    from ai_investing.brokers import live as mod
+
+    # Comments in this file deliberately quote the old broken expression, so
+    # strip them before looking: a text search would match the explanation of the
+    # bug and report the bug itself.
+    code = "\n".join(l.split("#", 1)[0] for l in inspect.getsource(mod).splitlines())
+    assert "Decimal(str(round(" not in code, "a price is still being rounded blind"
+    for fn in ("submit", "place_stop", "place_take_profit"):
+        body = inspect.getsource(getattr(mod.LongbridgeBroker, fn))
+        assert "_tick_decimal" in body, f"{fn} does not snap its price to a tick"
+
+
+def test_a_protective_stop_errs_toward_more_protection():
+    """A sell stop snaps UP — a tick earlier, never a tick later."""
+    assert snap_to_tick(281.987, "AAPL.US", SELL) == 281.99
+    assert snap_to_tick(281.982, "AAPL.US", SELL) == 281.99
+    # and a buy-to-cover stop on a short snaps DOWN, same logic mirrored
+    assert snap_to_tick(281.987, "AAPL.US", BUY) == 281.98
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
