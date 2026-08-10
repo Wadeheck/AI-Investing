@@ -143,12 +143,16 @@ def main() -> int:
     a = age_h(D("crypto_history", "fear_greed_daily.json"))
     ok &= row("market numbers (daily)", a is not None and a < 30,
               f"last refresh {a:.1f}h ago" if a else "missing")
-    # X capture needs an interactive browser session (no API, by instruction),
-    # so it CANNOT self-heal like every other channel. Reported, never fatal --
-    # a channel that only a human can refill must not make the health check cry
-    # wolf every day, or the real failures get lost in it.
+    # X capture no longer needs a human at the keyboard: `3e0c77a` moved it to a
+    # headless Playwright harvest on a jittered 4h timer, driven by the session
+    # cookies in data/x_cookies.json. Still reported and still never fatal, but
+    # for a different reason than before -- the cookies expire and only a real
+    # browser can refresh them, so the channel degrades to manual rather than
+    # dying. Labelled "(auto)" because the label is what a person reads at a
+    # glance, and calling an automated channel "manual" invites someone to go
+    # looking for a task that no longer exists.
     a = age_h(D("news_archive_x.jsonl"))
-    row("X capture (manual)", a is not None and a < 30,
+    row("X capture (auto, 4h)", a is not None and a < 30,
               f"last capture {a:.1f}h ago" if a else "missing")
     # ...but freshness of the FILE says nothing about whether the capture reached
     # the brain, and for the life of the project it did not: the archive was

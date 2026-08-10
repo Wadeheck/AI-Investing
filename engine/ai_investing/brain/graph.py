@@ -76,6 +76,16 @@ class Edge:
     note: str = ""
     proposed_by: str = ""        # event summary that proposed it (llm edges)
     proposed_at: str = ""
+    reviewed_at: str = ""        # ISO ts a human ruled on this llm edge and KEPT it.
+                                 # Deliberately does NOT raise confidence past the
+                                 # 0.6 cap: a human "keep" says the mechanism is
+                                 # plausible, not that it predicts. Only evidence
+                                 # may promote wiring (LEARNING.md §2), and the
+                                 # calibrator cannot reach these edges at all —
+                                 # none terminates on a tradable symbol, so
+                                 # `_score_pair` has no price series to score.
+                                 # Review therefore clears the QUEUE, never the bar.
+    reviewed_note: str = ""      # why it was kept, in the reviewer's words
     regime_gate: Optional[dict] = None   # {"dial","lo","hi","outside"}: some
                                  # relationships are only true in one regime.
                                  # While the named regime dial sits inside
@@ -94,7 +104,7 @@ class Edge:
             d["delay_days"] = self.delay_days
         if self.regime_gate:
             d["regime_gate"] = self.regime_gate
-        for k in ("note", "proposed_by", "proposed_at"):
+        for k in ("note", "proposed_by", "proposed_at", "reviewed_at", "reviewed_note"):
             v = getattr(self, k)
             if v:
                 d[k] = v
@@ -119,9 +129,15 @@ class Edge:
 
 
 class KnowledgeGraph:
-    def __init__(self, nodes: list[Node], edges: list[Edge]):
+    def __init__(self, nodes: list[Node], edges: list[Edge],
+                 rejected: Optional[list[dict]] = None):
         self.nodes: dict[str, Node] = {n.id: n for n in nodes}
         self.edges: list[Edge] = edges
+        # Tombstones for llm edges a human reviewed and threw out. Without these,
+        # review is not durable: propose_edge dedupes only against edges that
+        # currently EXIST, so a rejected edge is re-proposed by the next similar
+        # headline and the reviewer does the same work forever.
+        self.rejected: list[dict] = list(rejected or [])
         self._adj: Optional[dict] = None
         self._alias_index: Optional[dict[str, str]] = None
         self._calibration: dict[str, float] = {}   # edge key -> evidence multiplier
@@ -129,6 +145,12 @@ class KnowledgeGraph:
     @staticmethod
     def edge_key(e: Edge) -> str:
         return f"{e.src}->{e.dst}:{e.type}"
+
+    @staticmethod
+    def pair_key(src: str, dst: str, type_: str) -> str:
+        """Same shape as edge_key, addressable before an Edge exists (or after it
+        has been rejected and no longer does)."""
+        return f"{src}->{dst}:{type_}"
 
     def set_calibration(self, factors: dict[str, float]) -> None:
         """Attach evidence-based per-edge multipliers (from brain/calibration.py).
@@ -154,7 +176,7 @@ class KnowledgeGraph:
             d = json.load(fh)
         nodes = [Node(**n) for n in d.get("nodes", [])]
         edges = [Edge(**e) for e in d.get("edges", [])]
-        g = cls(nodes, edges)
+        g = cls(nodes, edges, d.get("rejected_edges") or [])
         if d.get("seed_version", 1) < SEED_VERSION:
             g._merge_seed()
             g.save(path)
@@ -191,10 +213,140 @@ class KnowledgeGraph:
     def save(self, path: str) -> None:
         from ai_investing.brain.seed import SEED_VERSION
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as fh:
+        self._absorb_disk_review(path)
+        # Written via a temp file and renamed, because this file now has two
+        # writers: the engine on its own cycle, and a human running the review
+        # tool whenever they happen to. `open(path, "w")` truncates first, so an
+        # ill-timed crash or an overlapping write leaves a half-written graph —
+        # and the loader would either fail outright or, worse, read a truncated
+        # edge list as a smaller graph. os.replace is atomic within a filesystem,
+        # so a reader sees the old file or the new one and never a partial.
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as fh:
             json.dump({"seed_version": SEED_VERSION,
                        "nodes": [n.to_dict() for n in self.nodes.values()],
-                       "edges": [e.to_dict() for e in self.edges]}, fh, indent=1)
+                       "edges": [e.to_dict() for e in self.edges],
+                       # Always written, even when empty: a reviewer opening this
+                       # file should be able to see that rejection is a thing the
+                       # graph records, without having to find the code first.
+                       "rejected_edges": self.rejected}, fh, indent=1)
+        os.replace(tmp, path)
+
+    def save_review(self, path: str) -> None:
+        """Persist ONLY review decisions, against the file as it stands right now.
+
+        `save()` writes this object's whole edge and node list, which is correct
+        for the engine — it owns that state — and quietly destructive for a review
+        session, which does not. A reviewer loads the graph, reads for a while,
+        and saves; the engine adds edges several times a day (~35/week). Anything
+        it added inside that window would be absent from the reviewer's in-memory
+        list and would vanish on write, with nothing to indicate wiring had been
+        lost. The reviewer holds a stale copy by construction, so it must never
+        write one back.
+
+        So this re-reads the file at the moment of writing and applies only the
+        deltas a reviewer can legitimately make: stamp kept edges, drop rejected
+        ones, carry the tombstones. Disk owns the nodes and every edge not ruled
+        on — including the ones added while the reviewer was reading."""
+        from ai_investing.brain.seed import SEED_VERSION
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"cannot read {path} to apply review: {exc}") from exc
+
+        stamps = {self.edge_key(e): (e.reviewed_at, e.reviewed_note)
+                  for e in self.edges if e.provenance == "llm" and e.reviewed_at}
+        tombs = self._rejected_index()
+
+        edges_out = []
+        for raw in d.get("edges") or []:
+            key = self.pair_key(raw.get("src", ""), raw.get("dst", ""), raw.get("type", ""))
+            if raw.get("provenance") == "llm" and key in tombs:
+                continue                                  # rejected — drop it
+            if key in stamps and raw.get("provenance") == "llm":
+                raw["reviewed_at"], raw["reviewed_note"] = stamps[key]
+            edges_out.append(raw)
+
+        merged = {self.pair_key(r.get("src", ""), r.get("dst", ""), r.get("type", "")): r
+                  for r in (d.get("rejected_edges") or [])}
+        for key, r in tombs.items():
+            cur = merged.get(key)
+            if cur is None:
+                merged[key] = dict(r)
+            else:
+                cur["suppressed"] = max(int(cur.get("suppressed", 0)),
+                                        int(r.get("suppressed", 0)))
+                cur["reason"] = r.get("reason", cur.get("reason", ""))
+                cur["rejected_at"] = r.get("rejected_at", cur.get("rejected_at", ""))
+
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"seed_version": d.get("seed_version", SEED_VERSION),
+                       "nodes": d.get("nodes") or [],      # disk owns the nodes
+                       "edges": edges_out,
+                       "rejected_edges": list(merged.values())}, fh, indent=1)
+        os.replace(tmp, path)
+
+    def _absorb_disk_review(self, path: str) -> None:
+        """Fold review decisions made on disk into this in-memory graph before
+        overwriting it.
+
+        The engine loads the graph ONCE at Brain construction and holds it for the
+        life of the process, then rewrites the whole file whenever it adds an edge
+        (`core.py::_persist`). A reviewer editing that file out-of-band would
+        therefore have every decision silently reverted by the next proposal —
+        review that evaporates is worse than no review, because it looks like it
+        worked. Rather than demand a restart after each review (a rule that has to
+        be remembered exactly when someone is mid-task), the writer reconciles.
+
+        Safe to merge blindly because review state is MONOTONE: a keep or a reject
+        is never withdrawn by the engine, only ever added by a human. Where both
+        sides touched the same tombstone, `suppressed` takes the max rather than
+        the sum — both counts descend from a common ancestor, so adding them would
+        double-count the shared history."""
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return                      # first write, or a file we cannot read
+        disk_tombs = {self.pair_key(r.get("src", ""), r.get("dst", ""), r.get("type", "")): r
+                      for r in (d.get("rejected_edges") or [])}
+        disk_reviewed = {self.pair_key(e.get("src", ""), e.get("dst", ""), e.get("type", "")):
+                         (e.get("reviewed_at", ""), e.get("reviewed_note", ""))
+                         for e in (d.get("edges") or []) if e.get("reviewed_at")}
+
+        mine = self._rejected_index()
+        for key, r in disk_tombs.items():
+            cur = mine.get(key)
+            if cur is None:
+                self.rejected.append(dict(r))
+            else:
+                cur["suppressed"] = max(int(cur.get("suppressed", 0)),
+                                        int(r.get("suppressed", 0)))
+                # Whichever side rejected it LAST owns the stated reason.
+                if str(r.get("rejected_at", "")) > str(cur.get("rejected_at", "")):
+                    cur["reason"] = r.get("reason", cur.get("reason", ""))
+                    cur["rejected_at"] = r.get("rejected_at", "")
+
+        tombs = self._rejected_index()
+        kept: list[Edge] = []
+        for e in self.edges:
+            key = self.edge_key(e)
+            stamp = disk_reviewed.get(key)
+            if stamp and e.provenance == "llm" and not e.reviewed_at:
+                e.reviewed_at, e.reviewed_note = stamp
+            tomb = tombs.get(key) if e.provenance == "llm" else None
+            if tomb is not None:
+                # Proposed again in memory after a human rejected it on disk.
+                # The tombstone wins, and the argument is recorded rather than lost.
+                tomb["suppressed"] = int(tomb.get("suppressed", 0)) + 1
+                tomb["last_seen"] = e.proposed_at or tomb.get("last_seen", "")
+                tomb["last_proposed_by"] = e.proposed_by or tomb.get("last_proposed_by", "")
+                self._adj = None
+                continue
+            kept.append(e)
+        self.edges = kept
 
     # -- indexing ------------------------------------------------------------
     def _adjacency(self) -> dict:
@@ -492,15 +644,104 @@ class KnowledgeGraph:
     def propose_edge(self, src: str, dst: str, type_: str, sign: int, weight: float,
                      confidence: float, proposed_by: str, ts: str) -> bool:
         """Append an LLM-proposed edge (never overwrites a curated one). Returns
-        True if added. Proposed edges carry provenance for periodic human review."""
+        True if added. Proposed edges carry provenance for periodic human review.
+
+        A previously REJECTED pair is refused — but never silently. The refusal
+        is counted on the tombstone, because an edge the world keeps re-proposing
+        is evidence the rejection may have been wrong, and burying that would
+        repeat the mistake this codebase has now made four times: rendering a
+        verdict nothing will ever grade. `contested_rejections()` is how it comes
+        back for a second hearing (see `scripts/review_edges.py --contested`)."""
         if src not in self.nodes or dst not in self.nodes or type_ not in EDGE_FLOW:
             return False
         for e in self.edges:
             if e.src == src and e.dst == dst and e.type == type_:
                 return False
+        tomb = self._rejected_index().get(self.pair_key(src, dst, type_))
+        if tomb is not None:
+            tomb["suppressed"] = int(tomb.get("suppressed", 0)) + 1
+            tomb["last_seen"] = ts
+            tomb["last_proposed_by"] = proposed_by[:160]
+            return False
         self.edges.append(Edge(src=src, dst=dst, type=type_, sign=1 if sign >= 0 else -1,
                                weight=max(0.05, min(1.0, weight)),
                                confidence=max(0.05, min(0.6, confidence)),  # capped below curated
                                provenance="llm", proposed_by=proposed_by[:160], proposed_at=ts))
         self._adj = None
         return True
+
+    # -- review: the only control these edges will ever get --------------------
+    #
+    # DIGESTION_SPEC §A10 chose auto-apply over a queue: "a bad proposal is damped
+    # by the cap, not blocked by a queue". That argument is sound at the rate the
+    # spec assumed — "Rare: expect <=1 per week". It is doing much more work than
+    # intended at the rate actually observed, and nothing was measuring the gap.
+    # The cap still holds; what follows is the review the spec promised but never
+    # built, so the backlog can be worked down instead of only growing.
+
+    def _rejected_index(self) -> dict[str, dict]:
+        """key -> tombstone record. Rebuilt per call: the list is small (one row
+        per human rejection, ever) and a stale cache here would silently let a
+        rejected edge back in, which is the one failure this mechanism exists to
+        prevent."""
+        return {self.pair_key(r.get("src", ""), r.get("dst", ""), r.get("type", "")): r
+                for r in self.rejected}
+
+    def pending_review(self) -> list[Edge]:
+        """LLM edges no human has ruled on yet, oldest proposal first — review
+        order should follow how long an edge has been steering unvetted."""
+        return sorted((e for e in self.edges
+                       if e.provenance == "llm" and not e.reviewed_at),
+                      key=lambda e: e.proposed_at or "")
+
+    def review_edge(self, src: str, dst: str, type_: str, note: str, ts: str) -> bool:
+        """Keep an llm edge and stamp it reviewed. Confidence is untouched — see
+        the note on `Edge.reviewed_at` for why a human keep is not a promotion."""
+        for e in self.edges:
+            if e.src == src and e.dst == dst and e.type == type_:
+                if e.provenance != "llm":
+                    return False        # curated wiring is not this tool's business
+                e.reviewed_at = ts
+                e.reviewed_note = note[:200]
+                return True
+        return False
+
+    def reject_edge(self, src: str, dst: str, type_: str, reason: str, ts: str) -> bool:
+        """Remove an llm edge and tombstone the pair so it does not walk back in.
+
+        Curated edges are refused outright rather than tombstoned: `_merge_seed`
+        re-appends seed wiring on every version bump without consulting this list
+        (correctly — curated always wins), so a tombstone over a seed edge would
+        be a rule that silently does nothing. Better to refuse than to pretend."""
+        key = self.pair_key(src, dst, type_)
+        for i, e in enumerate(self.edges):
+            if e.src == src and e.dst == dst and e.type == type_:
+                if e.provenance != "llm":
+                    return False
+                del self.edges[i]
+                break
+        existing = self._rejected_index().get(key)
+        if existing is not None:
+            existing["reason"] = reason[:200]
+            existing["rejected_at"] = ts
+            return True
+        self.rejected.append({"src": src, "dst": dst, "type": type_,
+                              "reason": reason[:200], "rejected_at": ts,
+                              "suppressed": 0, "last_seen": "", "last_proposed_by": ""})
+        self._adj = None
+        return True
+
+    def contested_rejections(self, min_suppressed: int = 3) -> list[dict]:
+        """Tombstones the world keeps arguing with, most-argued first. A rejection
+        re-proposed many times is the graph's version of noise-rescue: the source
+        that keeps being right while flagged should be able to climb back out."""
+        return sorted((r for r in self.rejected
+                       if int(r.get("suppressed", 0)) >= min_suppressed),
+                      key=lambda r: -int(r.get("suppressed", 0)))
+
+    def proposal_rate(self, since_iso: str) -> int:
+        """LLM edges proposed on or after `since_iso`. The number that matters is
+        the RATE, not the backlog: a backlog says work is waiting, a rate says
+        whether the design's core assumption still holds."""
+        return sum(1 for e in self.edges
+                   if e.provenance == "llm" and (e.proposed_at or "") >= since_iso)

@@ -30,11 +30,12 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 *Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
 
 ```
-GRAPH    321 nodes, 690 edges          (seed v25)
+GRAPH    372 nodes, 796 edges          (seed v25 — 656 curated + 140 self-added,
+                                        18% and growing ~35/week: see §4.22, §4A)
 BRAIN    6,326 articles, 2,380 events tagged
-TAGGER   1% unsigned across recent events              (was 57%)
-TESTS    32 suites, all green (local AND on the ProDesk AND in CI)
-COMMITS  167
+TAGGER   0% unsigned across recent events              (was 57%)
+TESTS    36 suites, all green (local AND on the ProDesk AND in CI)
+COMMITS  186
 
 BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
@@ -115,8 +116,8 @@ The through-line: **almost every failure here was silent, and passed its health
 checks while failing.** Not crashes — wrong answers delivered confidently.
 
 **Index.** §4.1–4.6 predate 2026-08-04. §4.7–4.14 are the phantom-valuation day.
-§4.15–4.21 are the autonomy session. §4A is the live list of what is still broken —
-read that one first if something is wrong now.
+§4.15–4.21 are the autonomy session. §4.22 is the self-wiring review. §4A is the live
+list of what is still broken — read that one first if something is wrong now.
 
 | § | Defect | Root-caused? |
 |---|---|---|
@@ -132,6 +133,7 @@ read that one first if something is wrong now.
 | 4.19 | Three fixes that were not root fixes | ✅ contract, backstop, and test isolation |
 | 4.20 | 15 false pages in 90 min; the rate limit had never worked | ✅ keyed on identity; shape-aware backstop; rate-based projection |
 | 4.21 | A test's verdict depended on the live crypto market | ✅ history follows `settings`; 7 read-only loaders remain in §4A |
+| 4.22 | The "proposed graph edges" ask counted the trade audit log | ✅ repointed at llm edges, with review, tombstones and a rate; the 35×-spec proposal rate is now §4A |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -926,6 +928,80 @@ insufficient. Green on one machine says nothing about a suite that reads that ma
 data. **Running it somewhere else is a real test.**
 
 
+### 4.22 The ask that pointed at the wrong file for its whole life *(2026-08-10)*
+
+**Found by the user asking what the digest actually wanted from them** — *"isn't this
+app supposed to be automated? even if it asks me, what am I supposed to do? I don't
+think I can just reply via Telegram."* All three doubts were correct.
+
+- **What.** `needs_you.py`'s third ask counted lines in `data/proposal_log.jsonl` and
+  called them *"proposed graph edges awaiting review"*. That file is the append-only
+  **trade** audit (`execution/approvals.py`), written once per proposal with
+  `status: "pending"` frozen at write time and no `reviewed` key, ever. So the filter
+  `'"reviewed"' not in l` matched **every line**, the count was "trades ever proposed"
+  and could only grow, and the suggested action — review that file — was impossible:
+  there is nothing in it to review. All 35 it was nagging about were dead trade
+  proposals, expired between Aug 3 and Aug 6.
+- **Wrong from birth.** The commit that introduced it (`262b437`, 2026-08-03)
+  announced *"23 proposed graph edges awaiting review"* — exactly that day's
+  trade-proposal line count. A plausible number is the easiest kind of wrong to keep:
+  nothing about "23" invited a second look, and none of the three reviews it survived
+  opened the file.
+- **The real population was never watched.** LLM-proposed edges live in
+  `knowledge_graph.json` with `provenance: "llm"`, applied automatically at capped
+  confidence per `DIGESTION_SPEC.md` §A10. At the time of the fix: **140 of 796 edges
+  (18%) were self-added, none reviewed, none reviewable.** The L0 calibrator skips
+  them (`calibration.py`, `provenance != "seed"` → skip) and — the part that makes
+  this structural — **could not score them even if extended**: `_score_pair` needs the
+  destination to carry a tradable symbol, and *zero* of the 140 do. They wire factors
+  to private hubs and to each other. The cap was the entire control surface.
+- **And the design's premise had quietly failed.** §A10 argues *"a bad proposal is
+  damped by the cap, not blocked by a queue"* — sound at the rate it assumes in the
+  next breath, *"Rare: expect ≤1 per week"*. Measured: **96 in the last 7 days, 35/week
+  over 28 days — 35× the spec.** Nothing was measuring it, so nothing noticed that the
+  argument for auto-applying had stopped holding. This is §4.20's shape, not §4.1's:
+  not a component returning the wrong answer, but a *threshold reasoned from an
+  assumption instead of from the data*, exactly as `ASK_BAR` was two days earlier.
+- **Fixes.** The ask now reads llm edges from the graph and reports the **rate**
+  alongside the backlog, because a backlog says work is waiting while a rate says
+  whether the design still holds. `scripts/review_edges.py` is the review §A10
+  promised and never built (`--show`, `--stats`, `--json`, `--keep`, `--reject`,
+  `--batch`, `--contested`). Rejection writes a **tombstone** into the graph, because
+  `propose_edge` dedupes only against edges that currently exist — without one, the
+  next similar headline walks a rejected edge straight back in and the reviewer works
+  forever.
+- **Two hazards found while building it, both worse than the original bug.**
+  1. **Review would have evaporated.** The engine loads the graph once at `Brain`
+     construction and rewrites the whole file whenever it adds an edge
+     (`core.py::_persist`). Any decision written out-of-band would have been reverted
+     by a process that never knew about it — and would have *looked* like it worked.
+     `save()` now reconciles with the file it is about to overwrite. Safe to merge
+     blindly because review state is monotone: a keep or reject is never withdrawn by
+     the engine, only ever added by a human. Where both sides touched one tombstone,
+     `suppressed` takes the **max, not the sum** — both counts descend from a common
+     ancestor, so adding them would double-count shared history and manufacture a
+     contested rejection nobody argued for.
+  2. **A status check that creates what it measures.** `KnowledgeGraph.load` seeds a
+     fresh graph when the file is absent — right for the engine, wrong for a reporter.
+     A mistyped `BRAIN_GRAPH_PATH` would have had the digest write a brand-new graph
+     and then truthfully report zero edges pending: **a clean bill of health
+     manufactured by the act of checking.** Both scripts now refuse.
+- **A rejection is never silent.** Each suppressed re-proposal is counted on the
+  tombstone and surfaced by `--contested`, because an edge the world keeps proposing
+  is evidence the rejection may have been wrong. Burying that would be the fifth
+  instance of this project's most repeated mistake — rendering a verdict nothing will
+  ever grade (§4.1, §4.6, `80bb6ad`, `f4da048`).
+- **Lesson.** §4.16 said *a grep proves a string is present, never that the code
+  works.* This is the counterpart for data: **a count proves a file has lines, never
+  that they are the lines you meant.** The check ran green for a week, produced a
+  number that moved, and measured something that did not exist. Every digest it sent
+  was evidence the system was working.
+- **Second lesson.** The user asked what they were supposed to *do* about an alert. No
+  automated check had that question, and it is the one that found the bug. §4.16 already
+  wrote the rule — *every alert should answer "what do I do about this?"* — and this ask
+  had shipped without an answer for a week, because the rule was applied to the alert's
+  wording and never to whether the action it named was possible.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -934,6 +1010,7 @@ and the register had drifted **13 commits** behind reality.
 
 | Open | Detail | Risk today |
 |---|---|---|
+| **The digester proposes edges 35× faster than the spec assumes** | `DIGESTION_SPEC.md` §A10 justifies applying llm edges automatically because *"a bad proposal is damped by the cap"* and *"Rare: expect ≤1 per week"*. Actual: 96 in 7 days, 35/week over 28. §4.22 built the measurement and the review, which is the symptom; the cause is the digester's proposal bar, and setting it is a judgement about how much self-wiring is wanted — not a bug to be quietly patched. **Unreviewed backlog: 140.** | LLM wiring is 18% of the graph and grows ~35/week against a fixed 656 curated edges. Nothing can grade these (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), so the cap and human review are the whole control surface. Left as it is, self-added wiring outnumbers curated wiring inside a year. |
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | The model's only qualifying long (`O39.SI`) cannot be traded. |
 | ~~A fourth announce-the-state instance~~ | **CLOSED §4.17.** All 24 alert sites swept and classified; the fourth (news/context error) is fixed. | — |
 | ~~Tests inherit the ambient `.env`~~ | **CLOSED §4.19.** A test process no longer loads `.env` at all, detected automatically. | — |
@@ -1089,9 +1166,14 @@ and the register had drifted **13 commits** behind reality.
   alerts go with it. A dead-man's switch would close this; not built.
 - **Daily bars for stocks.** Crypto is marked to live spot for stops and
   valuation, but stock signals and stops run on daily closes.
-- **GDELT crawler paused** at 268/1,127 days, by request.
-- **Human-review backlog** — proposed edges and integrity flags in
-  `data/digest_v2/STATUS.md`.
+- **GDELT crawler paused** at 303/1,136 days, by request.
+- **Human-review backlog, offline half** — the corpus digester's own
+  `proposed_edges` and integrity flags, listed in `data/digest_v2/STATUS.md`:
+  **8 proposed edges, 39 integrity patterns, 2 graph contradictions, 70 alias
+  suggestions.** These were never applied to the graph, so unlike the live
+  backlog in §4A they steer nothing while they wait — which is why
+  `needs_you.py` deliberately does *not* nag about them. Reviewing inert
+  proposals is the mistake `5fd6087` fixed for dead trade proposals.
 
 ## 7. Operating it
 

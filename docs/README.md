@@ -31,7 +31,14 @@ python3 scripts/daily_status.py      # every channel, and whether it reaches the
 python3 scripts/breaker.py           # is a book halted, and should it be
 python3 scripts/needs_you.py --show  # what is waiting on you
 python3 scripts/watchdog.py --test   # prove alerts still reach you
+python3 scripts/review_edges.py --stats   # wiring the brain added to itself
 ```
+
+The last one is periodic rather than urgent, and it is the only control over 18%
+of the graph: llm-proposed edges are applied automatically (DIGESTION_SPEC §A10)
+and the evidence calibrator cannot reach them. `--stats` reports the proposal
+**rate** as well as the backlog — the rate is the number that says whether §A10's
+design premise still holds, and it currently does not (§4A).
 
 The two most likely alerts have their own runbook sections in OPERATIONS.md:
 **🛑 CIRCUIT BREAKER** (do not just clear it — cross-check the marks first) and

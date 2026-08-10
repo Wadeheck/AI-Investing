@@ -26,7 +26,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +36,9 @@ STATE = ROOT / "data" / "needs_you_state.json"
 # Ask again after this long. Deliberately increasing: the longer something sits,
 # the more likely leaving it IS the decision, and nagging harder is wrong.
 BACKOFF_H = [2, 8, 24, 72]
+# The proposal rate DIGESTION_SPEC §A10 tells the digester to aim for, and the
+# rate its "damped by the cap, not blocked by a queue" reasoning assumes.
+SPEC_EDGES_PER_WEEK = 1
 
 
 def _load() -> dict:
@@ -133,32 +136,115 @@ def collect() -> list[dict]:
     except (OSError, json.JSONDecodeError):
         pass
 
-    # 2. X capture. Needs an interactive browser session because the no-API
-    #    constraint rules out the alternative — the one channel that cannot
-    #    self-heal, so it must be asked for explicitly.
+    # 2. X capture. No longer a standing human task — `3e0c77a` automated it as a
+    #    headless harvest on a jittered 4h timer — but it is still the one channel
+    #    that cannot fully self-heal: it runs on session cookies, and only a real
+    #    browser can mint new ones when they expire. So the ask survives, with the
+    #    action inverted. It is now a REPORT OF FAILURE ("the timer stopped
+    #    delivering") rather than a reminder of a chore, and the threshold stays at
+    #    26h rather than tightening to the 4h cadence, because a couple of missed
+    #    runs is X throttling us and is not worth a human's attention; a full day of
+    #    silence means the cookies are dead.
     a = _age_h(ROOT / "data" / "news_archive_x.jsonl")
-    if a is None or a > 26:   # a DAILY task: more than a day late means ask
+    if a is None or a > 26:
         asks.append({
             "key": "x_capture",
-            "text": f"*X/Twitter capture* — last harvest "
-                    f"{'never' if a is None else f'{a:.0f}h ago'}",
-            "how": "start a Claude session and ask for the X capture "
-                   "(one browser session only, or it throttles)",
+            "text": f"*X/Twitter capture has stalled* — last harvest "
+                    f"{'never' if a is None else f'{a:.0f}h ago'}, "
+                    f"despite the 4h timer",
+            "how": "session cookies have almost certainly expired: refresh "
+                   "`data/x_cookies.json` from a real logged-in browser "
+                   "(`x_login.py` cannot — X rejects headless logins)",
         })
 
-    # 3. Graph edges the digester proposed but cannot adopt on its own —
-    #    structure changes are deliberately human-gated (docs LEARNING.md §2).
+    # 3. Wiring the brain added to itself and nothing can grade.
+    #
+    #    This asked the wrong question for its whole life. It counted lines in
+    #    data/proposal_log.jsonl and called them graph edges — but that file is
+    #    the append-only TRADE audit (`execution/approvals.py`), written once per
+    #    proposal with `status: "pending"` frozen at write time and no `reviewed`
+    #    key, ever. So the filter matched every line, the count was "trades ever
+    #    proposed" and could only grow, and the suggested action (review that
+    #    file) was impossible: there is nothing in it to review. The first digest
+    #    on 2026-08-03 announced "23 proposed graph edges" — exactly that day's
+    #    trade count. A plausible number is the easiest kind of wrong to keep.
+    #
+    #    The real population is llm-provenance edges in the knowledge graph:
+    #    applied automatically at capped confidence per DIGESTION_SPEC §A10,
+    #    unreachable by the L0 calibrator (which scores seed edges only, and
+    #    could not score these anyway — none terminates on a tradable symbol),
+    #    and therefore controlled by nothing except that cap and a human.
+    #
+    #    Report the RATE alongside the backlog. A backlog says work is waiting;
+    #    the rate says whether §A10's "expect <=1 per week" — the assumption its
+    #    cap-not-queue argument rests on — is still true. That is the number
+    #    worth waking someone for, and nobody was measuring it.
+    #
+    #    Deliberately NOT included: the offline proposals in data/digest_v2/.
+    #    Those were never applied to the graph, so they steer nothing while they
+    #    wait, and nagging about inert items is the mistake this file already
+    #    made once with dead trade proposals (see §1).
     try:
-        pl = (ROOT / "data" / "proposal_log.jsonl").read_text().splitlines()
-        openish = [l for l in pl if '"status": "open"' in l or '"reviewed"' not in l]
-        if len(openish) >= 10:
+        from ai_investing.brain.graph import KnowledgeGraph      # engine/ is on
+                                                                 # sys.path already
+        from ai_investing.config import Settings
+
+        graph_path = Settings().brain.graph_path
+        # KnowledgeGraph.load SEEDS a fresh graph when the file is absent. That is
+        # right for the engine and wrong here: a mistyped BRAIN_GRAPH_PATH would
+        # have this status check write a brand-new graph and then truthfully
+        # report zero edges pending — a clean bill of health manufactured by the
+        # act of checking. A reporting path must never create what it measures.
+        if not os.path.exists(graph_path):
+            raise FileNotFoundError(f"no graph at {graph_path}")
+        graph = KnowledgeGraph.load(graph_path)
+        pending = graph.pending_review()
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        rate = graph.proposal_rate(week_ago)
+        # Two independent triggers, because they are different problems. A backlog
+        # is work; a rate breach is the design premise failing, and that one is
+        # worth saying even when the backlog is short.
+        # Paths and node ids go in BACKTICKS, not bare. Telegram parses `_` as an
+        # italic marker, so `us_gov_debt->credit_conditions` contributes three of
+        # them; an odd count anywhere makes the Markdown unbalanced, and because
+        # this digest is ONE message that costs every ask in it its formatting
+        # (the notifier's plain-text retry saves the delivery, not the rendering —
+        # see 262b437). A code span suppresses the parsing entirely.
+        if len(pending) >= 10 or rate > SPEC_EDGES_PER_WEEK:
+            note = (f" — *{rate} proposed this week* against a spec of "
+                    f"<={SPEC_EDGES_PER_WEEK}/wk" if rate > SPEC_EDGES_PER_WEEK else "")
             asks.append({
                 "key": "graph_edges",
-                "text": f"*{len(openish)} proposed graph edges* awaiting review",
-                "how": "ask for a batch review of data/proposal_log.jsonl",
+                "text": f"*{len(pending)} self-added graph edges* awaiting review{note}",
+                "how": "`python3 scripts/review_edges.py --stats` (then --show, "
+                       "--keep/--reject); nothing else can grade these",
             })
-    except OSError:
-        pass
+        contested = graph.contested_rejections()
+        if contested:
+            top = contested[0]
+            asks.append({
+                "key": "graph_edges_contested",
+                "text": f"*{len(contested)} rejected edge(s) the digester keeps "
+                        f"re-proposing* — e.g. "
+                        f"`{graph.pair_key(top['src'], top['dst'], top['type'])}` "
+                        f"({top.get('suppressed', 0)}x)",
+                "how": "`python3 scripts/review_edges.py --contested` — a rejection "
+                       "argued with this often may be the one that was wrong",
+            })
+    except Exception as exc:
+        # A broken check must not read as a clean one. §4.6 is the whole argument:
+        # the scorecard raised OperationalError every cycle for weeks, the caller
+        # swallowed it, and "no findings" was indistinguishable from "never ran".
+        # So this degrades to an ask ABOUT ITSELF rather than to silence — and it
+        # still cannot take the digest down with it, because the other asks here
+        # are the ones with money attached.
+        asks.append({
+            "key": "graph_edges_broken",
+            "text": f"*The graph-edge review check is broken* — {type(exc).__name__}: "
+                    f"{str(exc)[:120]}",
+            "how": "`python3 scripts/review_edges.py --stats` to see the real "
+                   "error; until it runs, self-added wiring is unwatched",
+        })
 
     # 4. Standing decisions — things I have flagged and cannot decide alone.
     #    Read from a file so they can be added or cleared without a code change.

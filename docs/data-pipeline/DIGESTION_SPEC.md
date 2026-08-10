@@ -283,6 +283,30 @@ Proposals are applied automatically at capped confidence (≤0.6, below the
 1.0 of curated edges) with `provenance: "llm"`, and surface for periodic
 human review — a bad proposal is damped by the cap, not blocked by a queue.
 
+> **That argument depends on the "≤1 per week" above, and the live digester is
+> not honouring it.** Measured 2026-08-10: 96 edges proposed in 7 days, 35/week
+> over 28 days, 140 of 796 graph edges (18%) self-added and none reviewed. At
+> ≤1/week the cap is ample; at 35/week the backlog grows faster than review
+> clears it and llm wiring overtakes curated wiring on its own. Nothing measured
+> this for the first three weeks it was true — see STATE_OF_THE_SYSTEM §4.22.
+>
+> Review is now real rather than notional: `scripts/review_edges.py` shows the
+> queue and the rate, and records keep/reject decisions into the graph. A reject
+> leaves a **tombstone**, because `propose_edge` dedupes only against edges that
+> currently exist — without one the next similar headline re-adds it. Each
+> suppressed re-proposal is counted, so a rejection the digester keeps arguing
+> with comes back for a second hearing (`--contested`) rather than standing
+> forever unexamined.
+>
+> Note what review can and cannot do. It clears the queue; it does **not** raise
+> confidence past the cap. Only evidence promotes structure (LEARNING.md §2), and
+> no evidence is reachable here: `brain/calibration.py` scores seed edges only,
+> and could not score these even if extended, because `_score_pair` needs a
+> destination carrying a tradable symbol and none of these edges has one. **The
+> cap plus this review are the entire control surface for 18% of the brain's
+> wiring.** If that is too thin, the lever is the digester's proposal bar — not
+> more reviewing.
+
 ### A11. Validation harness (code-side, but you are graded by it)
 
 1. **Schema + node validity** — every event parses, every node id exists.
