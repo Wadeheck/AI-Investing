@@ -7,10 +7,60 @@ sandbox / SIMULATE mode before setting LIVE_TRADING=true for real.
 """
 from __future__ import annotations
 
+import math
 import os
 
 from ai_investing.brokers.base import BrokerAdapter
 from ai_investing.models import Asset, AssetClass, Order, OrderStatus, Position, Side
+
+# HKEX spread table: (price is below this) -> minimum tick. Ends open-ended.
+_HK_SPREADS = ((0.25, 0.001), (0.50, 0.005), (10.0, 0.010), (20.0, 0.020),
+               (100.0, 0.050), (200.0, 0.100), (500.0, 0.200), (1000.0, 0.500),
+               (2000.0, 1.000), (5000.0, 2.000), (float("inf"), 5.000))
+
+
+def tick_size(symbol: str, price: float) -> float:
+    """Minimum price increment for a fully-qualified symbol at a given price.
+
+    Longbridge rejects any limit price off the tick with code 602035, "Wrong bid
+    size, please change the price". Confirmed against the paper account on
+    2026-08-10 with two orders identical but for the third decimal:
+    AAPL.US @ 275.90 accepted, @ 275.903 rejected 602035.
+    """
+    mkt = symbol.rsplit(".", 1)[-1].upper() if "." in symbol else "US"
+    if mkt == "HK":
+        for below, tick in _HK_SPREADS:
+            if price < below:
+                return tick
+    if mkt in ("SI", "SG"):
+        return 0.001 if price < 1.0 else 0.01      # SGX minimum bid sizes
+    # US and anything unrecognised: a penny, and a hundredth of a cent for
+    # sub-dollar names. Defaulting an UNKNOWN market to the coarser US tick is
+    # deliberate — too coarse merely shifts the price by a tick, while too fine
+    # is the failure that cost eight live orders.
+    return 0.0001 if price < 1.0 else 0.01
+
+
+def snap_to_tick(price: float, symbol: str, side: Side) -> float:
+    """Round a limit price onto a legal tick, never becoming more aggressive.
+
+    A BUY limit rounds DOWN and a SELL limit rounds UP, so snapping can only ever
+    make the order less likely to fill — never quietly raise what we are prepared
+    to pay. The band this price came from is 25bps plus costs, so a tick either
+    way is immaterial to whether it fills; being wrong in the paying direction
+    would not be.
+    """
+    t = tick_size(symbol, price)
+    steps = price / t
+    # Guard the floating-point boundary: 275.90/0.01 is 27589.999... in binary,
+    # which would floor to 275.89 and shift an already-legal price by a tick.
+    if abs(steps - round(steps)) < 1e-6:
+        steps = round(steps)
+    elif side is Side.BUY:
+        steps = math.floor(steps)
+    else:
+        steps = math.ceil(steps)
+    return round(steps * t, 6)
 
 
 class CcxtBroker(BrokerAdapter):
@@ -291,7 +341,13 @@ class LongbridgeBroker(BrokerAdapter):
                           submitted_quantity=Decimal(str(qty)), time_in_force=TimeInForceType.Day)
             if is_limit:
                 kwargs["order_type"] = OrderType.LO
-                kwargs["submitted_price"] = Decimal(str(round(order.limit_price, 3)))
+                # `round(limit_price, 3)` sent a third decimal into a market whose
+                # tick is a penny. Longbridge rejects that outright (602035), so a
+                # limit order only got through when the third decimal happened to
+                # be zero — about one attempt in ten, which is exactly the record:
+                # eight rejects and one fill between 2026-08-05 and 08-10.
+                px = snap_to_tick(order.limit_price, self._symbol(order.asset), order.side)
+                kwargs["submitted_price"] = Decimal(f"{px:.4f}".rstrip("0").rstrip("."))
             else:
                 kwargs["order_type"] = OrderType.MO
             # Stamped BEFORE the call, so a rejection carries what was sent. The

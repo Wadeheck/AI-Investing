@@ -65,19 +65,25 @@ def main() -> int:
     if expected and [c for c in channels if c != expected]:
         raise SystemExit(f"REFUSING: token maps to {channels!r}, expected {expected!r}")
 
+    from ai_investing.brokers.live import snap_to_tick
+    from ai_investing.models import Side
+
     last = float(quote.quote([SYMBOL])[0].last_done)
     base = round(last * (1 - BELOW), 2)          # valid US tick: exactly 2dp
     bad = round(base + 0.003, 3)                 # same price, invalid third decimal
+    fixed = snap_to_tick(bad, SYMBOL, Side.BUY)  # what the adapter now sends
     print(f"{SYMBOL} last {last:.2f}   resting bid {BELOW:.0%} below")
-    print(f"  A  valid tick   {base}")
+    print(f"  A  valid tick    {base}")
     print(f"  B  third decimal {bad}")
+    print(f"  C  B through snap_to_tick -> {fixed}")
     if not args.send:
         print("\ndry run — nothing sent. Re-run with --send to place them.")
         return 0
 
     placed = []
     try:
-        for tag, px in (("A valid 2dp", base), ("B invalid 3dp", bad)):
+        for tag, px in (("A valid 2dp", base), ("B invalid 3dp", bad),
+                        ("C snapped   ", fixed)):
             try:
                 resp = trade.submit_order(
                     symbol=SYMBOL, side=OrderSide.Buy, order_type=OrderType.LO,
