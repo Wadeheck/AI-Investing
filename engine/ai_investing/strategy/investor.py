@@ -50,6 +50,15 @@ class Investor:
         self.settings = settings
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.path = os.path.join(data_dir, "invest_state.json")
+        # The forward record. This book was the ONLY one of the four that wrote
+        # no trade journal: the trading book records to journal.db `orders`, the
+        # sleeve and crypto book to their own jsonl, and this one submitted the
+        # order, sent a Telegram message, and kept nothing. The cost showed up
+        # on 2026-08-10 as a realised -$11.32 that reconciled arithmetically and
+        # could not be attributed to any trade, because no record of any exit
+        # existed anywhere. Equity was never wrong; it was simply unauditable,
+        # which is the same problem one step removed.
+        self.journal = os.path.join(data_dir, "invest_journal.jsonl")
         self._state = self._load()
         self.broker = PaperBroker.from_state(self._state.get("broker", {}), allow_short=True) \
             if self._state.get("broker") else PaperBroker(
@@ -61,6 +70,17 @@ class Investor:
                 return json.load(fh)
         except (OSError, json.JSONDecodeError):
             return {}
+
+    def _log(self, event: str, **kw) -> None:
+        """Append one line to the forward record. Never fatal: a book that
+        cannot write its journal must still be able to exit a position, so a
+        failure here costs the record and not the trade."""
+        try:
+            with open(self.journal, "a") as fh:
+                fh.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                     "event": event, **kw}) + "\n")
+        except OSError:
+            pass
 
     def _stamp_marks(self, prices: dict) -> None:
         """Persist equity and per-position marks alongside the book.
@@ -101,6 +121,19 @@ class Investor:
         """
         self._mark_prices = prices
         self._save()
+        # One equity line per day, matching the sleeve and crypto book. Marking
+        # runs every cycle (~288/day), so logging each one would bury the trades
+        # this file exists to record. Written after _save() so it reports the
+        # equity that was actually persisted, not a recomputation of it.
+        today = _today_sgt()
+        if self._state.get("last_mark_day") != today:
+            self._state["last_mark_day"] = today
+            b = self._state.get("broker") or {}
+            self._log("mark", equity=self._state.get("equity"),
+                      cash=round(float(b.get("cash", 0.0)), 2),
+                      positions=len(b.get("positions") or []),
+                      stale_marks=self._state.get("stale_marks"))
+            self._save()
 
     def _save(self) -> None:
         self._state["broker"] = self.broker.state()
@@ -145,8 +178,21 @@ class Investor:
                 reason = f"safety stop: {move:.0%} against us"
             if reason:
                 side = Side.SELL if pos.qty > 0 else Side.BUY
-                o = self.broker.submit(Order(pos.asset, side, abs(pos.qty), reason=reason), px)
-                pnl = (px - pos.avg_price) * pos.qty
+                qty_closed = abs(pos.qty)
+                entry = pos.avg_price
+                o = self.broker.submit(Order(pos.asset, side, qty_closed, reason=reason), px)
+                filled = float(o.filled_qty or 0.0)
+                pnl = (px - entry) * pos.qty
+                # Journalled BEFORE the notifier, and with the fill rather than the
+                # request: a partial close that reported a full one is exactly the
+                # fabrication §4.15 found in the live adapter. `entry` is captured
+                # above because submit() mutates the position out from under us.
+                self._log("sell", symbol=sym, qty=round(filled, 6),
+                          price=round(px, 6), entry=round(entry, 6),
+                          pnl=round(pnl, 2),
+                          ret=round((px - entry) / entry * direction, 4) if entry else None,
+                          reason=reason, requested_qty=round(qty_closed, 6),
+                          side=("sell" if side is Side.SELL else "buy"))
                 notifier.send(f"🏛 *Investing book — closed {labels.get(sym, sym)}* ({sym}): {reason}. "
                               f"P&L ${pnl:,.0f} (pretend money).")
 
@@ -272,6 +318,17 @@ class Investor:
             if spendable < px * qty:
                 qty = max(0.0, spendable) / px
             if qty * px < 500:
+                # Journalled as well as announced. This is the COMMON refusal —
+                # it fires whenever the pot is deployed — and it returns before
+                # the broker is ever asked, so without a line here the record
+                # would show a thesis the book simply never acted on, with no
+                # trace of the reserve being the reason.
+                self._log("rejected", symbol=sym, price=round(px, 6),
+                          requested_qty=round(qty, 6),
+                          side=("buy" if s is Side.BUY else "sell"),
+                          reason=f"cash reserve floor ({CASH_RESERVE:.0%} stays liquid)",
+                          spendable=round(spendable, 2),
+                          thesis=str(thesis.get("title", ""))[:120])
                 notifier.send(f"🏛 *Investing book — skipped {labels.get(sym, sym)}* "
                               f"({sym}): cash reserve floor "
                               f"({CASH_RESERVE:.0%} of the pot stays liquid for "
@@ -280,7 +337,22 @@ class Investor:
         o = self.broker.submit(Order(_asset(sym, self.settings.crypto_exchange),
                                      s, qty, reason=f"thesis: {thesis.get('title', '')}"), px)
         if not (o.filled_qty or 0) > 0:
+            # A rejected entry is recorded too. An entry that never happened is
+            # information -- the dry-powder floor and the paper broker's
+            # insufficient-cash path both refuse silently otherwise, and "why did
+            # it not take that thesis" has no answer without this line.
+            self._log("rejected", symbol=sym, price=round(px, 6),
+                      requested_qty=round(qty, 6),
+                      side=("buy" if s is Side.BUY else "sell"),
+                      reason=(o.reason or "no fill"),
+                      thesis=str(thesis.get("title", ""))[:120])
             return False
+        filled = float(o.filled_qty or 0.0)
+        self._log("buy" if s is Side.BUY else "short", symbol=sym,
+                  qty=round(filled, 6), price=round(float(o.filled_price or px), 6),
+                  notional=round(filled * float(o.filled_price or px), 2),
+                  requested_qty=round(qty, 6),
+                  thesis=str(thesis.get("title", ""))[:120])
         verb = "Bought" if s is Side.BUY else "Shorted"
         notifier.send(f"🏛 *Investing book — {verb} {labels.get(sym, sym)}* ({sym}), "
                       f"~${qty * px:,.0f}, under thesis “{thesis.get('title')}”. "

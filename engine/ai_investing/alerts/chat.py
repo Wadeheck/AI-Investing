@@ -360,16 +360,17 @@ class ChatBot:
         position count, then one total. No positions, no pnl breakdown."""
         import os as _os
         seeds = {
-            "⚡ trading": float(self.settings.starting_cash),
+            "📈 trading": float(self.settings.starting_cash),
             "🏛 investing": float(getattr(self.settings, "invest_starting_cash", 0) or 0),
             "⚡ event sleeve": float(_os.environ.get("EVENT_START_CASH", 0) or 0),
             "₿ crypto": float(_os.environ.get("CRYPTO_START_CASH", 0) or 0),
         }
         books = []
+        unpriced = []          # books whose equity could not be read at all
         s = self._read("state.json")
         if s:
-            books.append(("⚡ trading", float(s.get("equity", 0) or 0),
-                          float(s.get("cash", 0) or 0), len(s.get("positions") or [])))
+            books.append(("📈 trading", float(s.get("equity", 0) or 0),
+                          float(s.get("cash", 0) or 0), s.get("positions") or []))
         for icon_title, fname in (("🏛 investing", "invest_state.json"),
                                   ("⚡ event sleeve", "event_state.json"),
                                   ("₿ crypto", "crypto_state.json")):
@@ -379,28 +380,60 @@ class ChatBot:
                 continue
             cash = float(book.get("cash", 0) or 0)
             eq = blob.get("equity", book.get("equity"))
-            eq = float(eq) if eq is not None else cash
-            books.append((icon_title, eq, cash, len(book.get("positions") or [])))
-        if not books:
+            positions = book.get("positions") or []
+            if eq is None:
+                # NEVER fall back to cash. `equity == cash` while positions are
+                # open is the exact phantom-valuation signature of §4.7, where an
+                # outage priced a short book at zero and the breaker flattened it
+                # against a number that never happened. CircuitBreaker.check
+                # already refuses to act on an unreadable equity; a display that
+                # quietly renders cash instead would state that fiction as fact,
+                # on the one line a person actually glances at (§4.15/10).
+                unpriced.append((icon_title, cash, len(positions)))
+                continue
+            books.append((icon_title, float(eq), cash, positions))
+        if not books and not unpriced:
             return "No book state on disk yet — engine warming up?"
         lines = ["💰 *Assets on hand*"]
         seed_total = 0.0
-        for title, eq, cash, npos in books:
-            invested = eq - cash
+        for title, eq, cash, positions in books:
             seed = seeds.get(title, 0.0)
             seed_total += seed
             pnl = f"  {eq - seed:+,.0f}" if seed else ""
+            # GROSS, not net. A short's sale proceeds sit in cash while the shares
+            # are still owed, so `equity - cash` nets longs against shorts: on
+            # 2026-08-10 the investing book showed "invested $2,094" while
+            # carrying $9,718 of gross exposure — 96% of the book, displayed as
+            # 21%. Netting understates the risk by however much is shorted, which
+            # is precisely the confusion that made §4.4 and §4.7 expensive.
+            longs = sum(float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0)
+                        for p in positions if float(p.get("qty", 0) or 0) > 0)
+            shorts = sum(-float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0)
+                         for p in positions if float(p.get("qty", 0) or 0) < 0)
+            exposure = f"${longs + shorts:,.0f} at risk"
+            if shorts > 0:
+                exposure += f" (${longs:,.0f} long, ${shorts:,.0f} short)"
             lines.append(f"{title}: *${eq:,.0f}*{pnl}  (cash ${cash:,.0f} · "
-                         f"invested ${invested:,.0f} in {npos})")
+                         f"{exposure} in {len(positions)})")
+        for title, cash, npos in unpriced:
+            lines.append(f"{title}: *value unknown* — {npos} position(s) unpriced, "
+                         f"cash ${cash:,.0f}. NOT counted in the total below.")
         te = sum(b[1] for b in books)
         tc = sum(b[2] for b in books)
+        gross = sum(abs(float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0))
+                    for b in books for p in b[3])
         verdict = ""
-        if seed_total:
+        if seed_total and not unpriced:
             d = te - seed_total
             word = "up" if d >= 0 else "down"
             verdict = f"  — *{word} ${abs(d):,.0f}* since the ${seed_total:,.0f} start"
+        elif unpriced:
+            # A total that silently omits a book is the §4.4 defect: $103,333 of
+            # capital simply absent from the view. Say so rather than print a
+            # smaller number as though it were the whole picture.
+            verdict = "  — *incomplete*, a book could not be valued"
         lines.append(f"\n*Total: ${te:,.0f}*{verdict}\n"
-                     f"(${tc:,.0f} cash, ${te - tc:,.0f} in the market)")
+                     f"(${tc:,.0f} cash, ${gross:,.0f} of market exposure)")
         return "\n".join(lines)
 
     def _fmt_portfolio(self) -> str:

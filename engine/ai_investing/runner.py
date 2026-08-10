@@ -17,7 +17,8 @@ from ai_investing.data import get_provider
 from ai_investing.data import news as news_mod
 from ai_investing.execution.costs import CostModel
 from ai_investing.learning import OutcomeTracker, ParamStore, RLSLearner
-from ai_investing.models import Asset, AssetClass, Order, OrderStatus, OrderType, Side
+from ai_investing.models import (Asset, AssetClass, Order, OrderStatus, OrderType, Side,
+                                 mark_price)
 from ai_investing.safety import CircuitBreaker, DataGuard, validate_settings, write_heartbeat
 from ai_investing.signals import default_signals
 from ai_investing.storage import Journal
@@ -280,7 +281,13 @@ class Runner:
         if moved:
             # counted for the log line below; deliberately not stored. It used to be
             # written to self._spot_marked, which nothing ever read.
-            print(f"  spot-marked {moved} crypto position(s) to live price")
+            #
+            # "symbol(s)", not "position(s)": this walks the crypto WATCHLIST, not
+            # the crypto book's holdings. It read "spot-marked 13 crypto
+            # position(s)" while the book held three, which invites exactly the
+            # wrong conclusion during an incident — that a book has positions
+            # nobody can account for.
+            print(f"  spot-marked {moved} crypto symbol(s) to live price")
 
     def _mark_books(self, px_by_sym: dict) -> None:
         """Mark every book to market, independent of its trading logic.
@@ -962,9 +969,11 @@ class Runner:
             print("  (no open positions)")
             return
         for key, pos in portfolio.positions.items():
-            px = prices.get(key, pos.avg_price)
+            px = mark_price(prices.get(key), pos.avg_price)   # see _snapshot
+            stale = "" if mark_price(prices.get(key), 0.0) > 0.0 else "  (stale mark)"
             print(f"  HELD    {pos.qty:>10.4f} {pos.asset.symbol:<10} "
-                  f"@ ${pos.avg_price:,.2f} -> ${px:,.2f}  PnL ${pos.unrealized_pnl(px):,.0f}")
+                  f"@ ${pos.avg_price:,.2f} -> ${px:,.2f}  "
+                  f"PnL ${pos.unrealized_pnl(px):,.0f}{stale}")
 
     def _snapshot(self, prices, decisions, context, halted: bool) -> None:
         portfolio = self._book_portfolio()
@@ -990,13 +999,28 @@ class Runner:
                 "blocklist": self.user_views.blocklist,
                 "focus": self.user_views.focus,
             },
+            # mark_price, NOT prices.get(k, avg). The dict default only covers a
+            # MISSING key, and the runner writes a missing bar as `prices[k] = 0.0`
+            # (§4A, still open at the source) — so a present-but-zero price sailed
+            # straight through this and wrote price 0, value 0, pnl = minus the
+            # entire cost basis. `equity` above survives it because Portfolio._px
+            # already applies the §4.7 rule, which made this WORSE, not better:
+            # the file would carry an honest equity beside positions claiming a
+            # total loss, and /assets and /portfolio both read the positions. A
+            # routine feed outage would have displayed a wipeout.
             "positions": [
                 {"symbol": p.asset.symbol, "qty": p.qty, "avg_price": p.avg_price,
-                 "price": prices.get(k, p.avg_price),
-                 "value": p.market_value(prices.get(k, p.avg_price)),
-                 "pnl": p.unrealized_pnl(prices.get(k, p.avg_price))}
+                 "price": mark_price(prices.get(k), p.avg_price),
+                 "value": p.market_value(mark_price(prices.get(k), p.avg_price)),
+                 "pnl": p.unrealized_pnl(mark_price(prices.get(k), p.avg_price)),
+                 "stale_mark": not (mark_price(prices.get(k), 0.0) > 0.0)}
                 for k, p in portfolio.positions.items()
             ],
+            # The live book was the only one of the four with no staleness count,
+            # which is backwards: it is the one routing real orders.
+            "stale_marks": sum(1 for k in portfolio.positions
+                               if not (mark_price(prices.get(k), 0.0) > 0.0)),
+            "marked_at": datetime.now(timezone.utc).isoformat(),
             "decisions": [
                 {"symbol": d.asset.symbol, "direction": d.direction.value,
                  "score": round(d.score, 3), "confidence": round(d.confidence, 3),
