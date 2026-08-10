@@ -57,6 +57,40 @@ def test_exposure_is_gross_not_net_when_the_book_is_short():
         assert "$1,000 at risk" not in out, out
 
 
+def test_the_footer_actually_adds_up():
+    """A reader checks a decomposition against the total. Reporting GROSS here
+    instead of net gave $27,717 cash + $20,391 exposure = $48,108 against a
+    $40,475 total — numbers that look like a breakdown and are not one."""
+    with tempfile.TemporaryDirectory() as d:
+        _write(d, "invest_state.json", _long_short_book(10000.0))
+        out = _bot(d)._fmt_assets()
+        # cash 9,000 + net invested 1,000 = 10,000 equity
+        assert "$9,000 cash + $1,000 invested = $10,000" in out, out
+        # and gross is stated apart, never as a component
+        assert "$9,000 at risk" in out and "gross exposure" in out, out
+
+
+def test_gross_is_not_repeated_when_there_is_nothing_short():
+    """Long-only, so gross == net and a second figure would be noise — the same
+    number twice under two names is how a reader learns to distrust both."""
+    with tempfile.TemporaryDirectory() as d:
+        _write(d, "event_state.json", {"equity": 10000.0, "broker": {
+            "cash": 4000.0, "positions": [
+                {"symbol": "NVDA", "qty": 30.0, "avg_price": 200.0, "price": 200.0}]}})
+        out = _bot(d)._fmt_assets()
+        assert "$4,000 cash + $6,000 invested = $10,000" in out, out
+        assert "at risk" not in out, out
+        assert "gross exposure" not in out, out
+
+
+def test_a_book_that_has_barely_moved_says_flat():
+    """"-0" reads as a rendering fault, not as a number."""
+    with tempfile.TemporaryDirectory() as d:
+        _write(d, "state.json", {"equity": 9999.57, "cash": 9999.57, "positions": []})
+        out = _bot(d)._fmt_assets()
+        assert "flat" in out and "-0" not in out, out
+
+
 def test_a_book_that_cannot_be_valued_is_never_shown_as_its_cash():
     """equity == cash with positions open is the §4.7 phantom signature. The
     breaker refuses to act on an unreadable equity; the display must not print
@@ -72,6 +106,18 @@ def test_a_book_that_cannot_be_valued_is_never_shown_as_its_cash():
         assert "incomplete" in out, out
         # the phantom number itself must appear nowhere as this book's equity
         assert "*$9,000*" not in out, out
+
+
+def test_the_since_start_verdict_survives_editing_the_lines_above_it():
+    """seed_total is accumulated in the per-book loop and consumed far below it.
+    An edit to that loop dropped the one line that fed it, and the verdict simply
+    vanished from the message — no error, no wrong number, just a missing
+    sentence. The incomplete-book test passes trivially when it is absent, so it
+    cannot stand in for this one."""
+    with tempfile.TemporaryDirectory() as d:
+        _write(d, "state.json", {"equity": 11000.0, "cash": 11000.0, "positions": []})
+        out = _bot(d)._fmt_assets()
+        assert "up $1,000" in out and "since the $10,000 start" in out, out
 
 
 def test_the_total_says_so_when_a_book_is_missing_from_it():

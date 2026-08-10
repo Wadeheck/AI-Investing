@@ -399,22 +399,34 @@ class ChatBot:
         for title, eq, cash, positions in books:
             seed = seeds.get(title, 0.0)
             seed_total += seed
-            pnl = f"  {eq - seed:+,.0f}" if seed else ""
-            # GROSS, not net. A short's sale proceeds sit in cash while the shares
-            # are still owed, so `equity - cash` nets longs against shorts: on
-            # 2026-08-10 the investing book showed "invested $2,094" while
-            # carrying $9,718 of gross exposure — 96% of the book, displayed as
-            # 21%. Netting understates the risk by however much is shorted, which
-            # is precisely the confusion that made §4.4 and §4.7 expensive.
+            # "+0"/"-0" for a book that has barely moved reads as a rendering
+            # fault rather than as a number. Say what it means instead.
+            pnl = ""
+            if seed:
+                d = eq - seed
+                pnl = "  flat" if abs(d) < 1 else f"  {d:+,.0f}"
+            # TWO different questions, and conflating them has now caused a
+            # mistake in each direction:
+            #   NET (long - short) is what the equity is MADE OF. cash + net
+            #     always reconciles to equity, so it belongs beside cash.
+            #   GROSS (long + short) is what is AT RISK. A short's proceeds sit
+            #     in cash while the shares are still owed, so netting hid it:
+            #     the investing book read "invested $2,094" against $9,718 of
+            #     real exposure — 96% of the book, shown as 21%.
+            # Reporting only gross was no better: it does not reconcile with
+            # anything, yet sat where the reconciling number used to be, so on a
+            # long-only book cash + gross happened to equal equity and taught the
+            # reader to add — then broke on the one book with shorts. Show both,
+            # name both, and never place them where they invite addition.
             longs = sum(float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0)
                         for p in positions if float(p.get("qty", 0) or 0) > 0)
             shorts = sum(-float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0)
                          for p in positions if float(p.get("qty", 0) or 0) < 0)
-            exposure = f"${longs + shorts:,.0f} at risk"
+            held = f"cash ${cash:,.0f} + ${longs - shorts:,.0f} invested"
             if shorts > 0:
-                exposure += f" (${longs:,.0f} long, ${shorts:,.0f} short)"
-            lines.append(f"{title}: *${eq:,.0f}*{pnl}  (cash ${cash:,.0f} · "
-                         f"{exposure} in {len(positions)})")
+                held += (f" · *${longs + shorts:,.0f} at risk* "
+                         f"(${longs:,.0f} long, ${shorts:,.0f} short)")
+            lines.append(f"{title}: *${eq:,.0f}*{pnl}  ({held} in {len(positions)})")
         for title, cash, npos in unpriced:
             lines.append(f"{title}: *value unknown* — {npos} position(s) unpriced, "
                          f"cash ${cash:,.0f}. NOT counted in the total below.")
@@ -432,8 +444,15 @@ class ChatBot:
             # capital simply absent from the view. Say so rather than print a
             # smaller number as though it were the whole picture.
             verdict = "  — *incomplete*, a book could not be valued"
-        lines.append(f"\n*Total: ${te:,.0f}*{verdict}\n"
-                     f"(${tc:,.0f} cash, ${gross:,.0f} of market exposure)")
+        # The footer is a DECOMPOSITION and has to add up, because a reader will
+        # check it against the total — the previous version put gross exposure
+        # here, where $27,717 cash + $20,391 exposure came to $48,108 against a
+        # $40,475 total. Gross is stated separately, and only when shorts make it
+        # differ from the invested figure, so it can never be read as a component.
+        footer = f"(${tc:,.0f} cash + ${te - tc:,.0f} invested = ${te:,.0f})"
+        if gross - (te - tc) > 1:
+            footer += f"\n*${gross:,.0f} at risk* — gross exposure, shorts counted, not netted"
+        lines.append(f"\n*Total: ${te:,.0f}*{verdict}\n{footer}")
         return "\n".join(lines)
 
     def _fmt_portfolio(self) -> str:
