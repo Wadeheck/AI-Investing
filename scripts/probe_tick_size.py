@@ -41,6 +41,9 @@ def main() -> int:
     ap.add_argument("--send", action="store_true", help="place the probe orders")
     args = ap.parse_args()
 
+    # Importing config is what loads .env (`_load_dotenv` runs at import time),
+    # and the credentials live there rather than in the ambient environment.
+    import ai_investing.config  # noqa: F401
     from longport.openapi import (Config, TradeContext, QuoteContext,  # type: ignore
                                   OrderSide, OrderType, TimeInForceType)
 
