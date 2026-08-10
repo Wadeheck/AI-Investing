@@ -44,7 +44,12 @@ def main() -> int:
     from longport.openapi import (Config, TradeContext, QuoteContext,  # type: ignore
                                   OrderSide, OrderType, TimeInForceType)
 
-    cfg = Config.from_env()
+    # Built exactly as LongbridgeBroker builds it — from_env() does not exist in
+    # this SDK version, and a probe that authenticates differently from the
+    # engine is not probing the engine's path.
+    cfg = Config.from_apikey(app_key=os.environ["LONGPORT_APP_KEY"],
+                             app_secret=os.environ["LONGPORT_APP_SECRET"],
+                             access_token=os.environ["LONGPORT_ACCESS_TOKEN"])
     trade = TradeContext(cfg)
     quote = QuoteContext(cfg)
 
