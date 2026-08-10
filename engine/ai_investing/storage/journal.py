@@ -54,12 +54,21 @@ class Journal:
             """
         )
         self.conn.commit()
-        # Backfill column on pre-existing databases.
-        try:
-            self.conn.execute("ALTER TABLE orders ADD COLUMN client_order_id TEXT")
-            self.conn.commit()
-        except sqlite3.OperationalError:
-            pass
+        # Backfill columns on pre-existing databases. Each ALTER is attempted
+        # separately: they were added at different times, so a database that has
+        # some and not others must still get the rest (one combined try/except
+        # would stop at the first column that already exists).
+        for ddl in ("ALTER TABLE orders ADD COLUMN client_order_id TEXT",
+                    "ALTER TABLE orders ADD COLUMN req_qty REAL",
+                    "ALTER TABLE orders ADD COLUMN submitted_qty REAL",
+                    "ALTER TABLE orders ADD COLUMN submitted_price REAL",
+                    "ALTER TABLE orders ADD COLUMN order_type TEXT",
+                    "ALTER TABLE orders ADD COLUMN limit_price REAL"):
+            try:
+                self.conn.execute(ddl)
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
 
     def record_decision(self, d: Decision) -> None:
         self.conn.execute(
@@ -72,11 +81,23 @@ class Journal:
         self.conn.commit()
 
     def record_order(self, o: Order, live: bool) -> None:
+        """Record the REQUEST as well as the outcome.
+
+        `qty`/`price` keep their old meaning (filled, falling back to requested)
+        so every existing reader is unaffected. The new columns are what a
+        rejection needs and never had: what was asked for, what the adapter
+        actually sent, and in what form. Without them a rejected order says only
+        that the venue refused something — 8 live orders were lost to
+        "Wrong bid size, please change the price" and the submitted price, the
+        one number that would have identified the cause, existed nowhere."""
         self.conn.execute(
-            "INSERT INTO orders (ts,symbol,side,qty,price,status,reason,live,client_order_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO orders (ts,symbol,side,qty,price,status,reason,live,client_order_id,"
+            " req_qty,submitted_qty,submitted_price,order_type,limit_price) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (_now(), o.asset.symbol, o.side.value, o.filled_qty or o.qty,
-             o.filled_price or 0.0, o.status.value, o.reason, int(live), o.client_order_id),
+             o.filled_price or 0.0, o.status.value, o.reason, int(live), o.client_order_id,
+             o.qty, o.submitted_qty, o.submitted_price,
+             (o.order_type.value if o.order_type is not None else None), o.limit_price),
         )
         self.conn.commit()
 

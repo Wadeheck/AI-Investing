@@ -103,6 +103,14 @@ class Order:
     client_order_id: Optional[str] = None   # idempotency key: dedupes double-submits
     ts: Optional[datetime] = None
     reason: str = ""
+    # WHAT THE ADAPTER ACTUALLY SENT, stamped by the adapter itself rather than
+    # recomputed by the caller. Eight consecutive live orders were rejected with
+    # "Wrong bid size, please change the price" and the cause could not be
+    # established afterwards, because the journal recorded the FILL price (0.0 on
+    # a reject) and nothing recorded the price that was submitted. A rejected
+    # order you cannot reconstruct is an order you cannot learn from.
+    submitted_price: Optional[float] = None
+    submitted_qty: Optional[float] = None
 
 
 @dataclass

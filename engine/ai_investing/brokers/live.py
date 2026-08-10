@@ -294,6 +294,12 @@ class LongbridgeBroker(BrokerAdapter):
                 kwargs["submitted_price"] = Decimal(str(round(order.limit_price, 3)))
             else:
                 kwargs["order_type"] = OrderType.MO
+            # Stamped BEFORE the call, so a rejection carries what was sent. The
+            # exception path below records nothing about the request otherwise,
+            # which is precisely why 602035 could not be diagnosed.
+            order.submitted_qty = float(qty)
+            order.submitted_price = (float(kwargs["submitted_price"])
+                                     if "submitted_price" in kwargs else None)
             resp = self.ctx.submit_order(**kwargs)
             order.id = str(getattr(resp, "order_id", ""))
             # NEVER ASSUME THE FILL (fixed 2026-08-04). This used to read:
