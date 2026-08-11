@@ -44,6 +44,48 @@ racing to start the engine risks two engines writing one set of books.
 Without it, user services stop the moment the SSH session ends, so on a headless
 box it is not optional.
 
+### Nightly rest — deliberate scheduled outage (added 2026-08-11)
+
+Unlike everything else in this document, this section documents a **planned**
+outage rather than a failure mode. The ProDesk powers itself off nightly for
+thermal cooldown and comes back up on its own — this is intentional, not the
+11.9h silent-outage class of problem the rest of this page exists to prevent.
+It's called out explicitly here so it never gets mistaken for one.
+
+- **Window: 05:00–07:30 SGT daily.** Chosen as the only stretch with zero live
+  market open anywhere in the watchlist: after US close (~04:00 SGT) and before
+  SG open (~09:00 SGT, the next market this book trades once a real Longbridge
+  account channel replaces the current paper one — see `.env`'s
+  `LONGPORT_EXPECT_CHANNEL`). It also clears `accumulate_once.py`'s 04:17 cron
+  firing by 43 minutes and finishes before `refresh_market_data.py` at 07:53,
+  so that job still runs against a fully-awake box with fresh data.
+- **Mechanism**: `/etc/systemd/system/nightly-rest.service` + `.timer` — a
+  **system**-level unit (`sudo systemctl status nightly-rest.timer`), not one
+  of the `systemd --user` units in the table above. `ExecStart=/usr/sbin/rtcwake
+  -m off -s 9000` does a real S5 poweroff with the RTC alarm set to wake the
+  box 9000s (2.5h) later — independent of Wake-on-LAN or Tailscale, so it
+  works even though a fully-off machine can't be reached over the tailnet to
+  power it back on.
+- **Live-tested 2026-08-11**: a real `rtcwake` cycle was run against this box
+  with two open Longbridge positions live in the book (AAPL, USO — later
+  confirmed to be on the `lb_papertrading` channel, not a funded account, but
+  the test predates that finding and was run as if they were real). The first
+  post-wake start of `ai-investing.service` failed — `client error (Connect)`
+  reaching Longbridge's API, network not fully up yet seconds after boot — and
+  `Restart=always`/`RestartSec=20` recovered it automatically 20s later with
+  zero manual intervention (restart counter: 1). Positions were unchanged
+  before/after. `startup_heal.py` logged the gap correctly ("engine was down
+  for ~0.1h") so the learning spine won't train across it.
+- **What this means for the watchdog**: `ai-investing-watchdog.timer` cannot
+  alert *during* the window (the box is off), and hasn't been observed to
+  false-positive right after wake either, since the engine's cold start lands
+  well inside its 15-minute check interval. Worth re-confirming if the
+  watchlist ever grows a symbol whose market opens inside 05:00–07:30 SGT —
+  the whole point of the window is that none currently do.
+- **thinkcentre runs the equivalent pattern** (06:00–08:00 SGT, unrelated
+  machine/app) — see that box's own `/home/eugene/stack/README.md` if useful
+  as a reference, not because the two are coupled.
+
 ## Daily driving
 
 Run these **on the ProDesk** — `ssh -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103`
