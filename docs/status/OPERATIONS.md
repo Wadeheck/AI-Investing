@@ -67,6 +67,34 @@ It's called out explicitly here so it never gets mistaken for one.
   07:30 RTC wake, is now a timer rather than a cron line: a late wake used to
   lose the day's market numbers outright, and the 09:20 digest would then
   read yesterday's.
+- **The nightly poweroff doubles as the update reboot** (2026-08-11).
+  `/etc/apt/apt.conf.d/51unattended-upgrades-local` sets
+  `Unattended-Upgrade::Automatic-Reboot "false"`, and a drop-in at
+  `/etc/systemd/system/apt-daily-upgrade.timer.d/override.conf` moves the
+  upgrade off Ubuntu's shipped 06:00 (+<=1h jitter, which falls *entirely*
+  inside the sleep window, so it only ever ran as a post-wake catch-up) to
+  **22:30**. `rtcwake -m off` is a real S5 poweroff, so the 07:30 wake boots
+  the newest installed kernel — that *is* the reboot. Net: one scheduled power
+  event per night instead of two, and a kernel goes live ~9h after install
+  rather than ~24h.
+
+  Two things to know before touching either side:
+    - **This coupling is load-bearing.** If `nightly-rest.timer` is ever
+      disabled, set `Automatic-Reboot` back to `"true"`, or
+      `/var/run/reboot-required` lingers forever and kernel updates never
+      apply.
+    - The previous policy (`Automatic-Reboot "true"` at 04:30) is what
+      silently killed the then-unsupervised GDELT crawler on 2026-08-08. Any
+      unexplained prodesk reboot before 2026-08-11 is worth checking against
+      `/var/log/unattended-upgrades/unattended-upgrades.log` ("Reboot
+      scheduled") before hunting for a crash.
+
+  prodesk is deliberately **not** kernel-pinned, so unattended kernel upgrades
+  now apply at exactly this poweroff. A kernel that broke `rtcwake` would mean
+  the box sleeps at 05:00 and never returns; the detector for that is the
+  stale-backup Telegram alert from thinkcentre at ~08:17, not anything on
+  prodesk itself. Verify a cycle with
+  [`NIGHTLY_REST_VERIFICATION.md`](NIGHTLY_REST_VERIFICATION.md).
 - **Mechanism**: `/etc/systemd/system/nightly-rest.service` + `.timer` — a
   **system**-level unit (`sudo systemctl status nightly-rest.timer`), not one
   of the `systemd --user` units in the table above. `ExecStart=/usr/sbin/rtcwake
