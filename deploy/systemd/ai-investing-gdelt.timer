@@ -1,0 +1,18 @@
+[Unit]
+Description=Start the GDELT backfill daily and after boot
+
+# The crawler appends to a single file and computes its "already covered" set
+# once at startup, so two instances would duplicate day-records. systemd gives
+# single-instance for free: while the unit is active this start is a no-op, so
+# a multi-day backlog run is never disturbed by the daily tick.
+#
+# OnBootSec matters because prodesk power-cycles nightly (05:00-07:30 rtcwake);
+# before this unit existed the crawler was started by hand and stayed dead from
+# 2026-08-08 until 2026-08-11.
+[Timer]
+OnBootSec=10min
+OnCalendar=*-*-* 09:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

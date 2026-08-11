@@ -35,10 +35,29 @@ boot+6.3s, network-online at boot+11.1s), and these scripts catch their own
 per-source exceptions and still exit 0 — so a catch-up run firing into that
 hole would be recorded as a success and consume the catch-up, leaving the
 data stale until the next tick.
-- The GDELT crypto crawler (`gdelt_crypto_fetch --loop`) is long-running and
-  resumable; restart it in any session if dead:
-  `cd engine && python3 -m ai_investing.research.gdelt_crypto_fetch --loop`
-  (single instance only — it appends to one file).
+- `ai-investing-gdelt.timer` → `gdelt_crypto_fetch --loop --gentle`: the
+  crypto-news backfill. Long-running and resumable — a pass skips days already
+  in `data/news_archive_gdelt_crypto.jsonl`, and `--loop` exits 0 once the
+  archive is gapless. Log: `data/gdelt_crypto_fetch.log`.
+
+  It used to be started by hand, which meant it stayed dead from **2026-08-08
+  04:19** (killed by that morning's reboot) until it was made a unit on
+  2026-08-11. With prodesk power-cycling nightly that failure mode was about to
+  become daily. Notes on the unit's shape:
+    - `Restart=on-failure`, **not** `always` — `--loop` terminating cleanly
+      means "gapless", and `always` would busy-restart a finished crawler.
+      `OnBootSec=10min` + a daily `OnCalendar` is what brings it back for each
+      day's new data.
+    - **Single instance only** — it appends to one file and computes its
+      covered-days set once at startup, so two instances duplicate records.
+      systemd enforces this: while the unit is active the timer's start is a
+      no-op, so a multi-day backlog run is never disturbed by the daily tick.
+      Never run it by hand alongside the unit; use
+      `systemctl --user status ai-investing-gdelt.service`.
+    - `--gentle` (one fetch per 2-6 min, 5/10/15-min backoff on 429) because
+      the free tier refuses sustained faster rates outright — slower IS faster
+      here. Expect a full backlog to take days of wall clock, spanning several
+      nightly power cycles; that is fine, it resumes.
 
 ## 2. Daily AI routine (once per day, after ~08:30 SGT)
 

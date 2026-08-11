@@ -1,0 +1,15 @@
+[Unit]
+Description=AI-Investing GDELT crypto-news backfill (resumable, self-terminating)
+
+[Service]
+Type=simple
+WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
+ExecStartPre=/home/eugene/Projects/AI-Investing/scripts/wait_online.sh api.gdeltproject.org
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.research.gdelt_crypto_fetch --loop --gentle
+# --loop exits 0 the moment the archive is gapless, so Restart=always would
+# busy-restart a finished crawler. on-failure restarts a genuine crash only;
+# the timer below is what brings it back for each day's new data.
+Restart=on-failure
+RestartSec=15min
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/gdelt_crypto_fetch.log
+StandardError=append:/home/eugene/Projects/AI-Investing/data/gdelt_crypto_fetch.log
