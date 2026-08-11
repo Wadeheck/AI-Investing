@@ -1,0 +1,10 @@
+[Unit]
+Description=AI-Investing feed accumulation (RSS/alt feeds into archive + brain)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStartPre=/home/eugene/Projects/AI-Investing/scripts/wait_online.sh
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/accumulate_once.py
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/accumulate_cron.log
+StandardError=append:/home/eugene/Projects/AI-Investing/data/accumulate_cron.log

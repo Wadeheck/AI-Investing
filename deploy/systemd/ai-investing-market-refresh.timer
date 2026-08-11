@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily market-data refresh at 07:53, before the 09:20 digest
+
+# 07:53 is only 23 min after prodesk's 07:30 RTC wake. Persistent=true is the
+# point of this unit: under cron a late wake silently lost the run for a whole
+# day, and the digest at 09:20 would then read yesterday's market numbers.
+[Timer]
+OnCalendar=*-*-* 07:53:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

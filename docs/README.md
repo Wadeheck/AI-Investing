@@ -76,7 +76,7 @@ Durable design intent. Changes only when the design changes.
 - **DIGESTION_SPEC.md** — the *design* behind digestion: division of labour
   between the tagging AI and the maths. The brief above is what actually runs;
   this is why it looks the way it does.
-- **DAILY_LOOP.md** — data cadence: what cron pulls, when, and recovery.
+- **DAILY_LOOP.md** — data cadence: what the timers pull, when, and recovery.
 - **X_BROWSER_CAPTURE.md** — X/Twitter harvesting. Rule 1: one session, ever.
 - **YOUTUBE_DOSSIER_BRIEF.md** — turning video transcripts into dossiers.
 

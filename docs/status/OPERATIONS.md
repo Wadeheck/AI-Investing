@@ -56,9 +56,17 @@ It's called out explicitly here so it never gets mistaken for one.
   market open anywhere in the watchlist: after US close (~04:00 SGT) and before
   SG open (~09:00 SGT, the next market this book trades once a real Longbridge
   account channel replaces the current paper one — see `.env`'s
-  `LONGPORT_EXPECT_CHANNEL`). It also clears `accumulate_once.py`'s 04:17 cron
+  `LONGPORT_EXPECT_CHANNEL`). It also clears `accumulate_once.py`'s 04:17
   firing by 43 minutes and finishes before `refresh_market_data.py` at 07:53,
   so that job still runs against a fully-awake box with fresh data.
+  **`refresh_crypto_live.py` runs hourly at :11 and does sit inside the
+  window** — 05:11, 06:11 and 07:11 fall while the box is off. Under cron
+  those three were simply lost; since 2026-08-11 it is a `Persistent=true`
+  timer, so systemd fires one coalesced catch-up on wake instead. That is
+  also why `refresh_market_data.py`, with only 23 min of clearance after the
+  07:30 RTC wake, is now a timer rather than a cron line: a late wake used to
+  lose the day's market numbers outright, and the 09:20 digest would then
+  read yesterday's.
 - **Mechanism**: `/etc/systemd/system/nightly-rest.service` + `.timer` — a
   **system**-level unit (`sudo systemctl status nightly-rest.timer`), not one
   of the `systemd --user` units in the table above. `ExecStart=/usr/sbin/rtcwake
@@ -334,7 +342,8 @@ about the portfolio from the ThinkStation's `data/`; ask the ProDesk.
 4. Copy `~/.config/systemd/user/ai-investing*` and `systemctl --user daemon-reload`.
 5. `sudo loginctl enable-linger <user>`
 6. `systemctl --user enable --now` the units and timers.
-7. Re-add the three data crons (`crontab -l` on the old box).
+7. Nothing to re-add to cron — the three data pulls are systemd timers as
+   of 2026-08-11 and come across with step 4.
 8. `python3 scripts/watchdog.py --test` — if the Telegram message does not
    arrive, nothing else here is trustworthy.
 9. **Stop and disable everything on the old box, and clear its crontab.** Two

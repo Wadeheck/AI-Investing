@@ -1,24 +1,40 @@
 # The daily news loop — runbook
 
 *Created 2026-08-01, updated 2026-08-03. The loop that keeps the brain
-current. Data pulls run from the system crontab; process lifecycle and health
-now run under systemd (see [`docs/status/OPERATIONS.md`](../status/OPERATIONS.md));
+current. Data pulls, process lifecycle and health all run under systemd
+(see [`docs/status/OPERATIONS.md`](../status/OPERATIONS.md));
 the digestion routine is session-bound — RE-ARM IT when starting a fresh
 session, see §3.*
 
-## 1. Always-on data pulls (system crontab)
+## 1. Always-on data pulls (systemd user timers)
 
-- `17 */4 * * *` — `scripts/accumulate_once.py`: pulls all ~44 RSS/alt feeds
-  into `data/news_archive_live.jsonl` + the brain store. Log:
+Moved off cron 2026-08-11 — see "Why timers, not cron" below. Units live in
+`deploy/systemd/`; log filenames keep their `_cron` suffix so history and
+`logrotate.conf`'s `data/*.log` glob stay continuous.
+
+- `ai-investing-accumulate.timer` (`*-*-* 00/4:17:00`) —
+  `scripts/accumulate_once.py`: pulls all ~44 RSS/alt feeds into
+  `data/news_archive_live.jsonl` + the brain store. Log:
   `data/accumulate_cron.log`.
-- `53 7 * * *` — `scripts/refresh_market_data.py`: ALL signal/indicator
-  numbers, daily — stablecoin supply (DefiLlama), Fear&Greed, BTC/ETH ETF
-  flows (Farside), DVOL (Deribit), CFTC COT, Guardian archive top-up. Free
-  sources only, no keys. Log: `data/market_refresh_cron.log`.
-- `11 * * * *` — `scripts/refresh_crypto_live.py`: HOURLY crypto inputs
-  (funding rates, Fear&Greed, on-chain activity, Binance long/short ratio +
-  open interest). Crypto trades 24/7, so these cannot sit on the equity
-  clock. Log: `data/crypto_refresh_cron.log`.
+- `ai-investing-market-refresh.timer` (`*-*-* 07:53:00`) —
+  `scripts/refresh_market_data.py`: ALL signal/indicator numbers, daily —
+  stablecoin supply (DefiLlama), Fear&Greed, BTC/ETH ETF flows (Farside),
+  DVOL (Deribit), CFTC COT, Guardian archive top-up. Free sources only, no
+  keys. Log: `data/market_refresh_cron.log`.
+- `ai-investing-crypto-live.timer` (`*-*-* *:11:00`) —
+  `scripts/refresh_crypto_live.py`: HOURLY crypto inputs (funding rates,
+  Fear&Greed, on-chain activity, Binance long/short ratio + open interest).
+  Crypto trades 24/7, so these cannot sit on the equity clock. Log:
+  `data/crypto_refresh_cron.log`.
+
+All three are `Persistent=true` and gated on
+`ExecStartPre=scripts/wait_online.sh`, which blocks until DNS resolves. The
+gate is not decorative: systemd starts the *user* manager ~5s before
+`network-online.target` (measured at the 2026-08-11 boot: user@1000 at
+boot+6.3s, network-online at boot+11.1s), and these scripts catch their own
+per-source exceptions and still exit 0 — so a catch-up run firing into that
+hole would be recorded as a success and consume the catch-up, leaving the
+data stale until the next tick.
 - The GDELT crypto crawler (`gdelt_crypto_fetch --loop`) is long-running and
   resumable; restart it in any session if dead:
   `cd engine && python3 -m ai_investing.research.gdelt_crypto_fetch --loop`
