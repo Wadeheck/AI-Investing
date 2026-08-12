@@ -3,8 +3,11 @@
 # engine — that is how it spent a day serving a stale portfolio format from
 # memory. Supervising it separately is the fix.
 Description=AI-Investing Telegram chat bot
-After=network-online.target ai-investing.service
-Wants=network-online.target
+# `network-online.target` was here and did nothing: the user manager has no such
+# unit (LoadState=not-found), so the bot raced DNS and died on its getMe handshake
+# every boot. The retry now lives in-process — see ai_investing/net.py. Ordering
+# after the engine is kept; that unit is real.
+After=ai-investing.service
 StartLimitIntervalSec=0
 
 [Service]

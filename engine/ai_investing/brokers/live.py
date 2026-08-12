@@ -213,11 +213,19 @@ class LongbridgeBroker(BrokerAdapter):
         Limitation: a channel only shows up in stock_positions() once it holds
         a position, so a freshly-opened empty account is unverifiable — we
         warn loudly rather than block, since it cannot be proven either way.
+
+        This is the engine's first outbound call, so at boot it used to run
+        before DNS was up and take the whole process down (see ai_investing.net).
+        Only the *lookup* retries; the verdict below is still decided once and
+        is fatal on the first try.
         """
         expected = os.environ.get("LONGPORT_EXPECT_CHANNEL", "lb_papertrading")
         if not expected:  # explicit opt-out: LONGPORT_EXPECT_CHANNEL=
             return
-        channels = [ch.account_channel for ch in self.ctx.stock_positions().channels]
+        from ai_investing.net import retry_transient
+        positions = retry_transient(self.ctx.stock_positions,
+                                    what="longbridge account-channel check")
+        channels = [ch.account_channel for ch in positions.channels]
         wrong = [c for c in channels if c != expected]
         if wrong:
             raise RuntimeError(

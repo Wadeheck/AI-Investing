@@ -1,7 +1,9 @@
 [Unit]
 Description=AI-Investing dashboard (production)
-After=network-online.target ai-investing.service
-Wants=network-online.target
+# No `network-online.target`: user units cannot order against it (LoadState=not-found).
+# Harmless here — Next.js binds a local port and needs no outbound call to start —
+# but removed so the remaining ordering means what it says.
+After=ai-investing.service
 StartLimitIntervalSec=0
 
 [Service]

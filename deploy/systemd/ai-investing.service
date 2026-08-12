@@ -2,9 +2,17 @@
 # The engine. Restart=always is the whole point: the 11.9h silent outage
 # happened because boot_start.sh only ran @reboot, so a process that died
 # without a reboot stayed dead until a human noticed.
-Description=AI-Investing engine (paper)
-After=network-online.target
-Wants=network-online.target
+# Mode is NOT encoded here on purpose. This description used to read "(paper)"
+# while LIVE_TRADING=true — a static label duplicating .env drifts, and drifted.
+# The banner in engine.log and data/heartbeat.json are the source of truth.
+Description=AI-Investing engine
+# There is deliberately no `After=network-online.target`. This is a *user* unit,
+# and the user manager has no such target — `systemctl --user show
+# network-online.target` reports LoadState=not-found, so the line was a silent
+# no-op that read like a guarantee. The engine failed its first Longbridge call
+# on every boot because of it. Network readiness is now handled in-process, with
+# a bounded retry (ai_investing/net.py) that also covers blips mid-session.
+# Do not re-add the ordering: it will not work and will hide the real fix.
 StartLimitIntervalSec=0
 
 [Service]

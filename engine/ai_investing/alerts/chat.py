@@ -581,7 +581,12 @@ class ChatBot:
 
     # -- the loop --------------------------------------------------------------------
     def run_forever(self) -> None:
-        me = self._api("getMe", {}, timeout=10)
+        # First outbound call of the process: at boot it ran before DNS was up and
+        # killed the bot every time. The getUpdates loop below already survives a
+        # blip; this handshake now does too. See ai_investing.net.
+        from ai_investing.net import retry_transient
+        me = retry_transient(lambda: self._api("getMe", {}, timeout=10),
+                             what="telegram getMe")
         name = (me.get("result") or {}).get("username", "?")
         print(f"Chat bot up as @{name} — talking only to chat {self.chat_id}. Ctrl-C to stop.")
         self._send("🧠 Chat is live — ask me anything about the brain, the book, or the trades.",
