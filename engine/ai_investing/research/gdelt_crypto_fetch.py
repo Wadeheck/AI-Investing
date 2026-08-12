@@ -11,6 +11,15 @@ Usage:  python3 -m ai_investing.research.gdelt_crypto_fetch
                   429s. ~4 min/day average: a full 864-day backlog is roughly
                   2.5 days of wall clock. The Aug-1 run at 10s/fetch got every
                   request from 2025-12 backwards refused; slower IS faster here.
+
+The block outlasts one process: prodesk restarts this service every boot (the
+nightly 05:00-07:30 rtcwake), which used to wipe the in-memory "consecutive
+refusals" counter and let each new run hammer a still-hot IP for 5 more
+refusals before backing off again — real progress only happened in the sliver
+of each day before that wall was re-hit. COOLDOWN (data/gdelt_cooldown.json)
+persists across restarts: a pass that ends in a refusal-storm escalates an
+exponential, restart-surviving cool-off (45min doubling to an 8h cap) instead
+of the old fixed 30-60min inter-pass rest; a pass with real progress resets it.
 """
 from __future__ import annotations
 
@@ -25,14 +34,42 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 OUT = DATA_DIR / "news_archive_gdelt_crypto.jsonl"
+COOLDOWN_FILE = DATA_DIR / "gdelt_cooldown.json"
 START = date(2023, 7, 1)
 GENTLE = "--gentle" in sys.argv
+COOLDOWN_BASE_SEC = 45 * 60
+COOLDOWN_CAP_SEC = 8 * 60 * 60
 
 
 def _pace() -> float:
     """Seconds to wait between day-fetches. Gentle: 2-6 min, randomised so we
     never look like a metronome to their limiter."""
     return random.uniform(120, 360) if GENTLE else 10.0
+
+
+def _load_cooldown() -> dict:
+    try:
+        return json.loads(COOLDOWN_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"until": None, "streak": 0}
+
+
+def _save_cooldown(until: datetime | None, streak: int) -> None:
+    COOLDOWN_FILE.write_text(json.dumps(
+        {"until": until.isoformat() if until else None, "streak": streak}))
+
+
+def _await_cooldown() -> None:
+    state = _load_cooldown()
+    until_raw = state.get("until")
+    if not until_raw:
+        return
+    until = datetime.fromisoformat(until_raw)
+    remaining = (until - datetime.now(timezone.utc)).total_seconds()
+    if remaining > 0:
+        print(f"cooldown from a prior refusal-storm (streak {state.get('streak', 0)}): "
+              f"sleeping {remaining/60:.0f}min before the next pass", flush=True)
+        time.sleep(remaining)
 
 QUERY = ('(bitcoin OR ethereum OR stablecoin OR "crypto exchange" OR binance OR '
          'coinbase OR "SEC crypto" OR "crypto regulation" OR "crypto ETF" OR '
@@ -93,7 +130,9 @@ def fetch_day(d: date) -> list[dict] | None:
     return heads
 
 
-def run() -> int:
+def run() -> tuple[int, bool]:
+    """Returns (days fetched, walled) — walled = the pass ended because the
+    limiter refused 5 days in a row, not because todo ran out."""
     done = covered()
     today = datetime.now(timezone.utc).date()
     todo = []
@@ -106,6 +145,7 @@ def run() -> int:
     print(f"gdelt crypto backfill: {len(done)} days covered, {len(todo)} to fetch (newest first)", flush=True)
     fetched = 0
     misses = 0   # consecutive failed days: the limiter is telling us to go away
+    walled = False
     with OUT.open("a") as fh:
         for d in todo:
             heads = fetch_day(d)
@@ -114,6 +154,7 @@ def run() -> int:
                 misses += 1
                 if misses >= 5:
                     print(f"5 consecutive refusals — ending this pass to cool off", flush=True)
+                    walled = True
                     break
                 continue
             misses = 0
@@ -123,21 +164,32 @@ def run() -> int:
             if fetched % 50 == 0:
                 print(f"{fetched}/{len(todo)} days (latest {d}, {len(heads)} heads)", flush=True)
     print(f"gdelt crypto backfill DONE — {fetched} new days this run", flush=True)
-    return 0
+    return fetched, walled
 
 
 if __name__ == "__main__":
     if "--loop" in sys.argv:
         # patient mode: repeated resumable passes with long rests until gapless
         while True:
-            run()
+            _await_cooldown()
+            fetched, walled = run()
             today = datetime.now(timezone.utc).date()
             remaining = sum(1 for i in range((today - START).days)
                             if (START + timedelta(days=i)).isoformat() not in covered())
             print(f"pass complete — {remaining} days still missing", flush=True)
             if remaining == 0:
+                _save_cooldown(None, 0)
                 print("archive GAPLESS — exiting", flush=True)
                 break
+            if walled and fetched == 0:
+                streak = _load_cooldown().get("streak", 0) + 1
+                cooldown_sec = min(COOLDOWN_BASE_SEC * (2 ** (streak - 1)), COOLDOWN_CAP_SEC)
+                until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_sec)
+                _save_cooldown(until, streak)
+                print(f"refusal-storm with zero progress (streak {streak}) — cooling off "
+                      f"{cooldown_sec/60:.0f}min, surviving restarts", flush=True)
+            else:
+                _save_cooldown(None, 0)   # real progress made: the wall is down, drop the streak
             time.sleep(random.uniform(1800, 3600) if GENTLE else 900)  # rest between passes
     else:
-        sys.exit(run())
+        sys.exit(run()[0])
