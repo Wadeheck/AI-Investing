@@ -1,8 +1,0 @@
-[Unit]
-Description=AI-Investing watchdog (dead-man's switch: alerts/flattens on a stale heartbeat)
-
-[Service]
-Type=oneshot
-User=@@USER@@
-WorkingDirectory=@@REPO@@/engine
-ExecStart=@@PYTHON@@ -m ai_investing.main --watchdog
