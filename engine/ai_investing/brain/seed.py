@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 25
+SEED_VERSION = 26
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -167,8 +167,18 @@ SEED_NODES = [
      "aliases": ["antitrust", "ai regulation", "big tech probe", "ftc lawsuit"],
      "equilibrium": "simmering; a breakup ruling or AI act reprices mega-caps"},
     {"id": "crypto_regulation", "type": "factor", "label": "Crypto regulation (up = tightening)",
-     "aliases": ["crypto crackdown", "stablecoin law", "etf approval", "sec crypto"],
-     "equilibrium": "approvals (node DOWN) unlock flows; crackdowns choke liquidity"},
+     "aliases": ["crypto crackdown", "stablecoin law", "etf approval", "sec crypto",
+                 # v26: these were US-only, so a FOREIGN crypto law matched no
+                 # node at all — the 2026-08-04 Russian digital-assets law
+                 # resolved to nothing until these were added.
+                 "crypto law", "crypto legislation", "legalize crypto",
+                 "legalizing crypto", "digital assets law", "clarity act",
+                 "crypto ban", "mica", "licensing regime", "加密监管"],
+     "equilibrium": "approvals (node DOWN) unlock flows; crackdowns choke liquidity. "
+                    "Read the CONTENT, not the headline: a law that legalizes "
+                    "crypto for state trade settlement while capping retail "
+                    "holdings and banning domestic payment is a TIGHTENING at "
+                    "home (see cbdc_rollout) wearing a legalization headline"},
     {"id": "ai_circularity", "type": "factor", "label": "AI circular financing (up = more round-tripping)",
      "aliases": ["circular deals", "vendor financing", "round-tripping", "circular revenue",
                  "gpu-backed loans", "invest in customer", "循环融资", "循環融資"],
@@ -804,6 +814,74 @@ SEED_NODES = [
     {"id": "china_semis", "type": "theme", "label": "China domestic semiconductors",
      "aliases": ["domestic substitution", "china chipmakers", "china foundry",
                  "semiconductor self-sufficiency", "国产替代", "國產替代"]},
+
+    # ------------- monetary plumbing (seed v26) -------------
+    # Digested 2026-08-12 from the Russia crypto-law / digital-ruble story. The
+    # graph already had the SURFACE of that story (sanctions, crypto_regulation,
+    # crypto_adoption, tether, crcl). What it could not express was the plumbing
+    # underneath: that sanctions bite through correspondent-bank access, that a
+    # stablecoin is a dollar claim whose reserves buy T-bills and whose float
+    # competes with bank deposits, and that state digital money is a CAP on
+    # retail crypto demand rather than a vote for it. Those are the channels
+    # that actually price assets, so they get nodes.
+    {"id": "stablecoin_supply", "type": "factor",
+     "label": "Stablecoin float (up = supply expanding)",
+     "aliases": ["stablecoin", "stablecoins", "usdt supply", "usdc supply",
+                 "stablecoin market cap", "tokenized dollar", "digital dollar",
+                 "dollar on-chain", "genius act", "stablecoin legislation",
+                 "payment stablecoin", "稳定币"],
+     "equilibrium": "float grows with dollar demand offshore; +1 = rapid "
+                    "expansion. NOTE: distinct from crypto_liquidity — this is a "
+                    "DOLLAR aggregate, and its reserve leg (T-bills) and deposit "
+                    "leg (bank funding) act whether or not crypto is rallying"},
+    {"id": "payment_rail_access", "type": "factor",
+     "label": "Dollar payment-rail access (up = access being RESTRICTED)",
+     "aliases": ["correspondent banking", "correspondent account", "swift",
+                 "de-risking", "cut off from the dollar", "clearing access",
+                 "secondary sanctions", "facilitator", "shadow banking network",
+                 "ofac designation", "sdn list", "nested account"],
+     "equilibrium": "+1 = access TIGHTENING (designations, de-risking, "
+                    "correspondent lines pulled). This is the mechanism sanctions "
+                    "actually work through — the choke point is the US "
+                    "correspondent account, not the trade itself"},
+    {"id": "monetary_fragmentation", "type": "factor",
+     "label": "Monetary-system fragmentation (up = parallel rails growing)",
+     "aliases": ["de-dollarization", "dedollarization", "brics pay", "mbridge",
+                 "local currency settlement", "petroyuan", "cips",
+                 "reserve currency status", "bilateral swap line",
+                 "non-dollar invoicing", "去美元化"],
+     "equilibrium": "+1 = the world building settlement paths that bypass the "
+                    "dollar. Slow-moving (years): trades through the central-bank "
+                    "gold bid long before it shows up in DXY"},
+    {"id": "cbdc_rollout", "type": "factor",
+     "label": "State digital currency rollout (up = mandates advancing)",
+     "aliases": ["cbdc", "digital ruble", "digital rouble", "e-cny", "digital yuan",
+                 "digital euro", "central bank digital currency", "数字人民币"],
+     "equilibrium": "+1 = state digital money being MANDATED (banks/merchants "
+                    "compelled to accept). Reads as a capital-control capability, "
+                    "not as crypto adoption — the two are opposites"},
+    {"id": "fx_intervention", "type": "factor",
+     "label": "FX intervention (up = authorities actively defending a currency)",
+     "aliases": ["currency intervention", "fx intervention", "yen intervention",
+                 "defend the currency", "prop up the yen", "ministry of finance",
+                 "mof intervention", "coordinated intervention", "verbal intervention",
+                 "smoothing operation", "exchange stabilization fund",
+                 "為替介入"],
+     "equilibrium": "+1 = active defence underway. Distinct from "
+                    "market_intervention (equity propping): an FX defence is FUNDED "
+                    "by selling reserve assets, and those reserves are US "
+                    "Treasuries. That funding leg is the tradeable part — the "
+                    "defence is announced in FX and paid for in the bond market. "
+                    "Credibility decides success: uncoordinated or reserve-limited "
+                    "defences get faded, and the attempt then signals the weakness "
+                    "it meant to hide"},
+    {"id": "em_dollarization", "type": "factor",
+     "label": "EM household dollarization (up = savings fleeing local currency)",
+     "aliases": ["dollarization", "capital flight", "savings in dollars",
+                 "currency substitution", "parallel dollar", "informal dollar"],
+     "equilibrium": "+1 = households/firms in weak-currency economies moving "
+                    "savings into dollars. Historically gated by who controls the "
+                    "banks; a dollar that lives on a phone removes that gate"},
 ]
 
 SEED_EDGES = [
@@ -1055,7 +1133,13 @@ SEED_EDGES = [
     {"src": "crypto_regulation", "dst": "crypto_adoption", "type": "influences", "sign": -1, "weight": 0.5,
      "note": "approvals (regulation node DOWN) unlock the institutional wave"},
     {"src": "sanctions", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
-     "note": "capital flight / sanctions-evasion demand — crypto's gold-like bid"},
+     "note": "capital flight / sanctions-evasion demand — crypto's gold-like bid. "
+             "WEIGHT STAYS LOW ON PURPOSE (v26): sanctioned trade settled in "
+             "crypto is PASS-THROUGH FLOW, not holding demand — value enters, "
+             "crosses, and is converted out, like gold in a vault swap. It lifts "
+             "settlement volume (tether, coin) far more than it lifts price. A "
+             "sanctioned state legalizing crypto for trade is not a new buyer, "
+             "and the cbdc_rollout edge usually points the other way"},
     {"src": "us_inflation", "dst": "crypto_adoption", "type": "influences", "sign": 1, "weight": 0.2,
      "note": "debasement narrative recruits marginal buyers (weak but real)"},
     {"src": "btc_halving", "dst": "crypto_majors", "type": "influences", "sign": 1, "weight": 0.3,
@@ -1974,4 +2058,127 @@ SEED_EDGES = [
     {"src": "smic", "dst": "china_tech", "type": "member_of", "weight": 0.4},
     {"src": "china_semis", "dst": "semis", "type": "competes_with", "weight": 0.3,
      "note": "substitution: their gain is the incumbents' China revenue"},
+
+    # ---- monetary plumbing (seed v26) ----
+    # How sanctions actually transmit: the choke point is the correspondent
+    # account, not the trade. This is the leg the graph was missing — it had
+    # sanctions -> oil/tension, but nothing for "cut off from the dollar".
+    {"src": "sanctions", "dst": "payment_rail_access", "type": "influences", "sign": 1,
+     "weight": 0.8,
+     "note": "designating facilitators IS the sanction; the trade is legal, the "
+             "settlement is what gets blocked"},
+    {"src": "payment_rail_access", "dst": "sanctioned_economy_stress", "type": "influences",
+     "sign": 1, "weight": 0.7, "delay_days": 30,
+     "note": "a sanctioned exporter still has the oil — it cannot get PAID. "
+             "Stress shows up in settlement, then FX, then rates"},
+    {"src": "payment_rail_access", "dst": "monetary_fragmentation", "type": "influences",
+     "sign": 1, "weight": 0.5, "delay_days": 180,
+     "note": "being cut off is what makes a country BUILD an alternative — "
+             "enforcement and fragmentation are the same process seen twice"},
+    {"src": "payment_rail_access", "dst": "gold_price", "type": "influences", "sign": 1,
+     "weight": 0.25, "delay_days": 90,
+     "note": "reserve managers who watched reserves freeze prefer an asset with "
+             "no counterparty — the central-bank bid, not the retail one"},
+    {"src": "payment_rail_access", "dst": "tether", "type": "influences", "sign": 1,
+     "weight": 0.3, "delay_days": 30,
+     "note": "USDT is the rail that actually gets used when correspondent banking "
+             "closes — bearer settlement, no bank in the middle. FLOW, not price"},
+
+    # Fragmentation: slow. It reaches gold years before it reaches DXY.
+    {"src": "monetary_fragmentation", "dst": "gold_price", "type": "influences", "sign": 1,
+     "weight": 0.35, "delay_days": 90,
+     "note": "the observable expression of de-dollarization is central banks "
+             "buying gold, long before any reserve-share number moves"},
+    {"src": "monetary_fragmentation", "dst": "usd_strength", "type": "influences", "sign": -1,
+     "weight": 0.2, "delay_days": 365,
+     "note": "deliberately weak and slow: reserve status erodes over decades and "
+             "cyclical DXY swamps it. Do NOT let a de-dollarization headline "
+             "short the dollar"},
+    {"src": "monetary_fragmentation", "dst": "bond_stress", "type": "influences", "sign": 1,
+     "weight": 0.2, "delay_days": 365,
+     "note": "fewer captive foreign buyers at the long end"},
+    {"src": "geopolitical_tension", "dst": "monetary_fragmentation", "type": "influences",
+     "sign": 1, "weight": 0.3, "delay_days": 180},
+    {"src": "cbdc_rollout", "dst": "monetary_fragmentation", "type": "influences", "sign": 1,
+     "weight": 0.4, "delay_days": 180},
+    {"src": "sanctions", "dst": "cbdc_rollout", "type": "influences", "sign": 1, "weight": 0.3,
+     "delay_days": 180,
+     "note": "sanctioned states build state rails first — the digital ruble is a "
+             "sanctions artifact, not a fintech one"},
+
+    # The counterweight. Without this edge the graph reads every crypto-law
+    # headline as bullish crypto, which is how you buy a 'Russia legalizes
+    # crypto' print that is actually a capital-control law with a $3.7k retail
+    # cap and a domestic spending ban.
+    {"src": "cbdc_rollout", "dst": "crypto_adoption", "type": "influences", "sign": -1,
+     "weight": 0.25, "delay_days": 90,
+     "note": "state digital money is built to REPLACE the exit, not open it: "
+             "mandated acceptance plus a visible ledger is a capital control"},
+
+    # Stablecoins. The reserve leg and the deposit leg act whether or not crypto
+    # is rallying — that is why this is not folded into crypto_liquidity.
+    {"src": "stablecoin_supply", "dst": "bond_stress", "type": "influences", "sign": -1,
+     "weight": 0.25, "delay_days": 30,
+     "note": "reserves are held in T-bills: an expanding float is a structural, "
+             "price-insensitive bid at the front end"},
+    {"src": "stablecoin_supply", "dst": "crcl", "type": "influences", "sign": 1, "weight": 0.6,
+     "note": "Circle's revenue IS float x reserve yield — the most direct "
+             "listed expression of this node"},
+    {"src": "stablecoin_supply", "dst": "tether", "type": "influences", "sign": 1, "weight": 0.6},
+    {"src": "stablecoin_supply", "dst": "coin", "type": "influences", "sign": 1, "weight": 0.3,
+     "note": "USDC reserve-income share"},
+    {"src": "fed_rate", "dst": "crcl", "type": "influences", "sign": 1, "weight": 0.4,
+     "note": "issuers are levered to the FRONT end: they earn the policy rate on "
+             "reserves and pay holders nothing. Cuts compress this directly"},
+    {"src": "fed_rate", "dst": "tether", "type": "influences", "sign": 1, "weight": 0.3},
+    {"src": "stablecoin_supply", "dst": "us_financials", "type": "influences", "sign": -1,
+     "weight": 0.2, "delay_days": 180,
+     "note": "deposit disintermediation: a dollar that pays reserve yield with no "
+             "branch competes with the cheapest bank funding there is. Small and "
+             "slow — but it is why the banks lobby on this"},
+    {"src": "stablecoin_supply", "dst": "payments", "type": "influences", "sign": -1,
+     "weight": 0.2, "delay_days": 180,
+     "note": "bearer settlement bypasses interchange at the margin"},
+    {"src": "stablecoin_supply", "dst": "em_dollarization", "type": "influences", "sign": 1,
+     "weight": 0.4, "delay_days": 60,
+     "note": "capital controls historically worked because the state controlled "
+             "who got a dollar ACCOUNT; a phone-native dollar removes that gate"},
+    {"src": "crypto_regulation", "dst": "stablecoin_supply", "type": "influences", "sign": -1,
+     "weight": 0.3,
+     "note": "AMBIGUOUS on purpose (weight kept low): a licensing regime both "
+             "legitimizes issuance and bans the yield that would drive adoption. "
+             "Read the specific bill, not the direction"},
+    # ---- FX defence is paid for in the bond market (seed v26) ----
+    # Digested 2026-08-12 from the US/MOF yen-intervention story. The graph had
+    # japan_debt -> us_10y_yield, but that is Japan-specific and describes the
+    # DEBT, not the defence. The general mechanism was missing: any authority
+    # defending its currency sells reserves, and reserves are Treasuries.
+    {"src": "currency_peg_stress", "dst": "fx_intervention", "type": "influences", "sign": 1,
+     "weight": 0.7,
+     "note": "stress is what triggers the defence — this is the ordering, and it "
+             "is why an intervention headline is a LAGGING tell on peg stress"},
+    {"src": "fx_intervention", "dst": "bond_stress", "type": "influences", "sign": 1,
+     "weight": 0.4, "delay_days": 30,
+     "note": "THE tradeable leg: defending a currency is funded by selling FX "
+             "reserves, which are US Treasuries. Sustained defence = a "
+             "price-insensitive seller at the long end"},
+    {"src": "fx_intervention", "dst": "risk_appetite", "type": "influences", "sign": -1,
+     "weight": 0.2, "delay_days": 90,
+     "note": "same shape as market_intervention: the prop supports now and "
+             "betrays the weakness later"},
+    {"src": "fx_intervention", "dst": "monetary_fragmentation", "type": "influences", "sign": 1,
+     "weight": 0.25, "delay_days": 365,
+     "note": "reflexive and slow: when the ISSUER intervenes to stop holders "
+             "selling its bonds, it contradicts the liquidity promise that makes "
+             "those bonds a reserve asset in the first place. You cannot be both "
+             "the risk-free asset and the asset nobody may sell"},
+    {"src": "japan_debt", "dst": "fx_intervention", "type": "influences", "sign": 1,
+     "weight": 0.4,
+     "note": "a debt burden that blocks rate hikes leaves intervention as the "
+             "only currency tool left — which is why it keeps being reached for"},
+
+    {"src": "em_dollarization", "dst": "currency_peg_stress", "type": "influences", "sign": 1,
+     "weight": 0.5, "delay_days": 90,
+     "note": "household substitution is what breaks a managed FX regime — the "
+             "peg fails after the savings leave, not before"},
 ]

@@ -9,10 +9,13 @@ from pathlib import Path
 
 import ccxt
 
-OUT = Path(__file__).resolve().parents[3] / "data" / "scalp_history"
-OUT.mkdir(parents=True, exist_ok=True)
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+# usage: scalp_fetch_data [days] [outdir] [SYM,SYM,...]
 DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+OUT = Path(__file__).resolve().parents[3] / "data" / (
+    sys.argv[2] if len(sys.argv) > 2 else "scalp_history")
+OUT.mkdir(parents=True, exist_ok=True)
+SYMBOLS = sys.argv[3].split(",") if len(sys.argv) > 3 else DEFAULT_SYMBOLS
 COLS = ["ts", "open", "high", "low", "close", "vol", "taker_buy_vol", "n_trades"]
 
 ex = ccxt.binance()

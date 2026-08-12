@@ -353,6 +353,13 @@ class Brain:
         # stablecoin supply growth: ~+1%/30d is cruise; +5% = strong inflow,
         # sustained contraction = liquidity leaving crypto's rails (bear tell)
         put("crypto_liquidity", m.get("stablecoin_chg_30d"), 0.01, 0.04)
+        # Same observable, second consequence (seed v26). Stablecoin float is both
+        # a crypto-flow tell AND a dollar aggregate whose reserve leg bids T-bills
+        # and whose float competes with bank deposits. Those legs act in a crypto
+        # bear market too, so they need their own node. Anchored from the same
+        # series but DELIBERATELY not edged into crypto_liquidity — that node has
+        # its own anchor on this series, and an edge would double-count it.
+        put("stablecoin_supply", m.get("stablecoin_chg_30d"), 0.01, 0.04)
         return a
 
     def _valuation_anchors(self) -> dict[str, float]:
