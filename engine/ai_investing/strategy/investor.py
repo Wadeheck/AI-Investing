@@ -133,6 +133,17 @@ class Investor:
                       cash=round(float(b.get("cash", 0.0)), 2),
                       positions=len(b.get("positions") or []),
                       stale_marks=self._state.get("stale_marks"))
+            # PERSIST THE GATE (2026-08-12). last_mark_day was set on the
+            # in-memory state AFTER the only _save() in this method, so it
+            # reached disk solely if some later call happened to save. Across a
+            # restart the flag was lost and the day re-logged; when no later save
+            # came, the day was skipped. Both happened: in the eight days after
+            # go-live this book wrote 3 mark lines to crypto's 12, double-logging
+            # 08-10 and missing 08-12. The crypto book never had the bug because
+            # it saves last. Save again here — cheap, once a day, and it makes
+            # the journal the reliable daily series everything downstream
+            # (correlation, per-book Sharpe, rebalancing) has to be built on.
+            self._save()
             self._save()
 
     def _save(self) -> None:

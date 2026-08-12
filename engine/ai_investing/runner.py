@@ -72,6 +72,7 @@ class Runner:
         self.assets = self._build_watchlist()
         self._first_cycle = True
         self._cycles = 0
+        self._last_mark_day = None      # None = not yet seeded from the journal
         self._run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._submitted: set[str] = set()      # idempotency: client order IDs sent this run
         self._last_positions: dict[str, float] | None = None
@@ -1047,11 +1048,63 @@ class Runner:
             if not self.settings.live and isinstance(self.broker, PaperBroker):
                 atomic.write_json(self._paper_path, self.broker.state())
             self._append_history(data_dir, state)
+            self._append_daily_mark(data_dir, state, halted)
             write_heartbeat(self.settings.heartbeat_path,
                             {"equity": state["equity"], "cash": state["cash"],
                              "halted": halted, "cycle": self._cycles, "mode": state["mode"]})
         except OSError:
             pass
+
+    def _append_daily_mark(self, data_dir: str, state: dict, halted: bool) -> None:
+        """One append-only equity line per SGT day for the LIVE STOCK book.
+
+        WHY (2026-08-12). The other three books each journal a daily `mark`
+        line; the live book — the one routing real orders — had none. Its only
+        time series was history.json, which is a rolling 500-point INTRADAY
+        buffer written every cycle, so it holds about 2.5 days and silently
+        drops everything older. When the cross-book rebalancing question came
+        up, per-book equity had to be reconstructed by unpacking nine nightly
+        tarballs, and still yielded only 6 usable daily returns.
+
+        Append-only and never truncated: this is the record correlation,
+        per-book Sharpe and any future allocation decision get built on, and
+        those need months, not 2.5 days. One line a day is ~40 bytes.
+        """
+        from datetime import timedelta as _td
+        today = (datetime.now(timezone.utc) + _td(hours=8)).date().isoformat()
+        path = os.path.join(data_dir, "stock_journal.jsonl")
+        if self._last_mark_day is None:
+            # Seed from the FILE, not from memory. An in-memory-only flag is
+            # exactly the bug this fixes in investor.py: every restart forgets
+            # it and re-logs the day. The nightly poweroff makes restarts a
+            # daily event here, so this has to survive one.
+            try:
+                with open(path) as fh:
+                    last = ""
+                    for last in fh:
+                        pass
+                if last:
+                    # read the SGT `day` field, never ts[:10] — ts is UTC, and
+                    # the two disagree for the 8h that SGT is already tomorrow
+                    self._last_mark_day = json.loads(last).get("day", "")
+            except (OSError, json.JSONDecodeError):
+                self._last_mark_day = ""
+        if self._last_mark_day == today:
+            return
+        try:
+            with open(path, "a") as fh:
+                fh.write(json.dumps({
+                    "ts": state["ts"], "day": today, "event": "mark",
+                    "equity": round(state["equity"], 2),
+                    "cash": round(state["cash"], 2),
+                    "positions": len(state.get("positions") or []),
+                    "stale_marks": state.get("stale_marks"),
+                    "trades_learned": self.samples_seen,
+                    "halted": bool(halted),
+                }) + "\n")
+            self._last_mark_day = today
+        except OSError:
+            pass          # the record is never worth failing a cycle over
 
     def _append_history(self, data_dir: str, state: dict) -> None:
         path = os.path.join(data_dir, "history.json")

@@ -15,11 +15,12 @@ degrades to the original simple caps, so existing callers/tests keep working.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from ai_investing.config import RiskConfig
 from ai_investing.indicators import correlation
-from ai_investing.models import Decision, Order, Portfolio, Side
+from ai_investing.models import AssetClass, Decision, Order, Portfolio, Side
 
 
 def _avg(xs: list[float]) -> float:
@@ -215,7 +216,60 @@ class RiskManager:
             if opening_new:
                 open_keys.add(key)
 
-        return self._apply_portfolio_vol_target(orders, portfolio, prices, equity, market)
+        orders = self._apply_portfolio_vol_target(orders, portfolio, prices, equity, market)
+        return self._quantize_whole_shares(orders, prices, equity)
+
+    # --- whole-share quantisation ------------------------------------------
+    def _quantize_whole_shares(self, orders, prices, equity):
+        """Round STOCK orders to whole shares HERE, not at the broker.
+
+        WHY THIS EXISTS (2026-08-12). Every stock broker adapter did
+        `qty = int(order.qty)` and rejected `qty < 1 share`. That truncation is
+        correct — Longbridge cannot take 0.71 shares — but it was the LAST step,
+        so the sizer happily emitted sub-share orders forever and the reject
+        came back every cycle. The USO re-entry failed this way repeatedly.
+
+        The root cause is that two gates contradicted each other: the minimum
+        trade is 0.5% of equity ($50 on a $10k book), but ONE share of any stock
+        priced above $50 costs more than that. So an order sized near the
+        minimum passed the notional gate and then truncated to zero shares.
+        Nothing upstream ever learned, because the rejection happened after
+        sizing was done.
+
+        Rounding here makes the constraint visible to the code that can act on
+        it: an order that cannot be expressed in whole shares is dropped once,
+        with a reason, instead of being retried into a broker reject forever.
+
+        Sells are floored but never bumped or blocked — a stock position is
+        already integral, so flooring an exit is a no-op, and protection must
+        never be gated on affordability.
+
+        KNOWN GAP: HK board lots (700.HK trades in 100s) are not modelled; this
+        rounds to 1 share everywhere. That is strictly better than the previous
+        behaviour but still wrong for HK, and is tracked separately.
+        """
+        out = []
+        for o in orders:
+            if o.asset.asset_class is not AssetClass.STOCK:
+                out.append(o)                      # crypto is genuinely fractional
+                continue
+            px = prices.get(o.asset.key, 0.0)
+            q = math.floor(o.qty + 1e-9)
+            if q >= 1:
+                o.qty = float(q)
+                out.append(o)
+                continue
+            if o.side is Side.SELL:
+                continue                           # nothing left to sell after flooring
+            # A buy that rounds to nothing: take one share only if a single
+            # share is a position this book would have been allowed to hold.
+            if px > 0 and px <= self.cfg.max_position_weight * equity:
+                o.qty = 1.0
+                o.reason = ("[1-share min] " + (o.reason or ""))[:140]
+                out.append(o)
+            # else: one share breaches the position cap — drop it. Silently
+            # retrying an unaffordable name is what the old path did.
+        return out
 
     # --- portfolio volatility target ---------------------------------------
     def _portfolio_vol(self, notionals: dict[str, float], equity: float, market) -> float:
