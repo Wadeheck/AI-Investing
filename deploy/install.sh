@@ -103,10 +103,27 @@ systemctl --user enable --now "${ENABLE[@]}"
 
 # -- dashboard build ---------------------------------------------------------
 # The unit runs `npm run start`, which serves a previous production build.
+#
+# This used to rebuild and restart unconditionally, which made the whole script
+# unsafe to run on a healthy host for no gain — and a deploy script nobody dares
+# run is a deploy script nobody has tested. So the build is keyed to the last
+# commit that actually touched dashboard/: unchanged means skip, and the script
+# becomes a true no-op you can run any time to confirm the host still matches
+# the repo. Pass --rebuild to force one.
 if [ -d "$REPO/dashboard" ]; then
-  say "Building the dashboard for production"
-  ( cd "$REPO/dashboard" && npm run build )
-  systemctl --user try-restart ai-investing-dashboard.service
+  build_ref="$(git -C "$REPO" log -1 --format=%H -- dashboard 2>/dev/null || true)"
+  stamp="$REPO/dashboard/.next/.build-ref"
+  if [ "${1:-}" != "--rebuild" ] && [ -n "$build_ref" ] && [ -d "$REPO/dashboard/.next" ] \
+     && [ "$(cat "$stamp" 2>/dev/null || true)" = "$build_ref" ]; then
+    say "Dashboard build is current (${build_ref:0:7}) — skipping. Force with --rebuild."
+  else
+    say "Building the dashboard for production"
+    ( cd "$REPO/dashboard" && npm run build )
+    # Only after a successful build: `set -e` aborts above on failure, so a
+    # broken build leaves the running dashboard serving the previous one.
+    [ -n "$build_ref" ] && printf '%s\n' "$build_ref" > "$stamp"
+    systemctl --user try-restart ai-investing-dashboard.service
+  fi
 fi
 
 echo
