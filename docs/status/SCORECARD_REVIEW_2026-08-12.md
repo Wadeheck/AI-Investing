@@ -120,8 +120,15 @@ two have never been connected.
    asymmetric multiplier would do it, but only after (1).
 4. **Fix the stock book's execution bugs.** Until fills happen, `trades_learned`
    stays 0 and none of this becomes real learning.
-5. **Log per-book equity daily.** Reconstructing 6 usable return observations
-   required unpacking 9 tarballs; see the rebalancing analysis.
+5. **Fix the per-book equity journals — they already exist but are unreliable.**
+   Each book is supposed to write one `mark` line a day (`_log("mark", ...)`).
+   Over the 8 days since go-live: crypto 12 lines, event 9, **invest 3**, and
+   the **stock book has no journal at all**. The invest book logged twice on
+   2026-08-10 and not at all on 2026-08-12, so its `last_mark_day` gate is
+   leaking in both directions. This is why the rebalancing analysis had to
+   reconstruct equity from 9 `.tar.gz` snapshots and still got only 6 usable
+   return observations. Nothing downstream — correlation, rebalancing, per-book
+   Sharpe — can be measured until this is a reliable one-line-per-day record.
 
 ## When is there enough to learn from?
 
