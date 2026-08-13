@@ -48,6 +48,19 @@ sys.path.insert(0, str(ROOT / "engine"))
 
 DATA_DIR = ROOT / "data"
 
+# news_archive_{guardian,gdelt_crypto,wiki}.jsonl are historical MACRO/regime
+# backfills (see engine/ai_investing/research/{guardian,gdelt_crypto}_fetch.py,
+# news_replay.py) — general world-news and geopolitical-events corpora built
+# to train/replay the digester's macro reads, not real-time company news.
+# On a real production archive they dwarf the live feeds (267MB Guardian vs.
+# ~30KB newsdata) and are dominated by countries/conflict-actors/wire-agency
+# names that will never be a graph GAP in the sense this tool cares about —
+# mixing them in was tried and made the candidate list unusable (~1800
+# candidates, top hits like "Hormuz"/"Colombia"/"Wall Street" regardless of
+# threshold or how large the stopword list got). Excluded here; the live
+# feeds below are what the digester actually reads every cycle anyway.
+_EXCLUDED_ARCHIVES = {"guardian", "gdelt_crypto", "wiki"}
+
 # Multi-word Title Case runs (1-4 words). Deliberately greedy — the stoplist
 # and frequency/source thresholds below do the real filtering, not this regex.
 _PHRASE_RE = re.compile(r"\b(?:[A-Z][a-zA-Z&\.]{1,}\s){0,3}[A-Z][a-zA-Z&\.]{1,}\b")
@@ -72,40 +85,11 @@ _STOPWORDS = {
     "wallstreet events", "industry news", "corp. calendars", "stock splits",
     "new", "us", "u.s.", "eu", "uk", "ai", "ipo", "ceo", "cfo", "q1", "q2",
     "q3", "q4", "fy26", "fy27", "read more", "click here", "learn more",
-    # countries / regions / generic geography — real signal is the COMPANY
-    # named alongside these, not the place itself
-    "china", "chinese", "hong kong", "japan", "japanese", "singapore",
-    "asia", "asian", "europe", "european", "america", "american",
-    "malaysia", "kuala lumpur", "bursa malaysia", "india", "indian",
-    "korea", "korean", "south korea", "north korea", "taiwan", "vietnam",
-    "indonesia", "shanghai", "beijing", "guangzhou", "shenzhen",
     # generic finance/news boilerplate that scrapes as Title Case noise
-    "conference calls", "earnings calendar", "calendars", "index", "market",
-    "total", "strategy", "doubling", "in focus", "key takeaways",
-    "key insights", "buy now", "furthermore", "crucial support",
-    "weekly scam alert", "scammers", "million", "billion", "three", "two",
-    "four", "strait", "self reported market cap",
-    # the macro/geopolitics archives (Guardian/GDELT/Wikipedia backfills) feed
-    # regime factors, not company discovery — countries, nationalities, and
-    # named conflict actors dominate there and are never a graph GAP, just
-    # noise for THIS tool's purpose (a factor node like geopolitical_tension
-    # already covers the macro signal these stories carry)
-    "pakistan", "france", "french", "syria", "syrian", "ukraine",
-    "ukrainian", "russia", "russian", "israel", "israeli", "palestinian",
-    "gaza strip", "gaza", "lebanon", "lebanese", "iran", "iranian", "iraq",
-    "iraqi", "saudi arabia", "saudi", "yemen", "afghanistan", "sudan",
-    "somalia", "venezuela", "mexico", "mexican", "canada", "canadian",
-    "germany", "german", "italy", "italian", "spain", "spanish", "poland",
-    "polish", "turkey", "turkish", "egypt", "egyptian", "nigeria",
-    "nigerian", "brazil", "brazilian", "argentina", "australia",
-    "australian", "united kingdom", "britain", "british", "scotland",
-    "wales", "ireland", "irish", "hezbollah", "hamas", "taliban", "isis",
-    "al qaeda", "houthi", "kashmir", "donald trump", "trump",
-    "united states", "united kingdom", "european union", "the united states",
-    # wire agencies / news orgs — near-universal false positives in any
-    # news corpus, never a graph gap
-    "reuters", "afp", "al jazeera", "bloomberg", "associated press", "ap",
-    "cnn", "bbc", "xinhua", "cna", "agence france-presse", "getty images",
+    "conference calls", "earnings calendar", "calendars", "in focus",
+    "key takeaways", "key insights", "buy now", "furthermore",
+    "crucial support", "weekly scam alert", "self reported market cap",
+    "wall street", "united states", "new york", "the bank", "the united",
 }
 # Candidate phrases ending in one of these read as sentence fragments, not
 # entity names ("...Are Trying", "...Is Lacking As") — drop them.
@@ -115,6 +99,47 @@ _BAD_TRAILING_WORDS = {
     "were", "has", "have", "had", "will", "would", "could", "should",
     "total", "key", "insights", "takeaways", "of", "for", "the", "and",
 }
+# Any SINGLE WORD here anywhere inside a candidate kills the whole candidate
+# ("South Korean" is caught via "korean", not by listing every nationality
+# bigram). Two categories, both near-universal false positives for THIS
+# tool's job of finding missing COMPANIES:
+#   1. countries/regions/nationalities/conflict-actors — the macro/geopolitics
+#      archives (Guardian/GDELT/Wikipedia backfills) are dominated by these,
+#      and they're real signal for the graph's existing macro factor nodes
+#      (geopolitical_tension etc.), just noise here.
+#   2. wire agencies, generic political-body nouns, and scrapable place names
+#      that recur at the top of every run regardless of threshold.
+_BAD_WORDS = {
+    "china", "chinese", "hong", "kong", "japan", "japanese", "singapore",
+    "asia", "asian", "europe", "european", "america", "american",
+    "malaysia", "kuala", "lumpur", "bursa", "india", "indian", "korea",
+    "korean", "taiwan", "vietnam", "indonesia", "shanghai", "beijing",
+    "guangzhou", "shenzhen", "pakistan", "france", "french", "syria",
+    "syrian", "ukraine", "ukrainian", "russia", "russian", "israel",
+    "israeli", "palestinian", "palestinians", "gaza", "lebanon", "lebanese",
+    "iran", "iranian", "iraq", "iraqi", "saudi", "yemen", "afghanistan",
+    "sudan", "somalia", "venezuela", "mexico", "mexican", "canada",
+    "canadian", "germany", "german", "italy", "italian", "spain",
+    "spanish", "poland", "polish", "turkey", "turkish", "egypt",
+    "egyptian", "nigeria", "nigerian", "brazil", "brazilian", "argentina",
+    "australia", "australian", "britain", "british", "scotland", "wales",
+    "ireland", "irish", "philippines", "thailand", "congo", "england",
+    "washington", "california", "seoul", "yonhap", "kashmir", "hezbollah",
+    "hamas", "taliban", "isis", "houthi", "houthis", "trump",
+    # wire agencies / news orgs
+    "reuters", "afp", "bloomberg", "cnn", "bbc", "xinhua", "cna",
+    # generic political/news/market nouns that dominate a general corpus
+    "senate", "congress", "president", "attacks", "hormuz", "crypto",
+    "million", "billion", "index", "market", "total", "strategy",
+    "doubling", "strait", "scammers", "tokyo", "texas",
+    # common English words that are capitalized at sentence-start and get
+    # caught by the Title-Case regex — genuinely common enough (mid-teens
+    # mentions across many sources) to clear the threshold on volume alone
+    "source", "there", "according", "today", "every", "while", "people",
+    "shares", "here", "these", "those", "other", "another", "some", "many",
+    "most", "several", "such", "what", "when", "where", "why", "how",
+    "although", "however", "therefore", "meanwhile", "instead",
+}
 
 
 def _norm(name: str) -> str:
@@ -123,9 +148,13 @@ def _norm(name: str) -> str:
 
 def _iter_headline_texts():
     """Yield (title, summary, source_domain, url) across every collected feed —
-    news_archive_*.jsonl (append-only, {"headlines": [...]} per line) and the
-    rolling *_cache.json snapshots ({"items": [...]})."""
+    news_archive_*.jsonl (append-only, {"headlines": [...]} per line, excluding
+    the macro-backfill archives — see _EXCLUDED_ARCHIVES) and the rolling
+    *_cache.json snapshots ({"items": [...]})."""
     for path in sorted(glob.glob(str(DATA_DIR / "news_archive_*.jsonl"))):
+        stem = Path(path).stem.removeprefix("news_archive_")
+        if stem in _EXCLUDED_ARCHIVES:
+            continue
         try:
             with open(path) as fh:
                 for line in fh:
@@ -180,6 +209,8 @@ def _candidates(text: str) -> set[str]:
         if " " not in cand and len(cand) < 5:
             continue
         if cand.split()[-1].lower() in _BAD_TRAILING_WORDS:
+            continue
+        if any(w.strip(".,'\"").lower() in _BAD_WORDS for w in cand.split()):
             continue
         if cand.lower().endswith((".com", ".net", ".org", ".co")):
             continue
