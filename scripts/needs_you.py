@@ -256,6 +256,37 @@ def collect() -> list[dict]:
     except (OSError, json.JSONDecodeError):
         pass
 
+    # 5. Foresight gap-scan: names the news keeps mentioning that the graph
+    #    doesn't know. Built 2026-08 after Unitree Robotics' and CXMT's IPOs
+    #    both sat undiscovered until a human noticed by hand — the deals
+    #    pipeline's lists_on kind (brain/deals.py) now catches most future
+    #    IPOs automatically, but only if the digester actually saw and framed
+    #    the headline correctly. This is the backstop: a periodic sweep of the
+    #    raw news archives, independent of the digester entirely, so a miss in
+    #    one layer doesn't compound into a miss in both.
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from graph_gap_scan import scan as gap_scan
+        results, seen_rows = gap_scan(days=30, min_mentions=3, min_sources=2)
+        if results:
+            top = ", ".join(r["candidate"] for r in results[:3])
+            more = f" (+{len(results) - 3} more)" if len(results) > 3 else ""
+            asks.append({
+                "key": "graph_gap_scan",
+                "text": f"*{len(results)} name(s) the news keeps mentioning "
+                        f"aren't in the graph*: {top}{more}",
+                "how": "`python3 scripts/graph_gap_scan.py` for the full list "
+                       "with sources; add real ones to brain/seed.py",
+            })
+    except Exception as exc:
+        asks.append({
+            "key": "graph_gap_scan_broken",
+            "text": f"*The graph gap-scan is broken* — {type(exc).__name__}: "
+                    f"{str(exc)[:120]}",
+            "how": "`python3 scripts/graph_gap_scan.py` to see the real error; "
+                   "until it runs, new-company detection is unwatched",
+        })
+
     return asks
 
 

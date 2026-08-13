@@ -30,8 +30,12 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 *Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
 
 ```
-GRAPH    372 nodes, 796 edges          (seed v25 — 656 curated + 140 self-added,
-                                        18% and growing ~35/week: see §4.22, §4A)
+GRAPH    415 nodes, 777 curated edges  (seed v32, 2026-08-13, 275 of the nodes
+                                        are assets, up from 191 before this
+                                        pass — see §4.24. Was 372/796 at seed
+                                        v25, but that count included LLM-added
+                                        edges; those are per-instance and not
+                                        re-measured here, see §4.22/§4A)
 BRAIN    6,326 articles, 2,380 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
 TESTS    36 suites, all green (local AND on the ProDesk AND in CI)
@@ -1065,6 +1069,75 @@ evidence was suggestive, and the change was to a live money path.
   `lb_papertrading`, does nothing without `--send`, cancels in a `finally`, and
   re-lists open orders afterwards) so the next venue-side puzzle is cheap too.
 
+### 4.24 The graph had no way to learn a company exists until a human noticed *(2026-08-13)*
+
+**Found by the user asking a direct question — "how are you feeling about the
+brain, does it know about Unitree?"** — and then, when the answer was no,
+refusing to accept "I'll add it" as the fix: *"it has to have foresight as
+well, it cannot be lagging behind."* Right call: the miss was not a missing
+node, it was a missing mechanism.
+
+- **What.** The graph grows two ways, and neither has any notion of "a
+  promising company is all over the headlines." `brain/seed.py` is
+  hand-curated — it only knows what a human remembered to type in, and my own
+  sweep (§ this session) was built from static knowledge with a Jan-2026
+  cutoff, so it simply didn't know Unitree Robotics' STAR Market IPO was
+  imminent. `brain/deals.py`'s auto-discovery (the only automated path to a
+  new node) only fires for a **bilateral** deal (`invests_in`/`supplies`/
+  `acquires`) **≥ $1B in one stated transaction**. An IPO has no natural
+  counterparty for that model, and a hot startup's funding rounds are
+  routinely well under $1B individually even when the company is enormous
+  news — so neither path had any chance of catching it.
+- **Scale of the miss, once actually checked.** Unitree Robotics (STAR Market
+  IPO, priced 2026-08-06, ~$9B valuation, first pure-play humanoid-robot maker
+  on a mainland exchange) was missing. So was **ChangXin Memory Technologies
+  (CXMT)** — not a niche miss: it debuted 2026-07-27 up 466% and became **the
+  single most valuable mainland-China-listed company, surpassing ICBC**, and
+  it sat undiscovered for over two weeks. A follow-up manual sweep (not the
+  automated gap-scan below — see the "how this was actually found" note)
+  turned up four more already-real, already-material gaps in one pass:
+  Hengrui Pharmaceuticals (1276.HK, $1.3B HK listing, top-10 global IPO of
+  2025), Haitian Flavouring & Food (3288.HK, $1.3B), Sanhua Intelligent
+  Controls (2050.HK, $1.2B, Tesla thermal-management supplier), and JCET
+  Group (600584.SS) — the last one not even a recent IPO, just a world #3
+  chip-packaging company that had apparently never been added at all.
+- **Fix, three layers, because no single one is sufficient alone:**
+  1. **`brain/deals.py` gained a `lists_on` deal kind** (`brain/events.py`
+     prompt extended to match). The digester now records IPOs as a
+     single-party event — company, exchange, listing valuation, ticker if
+     stated — material on the **listing valuation**, not a bilateral deal
+     size. `propose_node()` (`graph.py`) now creates a **real tradable node**
+     (symbol + market) when a ticker is known, distinct from the pre-existing
+     symbol-less "(private)" hub it creates for unresolved deal counterparties.
+     Verified against synthetic events (correct creation above the $1B bar,
+     correct drop below it, correct fallback + `needs_symbol` flag when no
+     ticker is stated) — **not yet verified against a live LLM call**, since
+     this session has no path to exercise the production digester.
+  2. **`scripts/graph_gap_scan.py`** (new): mines the news archives/caches
+     independently of the digester, extracts candidate entity names, and
+     reports ones the graph's alias index can't resolve, gated on ≥3 distinct
+     headline mentions across ≥2 distinct source domains to hold back
+     sentence-fragment noise. This is what actually found CXMT on its first
+     run. Wired into `needs_you.py`'s existing twice-daily digest (item 5) —
+     no new systemd timer — so it degrades the same way every other check in
+     that file does: a broken scan reports itself instead of going quiet.
+  3. **Neither of the above found Hengrui/Haitian/Sanhua/JCET.** Those came
+     from a third thing that is *not* a script: me actively searching "biggest
+     HK IPOs 2025/2026" and cross-checking each hit against the graph, because
+     the local news archive (174 headlines, only wired up for about a week —
+     see the four-channel commit just before this work started) was too thin
+     and too generically-international for the gap-scan's frequency heuristic
+     to have anything to bite on for China/HK names specifically. This is the
+     honest gap the fix above does not close, and §4A records it as such
+     rather than claiming automation finished the job.
+- **Lesson.** A hand-curated seed file plus a narrow bilateral-deal trigger
+  looks like coverage until you ask it the one question it was never built to
+  answer: *what's new?* Foresight is a different property from breadth, and
+  building more of the graph (this session added 84 assets across three
+  passes, §2) does nothing for it — only a mechanism that watches for **change
+  over time** does, and until §4.24's fixes had shipped, no such mechanism
+  existed anywhere in the codebase.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1087,6 +1160,7 @@ and the register had drifted **13 commits** behind reality.
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
 | **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
+| **New-company discovery still has a manual step** (§4.24) | The `lists_on` digester path and `graph_gap_scan.py` cover the two automatable layers, but the news archives are too thin/generic right now for the gap-scan's frequency heuristic to catch China/HK-specific names on its own — CXMT was the one real hit out of ~180 candidates at loose thresholds, and Hengrui/Haitian/Sanhua/JCET were found by neither tool, only by directly searching "biggest HK/CN IPOs" and checking each result against the graph. **Recommendation: keep doing that sweep periodically by hand** (monthly, or whenever a market-moving China/HK/SG headline seems suspiciously absent from the graph) until the archives have enough volume for the gap-scan to plausibly take over — re-run `graph_gap_scan.py` first each time to check whether it's started catching real names on its own, since that's the signal the manual step is no longer needed. | Until archive volume grows, coverage gaps in fast-moving sectors (semiconductors, robotics, anything with a hot IPO pipeline) will keep recurring silently between sweeps. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |

@@ -623,18 +623,29 @@ class KnowledgeGraph:
 
     # -- growth: LLM-proposed nodes -------------------------------------------
     def propose_node(self, node_id: str, label: str, aliases: list[str] | None = None,
-                     proposed_by: str = "", ts: str = "") -> bool:
-        """Create a PRIVATE-COMPANY hub node from digested news (no symbol —
-        never tradable, but it propagates shocks and anchors circular-financing
-        detection). This is how the graph scales to new deal hubs (the next
-        OpenAI) without a code change. Provenance is recorded in `state` since
-        Node has no provenance field; curated seeds always win on id clash."""
+                     proposed_by: str = "", ts: str = "", symbol: str = "",
+                     market: str = "") -> bool:
+        """Create a hub node from digested news. This is how the graph scales to
+        new companies (the next OpenAI, the next IPO) without a code change.
+        Provenance is recorded in `state` since Node has no provenance field;
+        curated seeds always win on id clash.
+
+        Two flavors, distinguished by whether a symbol is known:
+          - no symbol (deals.py invests_in/supplies/acquires on an unresolved
+            private party): labeled "(private)" — never tradable, but still
+            propagates shocks and anchors circular-financing detection.
+          - symbol given (deals.py lists_on, an IPO/listing event): a REAL
+            tradable node, same as a curated one, just llm-sourced — no
+            "(private)" suffix, and graph_stock_symbols() will pick it up for
+            fundamentals once symbol+market are both set."""
         node_id = re.sub(r"[^a-z0-9_]", "", node_id.lower().replace(" ", "_").replace("-", "_"))
         if not node_id or node_id in self.nodes:
             return False
+        display_label = label if symbol else f"{label} (private)"
         self.nodes[node_id] = Node(
-            id=node_id, type="asset", label=f"{label} (private)"[:60],
+            id=node_id, type="asset", label=display_label[:60],
             aliases=[a.lower() for a in (aliases or []) if a][:6],
+            symbol=symbol, market=market,
             state=f"llm-proposed {ts[:10]}: {proposed_by[:120]}")
         self._adj = None
         self._alias_index = None

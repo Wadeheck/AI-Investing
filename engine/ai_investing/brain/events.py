@@ -233,14 +233,23 @@ Return ONLY JSON:
           doubt is: auditor walking ~0.9, anonymous allegation ~0.3>,
           "mechanism": "<one line: HOW the dishonesty works, in your own words>"}}
       ],
-      "deals": [  // OPTIONAL: any MATERIAL corporate transaction the headline states,
-                  // BOTH parties named as plain company names (not node ids — private
-                  // companies count and matter most): equity investments, multi-year
-                  // supply/compute contracts, vendor financing, acquisitions.
-        {{"party_a": "<company doing the investing/supplying/acquiring>",
-          "party_b": "<the counterparty>",
-          "kind": "invests_in|supplies|acquires",
-          "value_usd_bn": <stated deal size in $B, or null>,
+      "deals": [  // OPTIONAL: any MATERIAL corporate transaction OR listing event the
+                  // headline states, named as plain company names (not node ids —
+                  // private companies count and matter most): equity investments,
+                  // multi-year supply/compute contracts, vendor financing,
+                  // acquisitions, AND a company IPOing / debuting on an exchange.
+        {{"party_a": "<company doing the investing/supplying/acquiring, OR the "
+                     "company going public for kind=lists_on>",
+          "party_b": "<the counterparty; for kind=lists_on, the exchange it listed "
+                     "on (e.g. 'STAR Market', 'NYSE', 'HKEX') — best-effort, can be "
+                     "null if the headline doesn't say>",
+          "kind": "invests_in|supplies|acquires|lists_on",
+          "value_usd_bn": <stated deal size in $B, or null. For kind=lists_on this "
+                          "is the IPO valuation / market cap at listing, not a "
+                          "bilateral deal size — a big debut is material on its own>",
+          "symbol": "<ONLY for kind=lists_on, and ONLY if the headline states a "
+                    "ticker/stock code — the raw code as printed (e.g. '688825', "
+                    "'9888.HK'), do not guess one. Otherwise null>",
           "why": "<short>"}}
       ]
     }}
@@ -307,7 +316,15 @@ transactions in the `deals` field — one record per investment/supply/acquisiti
 with both parties' plain names and the stated size. You do NOT need to judge
 circularity there: the relationship graph accumulates every deal leg and detects
 money circles structurally, including multi-party circles no single headline
-reveals. Missing a deal record is losing a leg of a future circle."""
+reveals. Missing a deal record is losing a leg of a future circle.
+
+IPOs AND NEW LISTINGS (kind=lists_on): a company debuting on an exchange is
+just as material as a big bilateral deal, and the graph has NO OTHER way to
+learn a brand-new public company exists — record every one you see, even if
+the company means nothing to you yet. Large first-day moves, "most valuable
+listing", "biggest IPO of the year" language are all strong signals. Missing
+an IPO record means that company is invisible to the system until a human
+happens to add it by hand."""
 
 
 # Headlines per LLM call. Measured, not guessed: at 25 the small model answers
