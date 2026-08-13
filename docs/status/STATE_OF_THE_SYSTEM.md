@@ -30,7 +30,7 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 *Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
 
 ```
-GRAPH    415 nodes, 777 curated edges  (seed v32, 2026-08-13, 275 of the nodes
+GRAPH    418 nodes, 779 curated edges  (seed v33, 2026-08-13, 278 of the nodes
                                         are assets, up from 191 before this
                                         pass — see §4.24. Was 372/796 at seed
                                         v25, but that count included LLM-added
@@ -1167,6 +1167,22 @@ node, it was a missing mechanism.
   archive, and neither failure mode was reachable any other way. A dev
   sandbox with thin data cannot validate a tool whose entire job is behaving
   correctly at real data volume.
+- **First real end-to-end run, seed v33.** With the gap-scan actually usable,
+  its top-7 candidates (Coldcard, Glassnode, FactSet, Starlink, Kalshi,
+  Hyperliquid, Polymarket) went through the same verify-before-add discipline
+  as the CXMT batch. Added: **SpaceX** (SPCX, listed 2026-06-12 — the
+  largest IPO in history, now above Tesla by market cap; "Starlink" in
+  headlines was this, not a separate listing), **FactSet** (FDS, an
+  established NYSE company that had simply never been added), **Hyperliquid**
+  (HYPE/USD, live on every major exchange plus a spot ETF). Rejected: Kalshi,
+  Polymarket, Glassnode — confirmed still private. **Coldcard/Coinkite hit a
+  real hallucination**: the first search claimed it trades as "COIN" — false;
+  a second, independent check showed that's a conflation with Coinbase's
+  actual ticker (already a graph node, which is almost certainly what the
+  first search pattern-matched on). Caught only because verification here
+  means *confirm from a second source*, not *accept the first answer* — the
+  exact failure mode this whole discipline exists to catch, now with a
+  concrete instance of catching it.
 
 ## 4A. Open defects — known, NOT fixed
 
