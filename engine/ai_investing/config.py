@@ -172,6 +172,7 @@ class AltDataConfig:
     enabled: bool = field(default_factory=lambda: _get_bool("ALTDATA_ENABLED", False))
     polygon_api_key: str = field(default_factory=lambda: _get("POLYGON_API_KEY", ""))
     coingecko_api_key: str = field(default_factory=lambda: _get("COINGECKO_API_KEY", ""))
+    etherscan_api_key: str = field(default_factory=lambda: _get("ETHERSCAN_API_KEY", ""))
     reddit_user_agent: str = field(default_factory=lambda: _get("REDDIT_USER_AGENT", "ai-investing/0.1 (research)"))
 
 
@@ -189,6 +190,19 @@ class BrainConfig:
     # historical news archives (free registration) — fill the wiki-thin days
     guardian_api_key: str = field(default_factory=lambda: _get("GUARDIAN_API_KEY", ""))
     nyt_api_key: str = field(default_factory=lambda: _get("NYT_API_KEY", ""))
+    # NewsData.io (free tier: 200 credits/day, 1 credit/request, ~12h delayed).
+    # Polled as a SECONDARY live channel in data/news.py: on its own cooldown
+    # (independent of the engine's 5-min poll cycle, which would blow the daily
+    # credit budget in under an hour) and merged into the live headline pool
+    # only where it isn't already covered by the primary wires/X capture.
+    newsdata_api_key: str = field(default_factory=lambda: _get("NEWSDATA_API_KEY", ""))
+    newsdata_poll_minutes: int = field(default_factory=lambda: _get_int("NEWSDATA_POLL_MINUTES", 30))
+    # World News API (free tier: 50 points/day, ~1-1.2 points/request regardless
+    # of batch size, 1 req/s, 1 month history, no front-pages endpoint -- search
+    # only). Far thinner budget than NewsData, so the default cooldown is long;
+    # also a SECONDARY channel, see data/news.py _worldnews_headlines.
+    worldnews_api_key: str = field(default_factory=lambda: _get("WORLDNEWS_API_KEY", ""))
+    worldnews_poll_minutes: int = field(default_factory=lambda: _get_int("WORLDNEWS_POLL_MINUTES", 90))
     db_path: str = field(default_factory=lambda: _get("BRAIN_DB_PATH", str(PROJECT_ROOT / "data" / "brain.db")))
     feed_cache_path: str = field(default_factory=lambda: _get("BRAIN_FEED_CACHE_PATH", str(PROJECT_ROOT / "data" / "feed_cache.json")))
     advice_path: str = field(default_factory=lambda: _get("BRAIN_ADVICE_PATH", str(PROJECT_ROOT / "data" / "advice.json")))
@@ -310,7 +324,9 @@ class Settings:
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
         # Asia: China / HK / Japan / Korea / SG / India
         "https://www.scmp.com/rss/91/feed",
-        "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6936",
+        "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6936",  # CNA Business
+        "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6511",  # CNA Asia
+        "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=10416", # CNA Singapore
         "https://www.japantimes.co.jp/feed/",
         "https://www.koreaherald.com/rss/newsAll",
         "https://www.globaltimes.cn/rss/outbrain.xml",

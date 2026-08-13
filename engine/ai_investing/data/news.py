@@ -19,6 +19,7 @@ import os
 import re as _re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
@@ -399,6 +400,264 @@ def _parse_feed(data: bytes, source: str, limit: int) -> list[dict]:
     return items
 
 
+# NewsData.io: a SECONDARY live channel (see BrainConfig.newsdata_api_key).
+# Free tier is 200 credits/day, 1 credit/request, ~12h delayed -- too thin to
+# poll on the engine's 5-minute cycle (that would burn the daily budget in
+# under an hour), so it runs on its own cooldown and every fetch is logged to
+# an append-only archive regardless of whether it ends up merged live.
+_NEWSDATA_URL = "https://newsdata.io/api/1"
+# The RSS wires and this "latest"/"crypto" pair already skew US/global; a
+# third China/HK/SG/Malaysia-focused query (asked for explicitly -- watchlist
+# coverage is not "all USA") rounds out regional coverage. NewsData's own
+# `country` tag is too broad to filter on (articles carry a dozen syndication
+# countries at once -- verified empirically). Unquoted `q` OR-terms matched
+# almost anything (37k+ results, mostly noise) -- `qInTitle` with quoted
+# phrases is what actually narrows it (verified: 53 on-topic results). Has the
+# same hard 100-char cap as `q`.
+_ASIA_NEWS_QUERY = '"Hang Seng" OR "Shanghai Composite" OR "Bursa Malaysia" OR renminbi OR yuan'
+_NEWSDATA_ENDPOINTS = [("latest", {"category": "business"}), ("crypto", {}),
+                       ("latest", {"qInTitle": _ASIA_NEWS_QUERY})]
+
+
+def _newsdata_cache_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)), "newsdata_cache.json")
+
+
+def _newsdata_archive_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)), "news_archive_newsdata.jsonl")
+
+
+def _load_newsdata_cache(settings) -> dict:
+    try:
+        with open(_newsdata_cache_path(settings)) as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_newsdata_cache(settings, cache: dict) -> None:
+    try:
+        path = _newsdata_cache_path(settings)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(cache, fh)
+    except OSError:
+        pass
+
+
+def _newsdata_source(item: dict) -> str:
+    """Attribute to the underlying publisher, not the aggregator -- NewsData
+    fronts hundreds of outlets, and SOURCE_TRUST/credibility() in
+    brain/events.py score by publisher domain, same as every other feed here."""
+    url = (item.get("source_url") or "").strip()
+    if url:
+        return url.split("//")[-1].split("/")[0].replace("www.", "")
+    return (item.get("source_id") or "newsdata.io").strip()
+
+
+def _newsdata_pub_iso(item: dict) -> str:
+    raw = (item.get("pubDate") or "").strip()
+    return raw.replace(" ", "T") + "Z" if raw else ""      # pubDateTZ is always UTC
+
+
+def _fetch_newsdata_endpoint(key: str, path: str, params: dict) -> list[dict]:
+    qs = urllib.parse.urlencode({"apikey": key, "language": "en", **params})
+    req = urllib.request.Request(f"{_NEWSDATA_URL}/{path}?{qs}",
+                                 headers={"User-Agent": "ai-investing/0.1"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = json.loads(resp.read().decode())
+    if body.get("status") != "success":
+        raise RuntimeError((body.get("results") or {}).get("message", "newsdata error"))
+    heads = []
+    for raw in body.get("results") or []:
+        title = (raw.get("title") or "").strip()
+        if not title:
+            continue
+        heads.append({"title": title,
+                      "summary": (raw.get("description") or "")[:300],
+                      "published": _newsdata_pub_iso(raw),
+                      "source": _newsdata_source(raw),
+                      "url": raw.get("link", "")})
+    return heads
+
+
+def _newsdata_headlines(settings) -> list[dict]:
+    """Poll on a cooldown far slower than the engine cycle so the free credit
+    budget survives, serving the last successful fetch in between. Every
+    non-empty poll is appended to the archive for audit, whether or not its
+    headlines end up merged into the live pool (see fetch_headlines)."""
+    key = settings.brain.newsdata_api_key
+    if not key:
+        return []
+    cache = _load_newsdata_cache(settings)
+    now = time.time()
+    interval_s = max(1, settings.brain.newsdata_poll_minutes) * 60
+    if now - cache.get("ts", 0) < interval_s:
+        return cache.get("items", [])
+    items: list[dict] = []
+    for path, params in _NEWSDATA_ENDPOINTS:
+        try:
+            items.extend(_fetch_newsdata_endpoint(key, path, params))
+        except Exception as exc:
+            print(f"  [newsdata] {path} fetch failed: {exc}")
+    cache = {"ts": now, "items": items or cache.get("items", [])}
+    _save_newsdata_cache(settings, cache)
+    if items:
+        try:
+            path = _newsdata_archive_path(settings)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a") as fh:
+                fh.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                     "headlines": items}) + "\n")
+        except OSError:
+            pass
+    return cache["items"]
+
+
+# Polygon's ticker-scoped News API: bundled with the free Stocks Basic plan.
+# Reads the same per-symbol cache altdata.polygon_news_sentiment uses, so
+# merging this into the brain's headline stream costs no extra API calls.
+def _polygon_headlines(settings) -> list[dict]:
+    if not settings.altdata.polygon_api_key:
+        return []
+    from ai_investing.data import altdata
+    heads, seen = [], set()
+    for sym in settings.stock_watchlist:
+        for a in altdata.polygon_news_raw(settings, sym):
+            title = (a.get("title") or "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            pub = a.get("publisher") or {}
+            src = (pub.get("homepage_url") or pub.get("name") or "polygon.io")
+            src = src.split("//")[-1].split("/")[0].replace("www.", "")
+            heads.append({"title": title,
+                         "summary": (a.get("description") or "")[:300],
+                         "published": a.get("published_utc", ""),
+                         "source": src,
+                         "url": a.get("article_url", "")})
+    return heads
+
+
+# World News API: another SECONDARY channel (BrainConfig.worldnews_api_key),
+# same role as NewsData but a much thinner free budget -- 50 points/day,
+# ~1-1.2 points/request regardless of batch size, 1 req/s, search-only (no
+# front-pages endpoint on the free plan) -- hence the longer default cooldown.
+# Deliberately China/HK/SG/Malaysia-focused: the RSS wires + NewsData already
+# carry the US/global macro angle, so this thin, budget-constrained channel is
+# spent on the region that would otherwise be thinnest -- both the query terms
+# AND source-countries (verified empirically to actually filter, unlike
+# NewsData's) narrow to it.
+_WORLDNEWS_URL = "https://api.worldnewsapi.com/search-news"
+# `text` has a hard 100-char cap (verified: the API 400s past it) -- source
+# filtering does the heavy lifting for region focus, this just biases the topic.
+_WORLDNEWS_QUERY = "China OR Hang Seng OR Shanghai OR Shenzhen OR Singapore stocks OR Bursa Malaysia OR yuan"
+_WORLDNEWS_SOURCE_COUNTRIES = "cn,hk,sg,my"
+
+
+def _worldnews_cache_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)), "worldnews_cache.json")
+
+
+def _worldnews_archive_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)), "news_archive_worldnews.jsonl")
+
+
+def _load_worldnews_cache(settings) -> dict:
+    try:
+        with open(_worldnews_cache_path(settings)) as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_worldnews_cache(settings, cache: dict) -> None:
+    try:
+        path = _worldnews_cache_path(settings)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(cache, fh)
+    except OSError:
+        pass
+
+
+def _worldnews_source(item: dict) -> str:
+    url = (item.get("url") or "").strip()
+    return url.split("//")[-1].split("/")[0].replace("www.", "") if url else "worldnewsapi.com"
+
+
+def _fetch_worldnews(settings) -> list[dict]:
+    key = settings.brain.worldnews_api_key
+    qs = urllib.parse.urlencode({"api-key": key, "text": _WORLDNEWS_QUERY,
+                                 "source-countries": _WORLDNEWS_SOURCE_COUNTRIES,
+                                 "language": "en", "number": 20,
+                                 "sort": "publish-time", "sort-direction": "DESC"})
+    req = urllib.request.Request(f"{_WORLDNEWS_URL}?{qs}",
+                                 headers={"User-Agent": "ai-investing/0.1"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = json.loads(resp.read().decode())
+    heads = []
+    for raw in body.get("news") or []:
+        title = (raw.get("title") or "").strip()
+        if not title:
+            continue
+        heads.append({"title": title,
+                      "summary": (raw.get("text") or "")[:300],
+                      "published": (raw.get("publish_date") or "").replace(" ", "T") + "Z",
+                      "source": _worldnews_source(raw),
+                      "url": raw.get("url", "")})
+    return heads
+
+
+def _worldnews_headlines(settings) -> list[dict]:
+    """Same cooldown/cache/archive shape as _newsdata_headlines, just a much
+    longer default interval -- 50 points/day leaves little room for the
+    engine's 5-minute cycle to poll this directly."""
+    key = settings.brain.worldnews_api_key
+    if not key:
+        return []
+    cache = _load_worldnews_cache(settings)
+    now = time.time()
+    interval_s = max(1, settings.brain.worldnews_poll_minutes) * 60
+    if now - cache.get("ts", 0) < interval_s:
+        return cache.get("items", [])
+    try:
+        items = _fetch_worldnews(settings)
+    except Exception as exc:
+        print(f"  [worldnews] fetch failed: {exc}")
+        items = []
+    cache = {"ts": now, "items": items or cache.get("items", [])}
+    _save_worldnews_cache(settings, cache)
+    if items:
+        try:
+            path = _worldnews_archive_path(settings)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a") as fh:
+                fh.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                     "headlines": items}) + "\n")
+        except OSError:
+            pass
+    return cache["items"]
+
+
+def _headline_tokens(text: str) -> set[str]:
+    return {w for w in _re.findall(r"[a-z]{4,}", text.lower())}
+
+
+def _covered_elsewhere(title: str, pool: list[dict]) -> bool:
+    """Same rephrased-duplicate heuristic as brain/events.py corroboration():
+    2+ shared meaty tokens covering a third of the headline counts as the same
+    story. Used to keep NewsData strictly secondary -- it only fills gaps the
+    primary wires and X capture didn't already cover this cycle."""
+    t = _headline_tokens(title)
+    if not t:
+        return False
+    for h in pool:
+        if len(t & _headline_tokens(h.get("title", ""))) >= max(2, len(t) // 3):
+            return True
+    return False
+
+
 def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     """Poll all feeds with conditional GET: unchanged feeds answer 304 and cost
     nothing; their last parsed items are replayed from the disk cache (the brain's
@@ -441,6 +700,24 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     headlines: list[dict] = []
     for tier in zip_longest(*per_feed):
         headlines.extend(h for h in tier if h)
+    # Polygon ticker news: real-time (not delayed like NewsData) and scoped to
+    # symbols we actually watch, so it ranks with the primary wires rather than
+    # as a fallback. No dedupe against the RSS pool -- it is deliberately
+    # ticker-specific and rarely overlaps the macro/global wires above.
+    headlines.extend(_polygon_headlines(settings))
+    # NewsData.io goes LAST, behind the wires -- secondary by design (12h
+    # delayed, thin free budget). Only headlines not already covered by the
+    # primary feeds this cycle are added, so it fills gaps rather than
+    # crowding out fresher/faster sources in the brain's per-cycle digest cap.
+    newsdata_items = _newsdata_headlines(settings)
+    if newsdata_items:
+        headlines.extend(h for h in newsdata_items if not _covered_elsewhere(h["title"], headlines))
+    # World News API goes LAST of all -- thinnest free budget of every channel
+    # here, so it only ever fills whatever gap NOTHING else (wires, Polygon,
+    # NewsData) already covered this cycle.
+    worldnews_items = _worldnews_headlines(settings)
+    if worldnews_items:
+        headlines.extend(h for h in worldnews_items if not _covered_elsewhere(h["title"], headlines))
     # X capture goes FIRST, ahead of the wires. The brain digests only 30 fresh
     # headlines per cycle (the LLM cost gate), and as one more feed among ~40 the
     # round-robin pushed X posts past that cap on every cycle: all 60 captured
