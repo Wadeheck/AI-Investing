@@ -77,13 +77,30 @@ _STOPWORDS = {
     "china", "chinese", "hong kong", "japan", "japanese", "singapore",
     "asia", "asian", "europe", "european", "america", "american",
     "malaysia", "kuala lumpur", "bursa malaysia", "india", "indian",
-    "korea", "korean", "taiwan", "vietnam", "indonesia", "shanghai",
-    "beijing", "guangzhou", "shenzhen",
+    "korea", "korean", "south korea", "north korea", "taiwan", "vietnam",
+    "indonesia", "shanghai", "beijing", "guangzhou", "shenzhen",
     # generic finance/news boilerplate that scrapes as Title Case noise
     "conference calls", "earnings calendar", "calendars", "index", "market",
     "total", "strategy", "doubling", "in focus", "key takeaways",
     "key insights", "buy now", "furthermore", "crucial support",
-    "weekly scam alert", "scammers",
+    "weekly scam alert", "scammers", "million", "billion", "three", "two",
+    "four", "strait", "self reported market cap",
+    # the macro/geopolitics archives (Guardian/GDELT/Wikipedia backfills) feed
+    # regime factors, not company discovery — countries, nationalities, and
+    # named conflict actors dominate there and are never a graph GAP, just
+    # noise for THIS tool's purpose (a factor node like geopolitical_tension
+    # already covers the macro signal these stories carry)
+    "pakistan", "france", "french", "syria", "syrian", "ukraine",
+    "ukrainian", "russia", "russian", "israel", "israeli", "palestinian",
+    "gaza strip", "gaza", "lebanon", "lebanese", "iran", "iranian", "iraq",
+    "iraqi", "saudi arabia", "saudi", "yemen", "afghanistan", "sudan",
+    "somalia", "venezuela", "mexico", "mexican", "canada", "canadian",
+    "germany", "german", "italy", "italian", "spain", "spanish", "poland",
+    "polish", "turkey", "turkish", "egypt", "egyptian", "nigeria",
+    "nigerian", "brazil", "brazilian", "argentina", "australia",
+    "australian", "united kingdom", "britain", "british", "scotland",
+    "wales", "ireland", "irish", "hezbollah", "hamas", "taliban", "isis",
+    "al qaeda", "houthi", "kashmir", "donald trump", "trump",
 }
 # Candidate phrases ending in one of these read as sentence fragments, not
 # entity names ("...Are Trying", "...Is Lacking As") — drop them.
@@ -149,6 +166,10 @@ def _candidates(text: str) -> set[str]:
         low = cand.lower()
         if low in _STOPWORDS or len(cand) < 3:
             continue
+        # ALL-CAPS single tokens are almost always wire-story datelines
+        # ("SEOUL, Aug 13 (Reuters) —"), not entity names
+        if cand.isupper() and " " not in cand:
+            continue
         # single-word candidates are the noisiest (sentence-initial capitals);
         # require a bit more length to keep them
         if " " not in cand and len(cand) < 5:
@@ -181,9 +202,13 @@ def scan(days: int, min_mentions: int, min_sources: int) -> list[dict]:
         if published:
             try:
                 ts = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    # some feeds publish naive timestamps — assume UTC rather
+                    # than crash the comparison below
+                    ts = ts.replace(tzinfo=timezone.utc)
                 if ts < cutoff:
                     continue
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         seen_rows += 1
         cands = _candidates(title) | _candidates(summary[:400])
