@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 32
+SEED_VERSION = 33
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -456,6 +456,8 @@ SEED_NODES = [
     {"id": "coin", "type": "asset", "label": "Coinbase", "symbol": "COIN", "market": "US"},
     {"id": "mstr", "type": "asset", "label": "Strategy (MicroStrategy)", "symbol": "MSTR",
      "market": "US", "aliases": ["microstrategy", "saylor"]},
+    {"id": "fds", "type": "asset", "label": "FactSet Research Systems", "symbol": "FDS",
+     "market": "US", "aliases": ["factset"]},
     # ---- hardware / supply-chain nodes ----
     {"id": "tsmc", "type": "asset", "label": "TSMC", "symbol": "TSM", "market": "US",
      "aliases": ["taiwan semiconductor", "2330.TW", "台积电", "台積電"]},
@@ -732,6 +734,8 @@ SEED_NODES = [
      "aliases": ["fetch.ai", "artificial superintelligence alliance"]},
     {"id": "akt", "type": "asset", "label": "Akash Network", "symbol": "AKT/USD", "market": "CRYPTO",
      "aliases": ["akash"]},
+    {"id": "hype", "type": "asset", "label": "Hyperliquid", "symbol": "HYPE/USD", "market": "CRYPTO",
+     "aliases": ["hyperliquid"]},
     # ------------- bill-of-materials sub-themes (seed v13) -------------
     # BOM decomposition of the big demand themes: each tier is a `theme` that
     # SUPPLIES its parent industry (supplies flows both ways: a tier shock hits
@@ -814,6 +818,8 @@ SEED_NODES = [
      "market": "US"},
     {"id": "boeing", "type": "asset", "label": "Boeing", "symbol": "BA", "market": "US"},
     {"id": "airbus", "type": "asset", "label": "Airbus", "symbol": "AIR.PA", "market": "EU"},
+    {"id": "spacex", "type": "asset", "label": "SpaceX", "symbol": "SPCX", "market": "US",
+     "aliases": ["spacex", "starlink", "space exploration technologies"]},
     # ------------- assets: bill-of-materials tiers (seed v13) -------------
     # semi equipment
     {"id": "amat", "type": "asset", "label": "Applied Materials", "symbol": "AMAT", "market": "US"},
@@ -1496,6 +1502,8 @@ SEED_EDGES = [
     {"src": "fet", "dst": "crypto_majors", "type": "member_of", "weight": 0.3,
      "note": f"calibrated 2026-08-02 on the 7k-event corpus: membership CONTRADICTED (n=29, t=-1.9)"},
     {"src": "akt", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "hype", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
+     "note": "Hyperliquid L1 + perp DEX token; also has a spot ETF wrapper (BHYP)"},
     # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
     # Direct edges rather than a new crypto_ai theme node, so the digester's §7
     # taggable set (brief v1.4) stays untouched; promote to a proper theme at
@@ -1972,6 +1980,9 @@ SEED_EDGES = [
     {"src": "boeing", "dst": "commercial_aerospace", "type": "member_of", "weight": 0.9},
     {"src": "airbus", "dst": "commercial_aerospace", "type": "member_of", "weight": 0.85},
     {"src": "airbus", "dst": "europe_equities", "type": "member_of", "weight": 0.3},
+    {"src": "spacex", "dst": "commercial_aerospace", "type": "member_of", "weight": 0.9,
+     "note": "launch + Starlink connectivity; listed 2026-06-12 (SPCX, Nasdaq) as the "
+             "largest IPO in history"},
     {"src": "boeing", "dst": "airbus", "type": "competes_with", "weight": 0.5,
      "note": "commercial-aircraft duopoly — one OEM's crisis is the other's order book"},
     {"src": "uk_growth", "dst": "hsbc", "type": "influences", "sign": 1, "weight": 0.08,
