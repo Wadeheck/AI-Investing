@@ -101,6 +101,11 @@ _STOPWORDS = {
     "australian", "united kingdom", "britain", "british", "scotland",
     "wales", "ireland", "irish", "hezbollah", "hamas", "taliban", "isis",
     "al qaeda", "houthi", "kashmir", "donald trump", "trump",
+    "united states", "united kingdom", "european union", "the united states",
+    # wire agencies / news orgs — near-universal false positives in any
+    # news corpus, never a graph gap
+    "reuters", "afp", "al jazeera", "bloomberg", "associated press", "ap",
+    "cnn", "bbc", "xinhua", "cna", "agence france-presse", "getty images",
 }
 # Candidate phrases ending in one of these read as sentence fragments, not
 # entity names ("...Are Trying", "...Is Lacking As") — drop them.
