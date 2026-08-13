@@ -1130,6 +1130,29 @@ node, it was a missing mechanism.
      to have anything to bite on for China/HK names specifically. This is the
      honest gap the fix above does not close, and §4A records it as such
      rather than claiming automation finished the job.
+- **Deploying it to the ProDesk immediately found what the dev sandbox
+  couldn't.** `git pull --ff-only` + the documented test-then-restart loop
+  (`OPERATIONS.md` → *Developing against it over SSH*) went cleanly and the
+  engine restarted with seed v32 merged in (382 assets on disk once the
+  ProDesk's own 112 self-discovered private hubs were folded in). But
+  `needs_you.py --show` on the real box crashed the new check outright:
+  `TypeError: can't compare offset-naive and offset-aware datetimes` — some
+  feeds publish naive timestamps the 174-headline dev sample never contained.
+  Fixed by normalizing naive timestamps to UTC instead of raising. Worse:
+  once it ran, the candidate list was **~1,800 entries deep, top hits
+  Reuters/Hormuz/Al Jazeera/United States** — three rounds of stoplist
+  tuning against the real corpus kept surfacing new noise (Colombia, Texas,
+  Tehran, "There", "According") no matter how large the list got. The actual
+  cause: `news_archive_{guardian,gdelt_crypto,wiki}.jsonl` are historical
+  **macro-regime backfills** (267MB+ of general world news, built to
+  train/replay the digester's macro reads — see `research/guardian_fetch.py`,
+  `gdelt_crypto_fetch.py`), not company news, and at that size they drown out
+  the live feeds this tool actually needs by orders of magnitude. Excluding
+  those three archives fixed it at the source: ~700 candidates, **top hits
+  Coldcard/Glassnode/FactSet/Starlink/Kalshi/Hyperliquid/Polymarket** — real,
+  previously-unresolved names, not noise. None of this was visible from the
+  dev sandbox; the 174-headline sample was too small to contain a naive
+  timestamp or to be dominated by a 267MB archive it didn't have a copy of.
 - **Lesson.** A hand-curated seed file plus a narrow bilateral-deal trigger
   looks like coverage until you ask it the one question it was never built to
   answer: *what's new?* Foresight is a different property from breadth, and
@@ -1137,6 +1160,13 @@ node, it was a missing mechanism.
   passes, §2) does nothing for it — only a mechanism that watches for **change
   over time** does, and until §4.24's fixes had shipped, no such mechanism
   existed anywhere in the codebase.
+- **Second lesson.** `OPERATIONS.md`'s deploy loop insists on *proving it on
+  the box that matters before restarting anything* — this is why: a script
+  that ran clean against a 174-headline dev sample crashed immediately and
+  then produced 1,800 lines of noise against the ProDesk's real 280MB+
+  archive, and neither failure mode was reachable any other way. A dev
+  sandbox with thin data cannot validate a tool whose entire job is behaving
+  correctly at real data volume.
 
 ## 4A. Open defects — known, NOT fixed
 
