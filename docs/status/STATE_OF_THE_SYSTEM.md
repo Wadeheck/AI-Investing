@@ -30,11 +30,13 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 *Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
 
 ```
-GRAPH    418 nodes, 779 curated edges  (seed v33, 2026-08-13, 278 of the nodes
-                                        are assets, up from 191 before this
-                                        pass — see §4.24. Was 372/796 at seed
-                                        v25, but that count included LLM-added
-                                        edges; those are per-instance and not
+GRAPH    419 nodes, 780 curated edges  (seed v34, 2026-08-14, 279 of the nodes
+                                        are assets. STOCK_WATCHLIST is now
+                                        DERIVED from these — 258 tradable
+                                        symbols, up from ~80 hand-maintained —
+                                        see §4.25. Was 372/796 at seed v25, but
+                                        that count included LLM-added edges;
+                                        those are per-instance and not
                                         re-measured here, see §4.22/§4A)
 BRAIN    6,326 articles, 2,380 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
@@ -1184,6 +1186,86 @@ node, it was a missing mechanism.
   exact failure mode this whole discipline exists to catch, now with a
   concrete instance of catching it.
 
+### 4.25 The graph and the tradable universe had silently drifted apart *(2026-08-14)*
+
+**Found by the user asking the obvious follow-up to §4.24: "then how do people
+trade stocks in Singapore, HK and China now, as long as Longbridge allows
+it?"** — and refusing to accept "the graph knows about them" as an answer,
+correctly pushing until the actual mechanism was checked: *"my expectation is
+that any stock that has potential as a signal should be bought... everything
+should be buyable isn't it?"*
+
+- **What.** Two things in this codebase look related but are not wired
+  together: the **graph** (`brain/seed.py`, what the brain can reason about)
+  and **`STOCK_WATCHLIST`** (`config.py`, the literal finite list the engine
+  will place orders for). Adding a node to the graph never added it to the
+  watchlist — that always required a second, manual `.env` edit, and it
+  mostly never happened. Measured: of the **116 SG/HK/CN asset nodes** added
+  across §4.24 and the prior sessions, only **29 were on the live
+  watchlist** — 87 were graph-only, buyable by nobody, brain included. The
+  same split exists for the US side; it just wasn't asked about first.
+- **Fix.** `brain/seed.py` gained `tradable_stock_symbols()` — every
+  `SEED_NODES` asset with a resolved symbol, sorted, CRYPTO excluded (that
+  goes through `crypto_watchlist`/ccxt on a different symbol format).
+  `config.py`'s `stock_watchlist` now falls back to this instead of a
+  hardcoded 4-symbol default when `STOCK_WATCHLIST` is unset. Deliberately
+  scoped to `SEED_NODES` (human-verified before merge, per §4.24's
+  discipline) and not the live persisted graph, so an LLM-proposed node with
+  an unverified symbol cannot become tradable with real capital before a
+  human reviews it via the `lists_on`/`needs_you.py` path. `spy` was added
+  as a graph node in the same pass — it was the one symbol already on the
+  production watchlist with no corresponding graph node at all, and would
+  otherwise have been silently dropped by the new default. Bumped
+  `SEED_VERSION` to 34.
+- **Deployed and verified, not just merged.** Full suite ran on the ProDesk's
+  real `.venv` before touching anything (338 passed; the 8 failures in
+  `test_alert_storm.py`/`test_bullshit_layer.py` were confirmed identical on
+  the prior commit — pre-existing, unrelated). The production `STOCK_WATCHLIST`
+  line in `.env` was commented out (backed up first) so the new graph-derived
+  default takes over; engine restarted clean, 0 crash-loop. Checked on the
+  box, not assumed: `stock_watchlist` now resolves to **258 symbols** (up
+  from ~80), confirmed `C6L.SI` (SIA), `688836.SS` (Unitree) and `SPCX`
+  (SpaceX) all present. Then checked one level deeper than "it's configured"
+  — pulled real fundamentals for four of the newly-added names: SIA,
+  SpaceX and BYD (`1211.HK`) all returned genuine data (PE, price/book,
+  debt/equity); Unitree returned only a timestamp, no fields — the data
+  provider (yfinance) simply hasn't indexed a STAR Market IPO from six weeks
+  ago yet. Real, known limitation, not a bug: some very fresh listings will
+  be tradable via Longbridge with gappy fundamentals until the provider
+  catches up.
+- **Malaysia, investigated and closed out.** The user asked whether Longbridge
+  or moomoo could reach Bursa Malaysia. Longbridge: confirmed no (US/HK/CN/SG
+  only, per their own docs). moomoo: has a `MoomooBroker` adapter already in
+  `brokers/live.py`, unused (`STOCK_BROKER=longbridge` on ProDesk), and
+  investigating it end-to-end (downloading OpenD, running it headless on
+  ProDesk, hitting a graphic-CAPTCHA the console UI can't render, then
+  logging in successfully via the GUI AppImage on a local machine instead)
+  surfaced the real answer: **the account is with Moomoo Financial SG, and
+  its own account-management screen states "you have activated all the
+  trading permissions" — Malaysia is not among them, because Bursa Malaysia
+  access is a separate legal entity (Moomoo Securities Malaysia Sdn Bhd),** not
+  a togglable permission on an SG account. Not fixable from this codebase;
+  parked by user decision rather than left as an open bug. `~/moomoo_OpenD/`
+  is left in place on the ProDesk, unused, in case a genuine Malaysia account
+  is opened later.
+- **Side effect worth watching, not yet a problem.** The 3× larger watchlist
+  means more fundamentals lookups and news-tagging per cycle. `daily_status.py`
+  flagged the `vgxfw` LLM endpoint at 40% of its 5M free daily token budget,
+  projected to ~102% by day end — the first day this has happened. The
+  provider-rotation logic (`data/news.py`, `_over_free_budget`) fails open
+  onto the next endpoint in the chain rather than blocking, so nothing breaks
+  today; if every endpoint in a chain crosses its free tier the calls simply
+  start costing a small real amount rather than failing. Worth checking
+  `daily_status.py` over the next few days to see if usage settles or keeps
+  trending toward the cap.
+- **Lesson.** §4.24 fixed *whether the brain can learn a company exists*.
+  This was the other half of the same sentence — *whether knowing about it
+  does anything* — and it was broken the entire time §4.24 was being fixed,
+  invisibly, because "the graph has the node" reads as done if nobody asks
+  the next question. The user asking "then anything should be buyable,
+  isn't it?" is what actually closed the loop; the gap would not have been
+  found by more graph curation.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1207,6 +1289,7 @@ and the register had drifted **13 commits** behind reality.
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
 | **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
 | **New-company discovery still has a manual step** (§4.24) | The `lists_on` digester path and `graph_gap_scan.py` cover the two automatable layers, but the news archives are too thin/generic right now for the gap-scan's frequency heuristic to catch China/HK-specific names on its own — CXMT was the one real hit out of ~180 candidates at loose thresholds, and Hengrui/Haitian/Sanhua/JCET were found by neither tool, only by directly searching "biggest HK/CN IPOs" and checking each result against the graph. **Recommendation: keep doing that sweep periodically by hand** (monthly, or whenever a market-moving China/HK/SG headline seems suspiciously absent from the graph) until the archives have enough volume for the gap-scan to plausibly take over — re-run `graph_gap_scan.py` first each time to check whether it's started catching real names on its own, since that's the signal the manual step is no longer needed. | Until archive volume grows, coverage gaps in fast-moving sectors (semiconductors, robotics, anything with a hot IPO pipeline) will keep recurring silently between sweeps. |
+| **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
