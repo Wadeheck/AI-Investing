@@ -30,18 +30,21 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 *Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
 
 ```
-GRAPH    419 nodes, 780 curated edges  (seed v34, 2026-08-14, 279 of the nodes
-                                        are assets. STOCK_WATCHLIST is now
-                                        DERIVED from these — 258 tradable
-                                        symbols, up from ~80 hand-maintained —
-                                        see §4.25. Was 372/796 at seed v25, but
+GRAPH    420 nodes, 796 curated edges  (seed v37, 2026-08-14, 280 of the nodes
+                                        are assets. STOCK_WATCHLIST and
+                                        CRYPTO_WATCHLIST are both now DERIVED
+                                        from these — 258 tradable stock symbols
+                                        (up from ~80 hand-maintained, §4.25) and
+                                        17 crypto symbols on the ProDesk's
+                                        Gemini feed (up from 13 hand-verified,
+                                        §4.26). Was 372/796 at seed v25, but
                                         that count included LLM-added edges;
                                         those are per-instance and not
                                         re-measured here, see §4.22/§4A)
 BRAIN    6,326 articles, 2,380 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
 TESTS    36 suites, all green (local AND on the ProDesk AND in CI)
-COMMITS  186
+COMMITS  218
 
 BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
@@ -141,6 +144,9 @@ list of what is still broken — read that one first if something is wrong now.
 | 4.21 | A test's verdict depended on the live crypto market | ✅ history follows `settings`; 7 read-only loaders remain in §4A |
 | 4.22 | The "proposed graph edges" ask counted the trade audit log | ✅ repointed at llm edges, with review, tombstones and a rate; the 35×-spec proposal rate is now §4A |
 | 4.23 | 8 of 9 live orders rejected — limit prices sent off-tick | ✅ `snap_to_tick`, proven against the venue; the submitted price is now journalled |
+| 4.24 | The graph had no way to learn a company exists until a human noticed | ✅ `lists_on` digester path + `graph_gap_scan.py`; still needs a periodic manual sweep (§4A) |
+| 4.25 | The graph and the tradable universe (`STOCK_WATCHLIST`) had silently drifted apart | ✅ `tradable_stock_symbols()`; watchlist now derives from the graph |
+| 4.26 | 9 graph nodes had zero edges; `CRYPTO_WATCHLIST` had the same drift as §4.25 | ✅ all nodes wired; `tradable_crypto_symbols()` added; deployed + verified on the ProDesk |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -1266,6 +1272,100 @@ should be buyable isn't it?"*
   isn't it?" is what actually closed the loop; the gap would not have been
   found by more graph curation.
 
+### 4.26 Nine graph nodes with zero edges, and the same watchlist drift on the crypto side *(2026-08-14)*
+
+**Found by the user asking for a general audit** ("make sure all the nodes...
+are wired properly") rather than a specific symptom — §4.25 fixed the
+graph↔watchlist split for the *whole* stock universe, but nobody had checked
+whether every individual node inside that universe was actually reachable.
+
+- **What — nine orphan asset nodes.** All 116 SG/HK/CN nodes from §4.24/§4.25
+  have a graph *id*, but 9 of them (China Mobile, Swire Pacific, Techtronic,
+  Lenovo, COSCO Shipping, Midea, China Yangtze Power, Wilmar, FactSet) had
+  **zero edges** — no `member_of`, `influences`, `owns`, or `regulated_by`
+  anything. They were tradable (§4.25 made them so) but invisible to
+  `propagate()` and `centrality()`: a headline could shock the whole graph and
+  never reach them, and they could never influence anything else either.
+  Graph-listed is not the same property as graph-*wired*, and nothing had
+  measured the second one.
+- **Fix.** Wired each with specific, checkable business relationships rather
+  than a generic sector placeholder: Swire's ~45% stake in Cathay Pacific
+  (already a graph node, `owns`), Midea's KUKA robotics acquisition
+  (`member_of robotics`), COSCO into `freight_logistics` alongside UPS/FedEx,
+  `regulated_by china_government` edges for the four SOEs (China Mobile,
+  COSCO, China Yangtze Power — SASAC/NDRC-controlled), Wilmar as the Asian
+  ADM/Bunge (`member_of food_processing`, weight 0.85 matching that
+  precedent), FactSet correlated (not membered) into `us_financials` since it
+  sells data subscriptions rather than banking. Verified after: 0 orphan
+  nodes, 0 dangling edge references, 0 duplicate edges across the full
+  420-node graph — this is now a checkable invariant, not a one-time sweep.
+- **Same audit, crypto side: the §4.25 fix had a twin nobody had built.**
+  `CRYPTO_WATCHLIST` was still a hardcoded `BTC/USD,ETH/USD,SOL/USD` in
+  `config.py`'s default and in this box's `.env` — dating to seed v21
+  (2026-07-31), where the commit message explicitly called it *"pending
+  crypto news depth"*, a deliberate but temporary restriction. `adviser.py`'s
+  own comments (dated 2026-08-04) showed a 13-coin watchlist had already been
+  scored live since then, so the gate the v21 pin was waiting on had already
+  been exercised — the pin had just never been lifted. Added
+  `brain.seed.tradable_crypto_symbols()` (mirrors `tradable_stock_symbols()`
+  exactly) and wired `config.py`'s `crypto_watchlist` default to it.
+- **Two real bugs the audit turned up along the way.** `ARB` and `TAO`'s
+  seeded symbols were `ARB11841/USD` and `TAO22974/USD` — CoinGecko-style
+  numeric disambiguator IDs that had leaked into the symbol field at seed v21
+  and would have made ccxt's `fetch_ohlcv` fail for both, silently, the
+  moment either was ever actually watched. Nothing had caught this because
+  nothing had watched them until this fix. Corrected to plain `ARB/USD` /
+  `TAO/USD`.
+- **Asked directly whether crypto coverage was "competent" for GPU-compute/AI
+  narratives** — checked, not assumed: RENDER/TAO/FET/AKT are wired to
+  `ai_capex_cycle`/`ai_datacenter`, and three of those four edges already
+  carry real calibration verdicts from a 7k-event corpus (2026-08-02): AKT's
+  link is **supported** (n=66, hit 54%, t=+2.1); TAO's and FET's membership in
+  the generic `crypto_majors` bucket is **contradicted** (n=29, t≈-2.0,
+  "AI-token beta runs on its own narrative, not the majors' tide") — a
+  wrong-but-plausible assumption the calibrator had already caught and
+  downweighted before this session touched it. One real gap found by web
+  search: **io.net** (IO), a decentralized GPU-compute network in the same
+  niche as Akash/Render (Binance/Coinbase-listed, ~2,700 verified GPUs across
+  138 countries as of Aug 2026), had no graph node. Added, wired the same way
+  as Akash, and explicitly labeled `"no calibration run yet... weight is a
+  prior, not measured"` rather than borrowing Akash's supported verdict for
+  an unrelated token. Bumped `SEED_VERSION` 34 → 37 across the three fixes.
+- **Deployed and verified, not just merged — and the deploy found a fourth
+  bug the dev box could not have shown.** This ThinkPad's `.env` (a stale
+  local copy) still had the old 3-coin pin, so testing the fallback here
+  looked clean. The ProDesk's real `.env` did not: it carried its own
+  hand-verified 13-symbol list (`BTC,ETH,SOL,LINK,LTC,BCH,AVAX,DOGE,XRP,DOT,
+  UNI,AAVE,ATOM`) with a comment noting `ADA` had been excluded for having no
+  bars on Gemini, the box's actual `CRYPTO_EXCHANGE`. Blindly switching
+  ProDesk to the graph-derived fallback would have been a regression dressed
+  as a fix: it would have silently dropped 6 real, currently-scored coins
+  (none of which have graph nodes) while adding 4 that don't exist on
+  Gemini at all. Checked directly on the ProDesk with a live `ccxt.gemini()`
+  probe before changing anything: of the 8 graph-curated candidates, INJ,
+  ARB, FET and HYPE are listed with real bars; RENDER, TAO, AKT and the new
+  IO are not. Applied the verified union instead of the fallback — kept all
+  13 working coins, added the 4 confirmed-listed graph ones — 17 total,
+  written explicitly into `.env` rather than left to the code default, with
+  the Gemini-availability finding recorded inline so it isn't rediscovered
+  the hard way. Confirmed with the user before writing to the live box's
+  `.env` (the harness's own auto-mode classifier blocked the first attempt,
+  correctly, as a production-config write). Full 24-suite test run on the
+  ProDesk's real `.venv` passed before any restart; one restart (not
+  repeated — see §4.25's own warning about refetch storms); `daily_status.py`
+  after showed all channels current and the paper engine already cycled.
+  Confirmed in `data/knowledge_graph.json` on the ProDesk itself: `seed_version:
+  37`, `io_net` present, `arb`/`tao` symbols fixed — the merge is live, not
+  pending next boot.
+- **Lesson.** §4.25 asked "is everything in the graph buyable?" and fixed
+  the stock half. This session asked the two questions §4.25 didn't:
+  "is everything *reachable*?" (no — 9 nodes) and "did the *other* watchlist
+  have the same drift?" (yes, plus its own local variant nobody had
+  documented — the ProDesk's hand list, right for reasons the graph
+  default couldn't see). A fallback that's correct in general can still be
+  wrong on a specific box; checking the box directly is what caught it, not
+  re-deriving the fallback more carefully.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1287,9 +1387,9 @@ and the register had drifted **13 commits** behind reality.
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
-| **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. | Fewer learning data points than requested. |
+| **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. Base changed under this figure at §4.26 (13 → 17 watched coins); not yet re-measured post-deploy, so this 6/13 split is stale until the next `daily_status.py`-style check. | Fewer learning data points than requested. |
 | **New-company discovery still has a manual step** (§4.24) | The `lists_on` digester path and `graph_gap_scan.py` cover the two automatable layers, but the news archives are too thin/generic right now for the gap-scan's frequency heuristic to catch China/HK-specific names on its own — CXMT was the one real hit out of ~180 candidates at loose thresholds, and Hengrui/Haitian/Sanhua/JCET were found by neither tool, only by directly searching "biggest HK/CN IPOs" and checking each result against the graph. **Recommendation: keep doing that sweep periodically by hand** (monthly, or whenever a market-moving China/HK/SG headline seems suspiciously absent from the graph) until the archives have enough volume for the gap-scan to plausibly take over — re-run `graph_gap_scan.py` first each time to check whether it's started catching real names on its own, since that's the signal the manual step is no longer needed. | Until archive volume grows, coverage gaps in fast-moving sectors (semiconductors, robotics, anything with a hot IPO pipeline) will keep recurring silently between sweeps. |
-| **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
+| **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. Still climbing as of §4.26's deploy: 50.4% a few hours into that day, before the +4 crypto symbols added any further load — worth actually checking whether it settles or keeps trending, not just noting it again. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
