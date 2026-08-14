@@ -86,6 +86,16 @@ def _get_list(name: str, default: list[str]) -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()] if raw else list(default)
 
 
+def _default_stock_watchlist() -> list[str]:
+    """Fallback when STOCK_WATCHLIST is unset: every symbol the graph knows.
+
+    Keeps "what the brain can reason about" and "what it can buy" from
+    drifting apart — see brain.seed.tradable_stock_symbols for why.
+    """
+    from ai_investing.brain.seed import tradable_stock_symbols
+    return tradable_stock_symbols()
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _load_dotenv(PROJECT_ROOT / ".env")
 
@@ -282,7 +292,7 @@ class Settings:
     # sizing, exposure, stops and every breaker measure against the slice, while
     # orders still route to the real venue. See execution/capital.py.
     live_capital_base: float = field(default_factory=lambda: _get_float("LIVE_CAPITAL_BASE", 0.0))
-    stock_watchlist: list[str] = field(default_factory=lambda: _get_list("STOCK_WATCHLIST", ["AAPL", "NVDA", "TSLA", "MSFT"]))
+    stock_watchlist: list[str] = field(default_factory=lambda: _get_list("STOCK_WATCHLIST", _default_stock_watchlist()))
     crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", ["BTC/USD", "ETH/USD", "SOL/USD"]))
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))
     crypto_exchange: str = field(default_factory=lambda: _get("CRYPTO_EXCHANGE", "coinbase"))

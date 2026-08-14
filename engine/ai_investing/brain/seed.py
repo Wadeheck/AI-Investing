@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 33
+SEED_VERSION = 34
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -393,6 +393,7 @@ SEED_NODES = [
      "aliases": ["h100", "blackwell", "英伟达", "輝達"]},
     {"id": "tsla", "type": "asset", "label": "Tesla", "symbol": "TSLA", "market": "US",
      "aliases": ["elon musk"]},
+    {"id": "spy", "type": "asset", "label": "S&P 500 ETF", "symbol": "SPY", "market": "US"},
     {"id": "xlk", "type": "asset", "label": "Tech sector ETF", "symbol": "XLK", "market": "US"},
     {"id": "xle", "type": "asset", "label": "Energy sector ETF", "symbol": "XLE", "market": "US"},
     {"id": "xlp", "type": "asset", "label": "Staples sector ETF", "symbol": "XLP", "market": "US"},
@@ -1353,6 +1354,7 @@ SEED_EDGES = [
     {"src": "nvda", "dst": "semis", "type": "member_of", "weight": 0.9},
     {"src": "nvda", "dst": "ai_datacenter", "type": "member_of", "weight": 0.9},
     {"src": "tsla", "dst": "ev_supply_chain", "type": "member_of", "weight": 0.8},
+    {"src": "spy", "dst": "us_megacap_tech", "type": "member_of", "weight": 0.5},
     {"src": "xlk", "dst": "us_megacap_tech", "type": "member_of", "weight": 0.9},
     {"src": "xle", "dst": "energy_sector", "type": "member_of", "weight": 0.9},
     {"src": "xlp", "dst": "consumer_staples", "type": "member_of", "weight": 0.9},
@@ -2499,3 +2501,26 @@ SEED_EDGES = [
      "note": "household substitution is what breaks a managed FX regime — the "
              "peg fails after the savings leave, not before"},
 ]
+
+
+def tradable_stock_symbols() -> list[str]:
+    """Every curated asset node's symbol, i.e. the engine's tradable stock universe.
+
+    This is the fix for the graph/watchlist split: for years, adding a company
+    to the graph (so the brain could reason about it) did not make it buyable —
+    a human had to separately hand-edit STOCK_WATCHLIST, and most graph
+    additions never got that second step (§4.24 in STATE_OF_THE_SYSTEM.md,
+    2026-08-14: 87 of 116 newly-added SG/HK/CN nodes were graph-only, unbuyable).
+    Config now derives the default watchlist from here so the two can't drift.
+
+    Scoped to SEED_NODES only (human-verified before merge), not the live
+    persisted graph, so an LLM-proposed node with an unverified symbol can't
+    become tradable with real capital before a human reviews it (see the
+    `lists_on` / needs_you.py pipeline for that review step).
+
+    CRYPTO market excluded: crypto trades through crypto_watchlist/ccxt on a
+    different symbol format (e.g. "BTC/USD"), a separate concern from stocks.
+    """
+    symbols = {n["symbol"] for n in SEED_NODES
+               if n.get("type") == "asset" and n.get("symbol") and n.get("market") != "CRYPTO"}
+    return sorted(symbols)
