@@ -96,6 +96,17 @@ def _default_stock_watchlist() -> list[str]:
     return tradable_stock_symbols()
 
 
+def _default_crypto_watchlist() -> list[str]:
+    """Fallback when CRYPTO_WATCHLIST is unset: every coin the graph knows.
+
+    Same drift fix as _default_stock_watchlist, applied to crypto — see
+    brain.seed.tradable_crypto_symbols for why the btc/eth/sol-only pin it
+    replaces was safe to lift.
+    """
+    from ai_investing.brain.seed import tradable_crypto_symbols
+    return tradable_crypto_symbols()
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _load_dotenv(PROJECT_ROOT / ".env")
 
@@ -293,7 +304,7 @@ class Settings:
     # orders still route to the real venue. See execution/capital.py.
     live_capital_base: float = field(default_factory=lambda: _get_float("LIVE_CAPITAL_BASE", 0.0))
     stock_watchlist: list[str] = field(default_factory=lambda: _get_list("STOCK_WATCHLIST", _default_stock_watchlist()))
-    crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", ["BTC/USD", "ETH/USD", "SOL/USD"]))
+    crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", _default_crypto_watchlist()))
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))
     crypto_exchange: str = field(default_factory=lambda: _get("CRYPTO_EXCHANGE", "coinbase"))
     crypto_sandbox: bool = field(default_factory=lambda: _get_bool("CRYPTO_SANDBOX", False))

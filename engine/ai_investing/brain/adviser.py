@@ -177,9 +177,12 @@ def advise(settings, brain, log: bool = True) -> dict:
     # Symbols the engine actually watches but the causal graph has no node for.
     # Without this the universe was whatever the graph happened to name, which is
     # why every one of the 95 considered names was a stock and crypto never
-    # appeared in a single advice list: only BTC/USD, ETH/USD and SOL/USD have
-    # graph nodes at all. These candidates are scored on the formula/technical leg
-    # only — no causal chain to show, and their `chain` says so honestly.
+    # appeared in a single advice list: at the time this was written, only
+    # BTC/USD, ETH/USD and SOL/USD had graph nodes at all (seed v21, 2026-07-31,
+    # added the other 13 coins — CRYPTO_WATCHLIST just hadn't caught up to them
+    # until seed v36). Symbols still watched but genuinely nodeless are scored
+    # on the formula/technical leg only — no causal chain to show, and their
+    # `chain` says so honestly.
     watched = set(settings.stock_watchlist) | set(settings.crypto_watchlist)
     symbols |= {s for s in watched if s in formula}
 

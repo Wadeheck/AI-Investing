@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 34
+SEED_VERSION = 37
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -723,18 +723,20 @@ SEED_NODES = [
      "aliases": ["chainlink"]},
     {"id": "inj", "type": "asset", "label": "Injective", "symbol": "INJ/USD", "market": "CRYPTO",
      "aliases": ["injective"]},
-    {"id": "arb", "type": "asset", "label": "Arbitrum", "symbol": "ARB11841/USD", "market": "CRYPTO",
+    {"id": "arb", "type": "asset", "label": "Arbitrum", "symbol": "ARB/USD", "market": "CRYPTO",
      "aliases": ["arbitrum"]},
     {"id": "doge", "type": "asset", "label": "Dogecoin", "symbol": "DOGE/USD", "market": "CRYPTO",
      "aliases": ["dogecoin", "狗狗币"]},
     {"id": "render", "type": "asset", "label": "Render", "symbol": "RENDER/USD", "market": "CRYPTO",
      "aliases": ["rndr", "render network"]},
-    {"id": "tao", "type": "asset", "label": "Bittensor", "symbol": "TAO22974/USD", "market": "CRYPTO",
+    {"id": "tao", "type": "asset", "label": "Bittensor", "symbol": "TAO/USD", "market": "CRYPTO",
      "aliases": ["bittensor"]},
     {"id": "fet", "type": "asset", "label": "Fetch.ai / ASI", "symbol": "FET/USD", "market": "CRYPTO",
      "aliases": ["fetch.ai", "artificial superintelligence alliance"]},
     {"id": "akt", "type": "asset", "label": "Akash Network", "symbol": "AKT/USD", "market": "CRYPTO",
      "aliases": ["akash"]},
+    {"id": "io_net", "type": "asset", "label": "io.net", "symbol": "IO/USD", "market": "CRYPTO",
+     "aliases": ["io.net", "ionet"]},
     {"id": "hype", "type": "asset", "label": "Hyperliquid", "symbol": "HYPE/USD", "market": "CRYPTO",
      "aliases": ["hyperliquid"]},
     # ------------- bill-of-materials sub-themes (seed v13) -------------
@@ -1504,6 +1506,9 @@ SEED_EDGES = [
     {"src": "fet", "dst": "crypto_majors", "type": "member_of", "weight": 0.3,
      "note": f"calibrated 2026-08-02 on the 7k-event corpus: membership CONTRADICTED (n=29, t=-1.9)"},
     {"src": "akt", "dst": "crypto_majors", "type": "member_of", "weight": 0.5},
+    {"src": "io_net", "dst": "crypto_majors", "type": "member_of", "weight": 0.4,
+     "note": "GPU-cluster aggregation marketplace, the same niche as Akash/Render; "
+             "no calibration run yet (added seed v37) — weight is a prior, not measured"},
     {"src": "hype", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
      "note": "Hyperliquid L1 + perp DEX token; also has a spot ETF wrapper (BHYP)"},
     # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
@@ -1517,9 +1522,13 @@ SEED_EDGES = [
     {"src": "ai_capex_cycle", "dst": "fet", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "ai_capex_cycle", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.4,
      "note": f"calibrated 2026-08-02 on the 7k-event corpus: SUPPORTED (n=66, hit 54%, t=+2.1)"},
+    {"src": "ai_capex_cycle", "dst": "io_net", "type": "influences", "sign": 1, "weight": 0.35,
+     "note": "same GPU-aggregation bull case as akt, uncalibrated prior"},
     {"src": "ai_datacenter", "dst": "render", "type": "influences", "sign": 1, "weight": 0.3},
     {"src": "ai_datacenter", "dst": "akt", "type": "influences", "sign": 1, "weight": 0.3,
      "note": "datacenter compute scarcity is the bull case for decentralized compute"},
+    {"src": "ai_datacenter", "dst": "io_net", "type": "influences", "sign": 1, "weight": 0.25,
+     "note": "uncalibrated prior, mirrors akt"},
     # exchange-token and enforcement wiring
     {"src": "custody_risk", "dst": "bnb", "type": "influences", "sign": -1, "weight": 0.2,
      "note": "exchange tokens are the epicenter of custody scares (FTT lesson) — "
@@ -2500,6 +2509,48 @@ SEED_EDGES = [
      "weight": 0.5, "delay_days": 90,
      "note": "household substitution is what breaks a managed FX regime — the "
              "peg fails after the savings leave, not before"},
+
+    # ------- seed v35: wire the 9 orphan nodes from v32/v33 (had zero edges —
+    # graph-listed and tradable, but invisible to propagate()/centrality() since
+    # nothing could ever reach or leave them) -------
+    {"src": "fds", "dst": "us_financials", "type": "correlates_with", "weight": 0.25,
+     "note": "sells data/analytics subscriptions to asset managers and banks; ASV "
+             "growth tracks financial-industry headcount and market activity — not "
+             "a bank itself, hence correlates rather than member_of"},
+    {"src": "chinamobile", "dst": "china_government", "type": "regulated_by", "weight": 0.6,
+     "note": "SASAC-controlled; China's dominant mobile carrier, tariffs and "
+             "spectrum allocation are policy variables"},
+    {"src": "power_demand", "dst": "chinamobile", "type": "influences", "weight": 0.2,
+     "note": "carrier's datacenter/cloud buildout (part of the 东数西算 national "
+             "computing push) is a real capex beneficiary of AI-driven power/compute demand"},
+    {"src": "swire", "dst": "cathay", "type": "owns", "weight": 0.4,
+     "note": "~45% shareholder in Cathay Pacific, alongside Air China and Qatar Airways"},
+    {"src": "us_consumer", "dst": "techtronic", "type": "influences", "weight": 0.3,
+     "note": "power tools (Milwaukee, Ryobi, AEG) sell mainly through US "
+             "home-improvement retail; DIY/pro demand tracks US consumer "
+             "discretionary spending"},
+    {"src": "lenovo", "dst": "ai_servers", "type": "member_of", "weight": 0.4,
+     "note": "Lenovo ISG is a real top-3 AI-server player alongside Dell/HPE, "
+             "though PCs still dominate group revenue — lower weight than the pure plays"},
+    {"src": "cosco", "dst": "freight_logistics", "type": "member_of", "weight": 0.8,
+     "note": "world's 4th-largest container carrier by capacity — the ocean-freight "
+             "leg alongside UPS/FedEx's ground/air"},
+    {"src": "cosco", "dst": "china_government", "type": "regulated_by", "weight": 0.5,
+     "note": "SASAC-controlled shipping conglomerate"},
+    {"src": "midea", "dst": "robotics", "type": "member_of", "weight": 0.4,
+     "note": "acquired German industrial-robotics maker KUKA (majority stake 2016, "
+             "took private 2022) — diversifying beyond home appliances"},
+    {"src": "china_property", "dst": "midea", "type": "influences", "weight": 0.3,
+     "note": "air-con/appliance purchases follow new-home completions; a property "
+             "downturn is a direct demand drag on white-goods makers"},
+    {"src": "yangtzepower", "dst": "china_government", "type": "regulated_by", "weight": 0.5,
+     "note": "SOE under China Three Gorges Corporation; tariffs set by NDRC"},
+    {"src": "energy_transition", "dst": "yangtzepower", "type": "influences", "weight": 0.35,
+     "note": "operates Three Gorges and China's largest hydropower fleet — a direct "
+             "beneficiary of the clean-power buildout"},
+    {"src": "wilmar", "dst": "food_processing", "type": "member_of", "weight": 0.85,
+     "note": "world's largest palm-oil trader/refiner; Yihai Kerry is China's #1 "
+             "edible-oil/rice/flour brand — the Asian ADM/Bunge"},
 ]
 
 
@@ -2523,4 +2574,26 @@ def tradable_stock_symbols() -> list[str]:
     """
     symbols = {n["symbol"] for n in SEED_NODES
                if n.get("type") == "asset" and n.get("symbol") and n.get("market") != "CRYPTO"}
+    return sorted(symbols)
+
+
+def tradable_crypto_symbols() -> list[str]:
+    """Every curated crypto asset node's symbol, i.e. the engine's tradable coin universe.
+
+    Same fix as tradable_stock_symbols(), applied to the other half of the
+    watchlist: CRYPTO_WATCHLIST had been hand-pinned to btc/eth/sol since seed
+    v21 (2026-07-31) "pending crypto news depth" — a deliberate, temporary
+    restriction, not a permanent one. adviser.py has since scored a 13-coin
+    watchlist live (its MIN_SCORE/no_view comments, dated 2026-08-04, already
+    assume that width), so the gate this was waiting on has been exercised.
+    Graph coverage (16 curated coins) is now the wider and more current set,
+    and per-coin no_view / data-guard handling means an exchange that doesn't
+    list a given pair degrades gracefully (empty bars -> no_view) exactly like
+    a thin stock symbol already does — the same mechanism, not a new one.
+
+    Scoped to SEED_NODES only, same reasoning as tradable_stock_symbols(): an
+    LLM-proposed node can't become tradable before human review.
+    """
+    symbols = {n["symbol"] for n in SEED_NODES
+               if n.get("type") == "asset" and n.get("symbol") and n.get("market") == "CRYPTO"}
     return sorted(symbols)

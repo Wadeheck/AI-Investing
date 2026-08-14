@@ -82,6 +82,36 @@ def test_a_benchmark_is_never_graded_against_itself():
         assert benchmark_for(b) is None, f"{b} is a benchmark and must not be scored"
 
 
+def _env_watchlists() -> dict[str, list[str]]:
+    """The resolved STOCK_WATCHLIST/CRYPTO_WATCHLIST as the real deployment would
+    see them: an explicit line in .env, else the graph-derived fallback
+    (config._default_stock_watchlist / _default_crypto_watchlist, commit abaaf4f
+    and its crypto counterpart).
+
+    Reads .env as text and calls brain.seed directly — deliberately NOT
+    config.Settings()/os.environ. config.py refuses to load .env under pytest
+    (see its `_running_under_test` docstring: three prior bugs came from tests
+    inheriting the operator's real config), and other test modules
+    (test_runner_cycle.py) permanently stuff STOCK_WATCHLIST/CRYPTO_WATCHLIST into
+    process os.environ at import time for their own isolation. Going through
+    Settings() here would silently grade against whichever sibling test module
+    happened to run first in the session instead of the real .env."""
+    env = Path(__file__).resolve().parents[2] / ".env"
+    lists: dict[str, list[str]] = {}
+    for line in env.read_text().splitlines():
+        for key in ("STOCK_WATCHLIST", "CRYPTO_WATCHLIST"):
+            if line.startswith(key + "="):
+                lists[key] = [s.strip() for s in
+                              line.split("=", 1)[1].split("#")[0].split(",") if s.strip()]
+    if "STOCK_WATCHLIST" not in lists:
+        from ai_investing.brain.seed import tradable_stock_symbols
+        lists["STOCK_WATCHLIST"] = tradable_stock_symbols()
+    if "CRYPTO_WATCHLIST" not in lists:
+        from ai_investing.brain.seed import tradable_crypto_symbols
+        lists["CRYPTO_WATCHLIST"] = tradable_crypto_symbols()
+    return lists
+
+
 def test_the_benchmarks_are_all_watched():
     """A benchmark whose price is never snapshotted silently downgrades its whole
     market back to absolute grading — the failure this change exists to remove,
@@ -91,11 +121,8 @@ def test_the_benchmarks_are_all_watched():
     env = Path(__file__).resolve().parents[2] / ".env"
     if not env.exists():
         return                       # CI has no .env; the ProDesk run covers this
-    watched = set()
-    for line in env.read_text().splitlines():
-        if line.startswith(("STOCK_WATCHLIST=", "CRYPTO_WATCHLIST=")):
-            watched |= {s.strip() for s in
-                        line.split("=", 1)[1].split("#")[0].split(",") if s.strip()}
+    lists = _env_watchlists()
+    watched = set(lists.get("STOCK_WATCHLIST", [])) | set(lists.get("CRYPTO_WATCHLIST", []))
     missing = [b for b in BENCH_SYMBOLS if b not in watched]
     assert not missing, (
         f"benchmark(s) {missing} are not in any watchlist, so no price history is "
@@ -108,12 +135,7 @@ def test_ten_of_each_asset_class_are_actually_watchable():
     env = Path(__file__).resolve().parents[2] / ".env"
     if not env.exists():
         return
-    lists = {}
-    for line in env.read_text().splitlines():
-        for key in ("STOCK_WATCHLIST", "CRYPTO_WATCHLIST"):
-            if line.startswith(key + "="):
-                lists[key] = [s.strip() for s in
-                              line.split("=", 1)[1].split("#")[0].split(",") if s.strip()]
+    lists = _env_watchlists()
     assert len(lists.get("CRYPTO_WATCHLIST", [])) >= 10, \
         f"only {len(lists.get('CRYPTO_WATCHLIST', []))} crypto watched — cannot make 10 calls"
     assert len(lists.get("STOCK_WATCHLIST", [])) >= 10
