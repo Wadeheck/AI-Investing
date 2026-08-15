@@ -1,0 +1,10 @@
+[Unit]
+Description=AI-Investing external fund pull (friend's manually-traded fund, funds.livelyfoodhub.com)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+EnvironmentFile=-%h/.config/ai-investing/external_fund.env
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/external_fund_pull.py
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/external_fund_cron.log
+StandardError=append:/home/eugene/Projects/AI-Investing/data/external_fund_cron.log
