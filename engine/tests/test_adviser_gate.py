@@ -178,20 +178,26 @@ def test_apply_adviser_gate_is_a_no_op_when_disabled():
     assert out[0].target_weight == 0.1
 
 
+# Every driver dict below is pure `field`, i.e. entirely INDEPENDENT of the
+# formula, so independent_score() passes the score through unchanged and these
+# tests exercise the blending arithmetic rather than the decomposition.
+FIELD_ONLY = {"field": 1.0, "formula": 0.0, "scenarios": 0.0}
+
+
 def test_apply_adviser_gate_nudges_and_caps_when_enabled():
     tmp = tempfile.mkdtemp()
     settings = FakeSettings(tmp)
     with open(ag._gate_path(settings), "w") as fh:
-        json.dump({"eligible": True}, fh)
+        json.dump({"eligible": True, "adviser_long": {"hit": 0.75}}, fh)   # beta = BLEND_MAX
     with open(settings.brain.advice_path, "w") as fh:
-        json.dump({"trades": [{"symbol": "GLD", "score": 1.0}],
-                   "watch": [{"symbol": "O39.SI", "score": -1.0}]}, fh)
+        json.dump({"trades": [{"symbol": "GLD", "score": 1.0, "drivers": FIELD_ONLY}],
+                   "watch": [{"symbol": "O39.SI", "score": -1.0, "drivers": FIELD_ONLY}]}, fh)
 
-    decisions = [_decision("GLD", 0.85), _decision("O39.SI", -0.85), _decision("UNRELATED", 0.2)]
+    decisions = [_decision("GLD", 0.95), _decision("O39.SI", -0.95), _decision("UNRELATED", 0.2)]
     out = ag.apply_adviser_gate(decisions, settings)
     by_sym = {d.asset.symbol: d for d in out}
 
-    assert by_sym["GLD"].target_weight == 1.0          # 0.85 + 0.25*1.0 capped at 1.0
+    assert by_sym["GLD"].target_weight == 1.0          # 0.95 + 0.10*1.0 capped at 1.0
     assert "adviser-gate" in by_sym["GLD"].rationale
     assert by_sym["GLD"].direction == SignalDirection.LONG
 
@@ -206,7 +212,7 @@ def _enabled_settings(advice):
     tmp = tempfile.mkdtemp()
     settings = FakeSettings(tmp)
     with open(ag._gate_path(settings), "w") as fh:
-        json.dump({"eligible": True}, fh)
+        json.dump({"eligible": True, "adviser_long": {"hit": 0.75}}, fh)
     with open(settings.brain.advice_path, "w") as fh:
         json.dump(advice, fh)
     return settings
@@ -218,7 +224,7 @@ def test_apply_adviser_gate_never_originates_a_position():
     that the adviser out-ranks the formula's short/avoid calls -- nothing in it
     says the adviser can pick entries the formula passed on entirely, so a flat
     decision must stay flat no matter how strongly the adviser likes the name."""
-    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 5.0}]})
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 5.0, "drivers": FIELD_ONLY}]})
     out = ag.apply_adviser_gate([_decision("GLD", 0.0)], settings)
     assert out[0].target_weight == 0.0
     assert out[0].direction == SignalDirection.FLAT
@@ -231,20 +237,123 @@ def test_apply_adviser_gate_clamps_an_unbounded_adviser_score():
     Without clamping, BLEND_WEIGHT stops meaning "at most a 0.25 shift" and the
     tilt is bounded only by the book's own ±1.0 cap, which is a completely
     different (and much larger) claim than 'bounded nudge, never an override'."""
-    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 12.0}]})
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 12.0, "drivers": FIELD_ONLY}]})
     out = ag.apply_adviser_gate([_decision("GLD", 0.30)], settings)
-    # 0.30 + 0.25*clamp(12.0) == 0.55, NOT 0.30 + 0.25*12.0 clipped to 1.0
-    assert abs(out[0].target_weight - 0.55) < 1e-9, out[0].target_weight
+    # 0.30 + 0.10*clamp(12.0) == 0.40, NOT 0.30 + 0.10*12.0 clipped to 1.0
+    assert abs(out[0].target_weight - 0.40) < 1e-9, out[0].target_weight
 
 
 def test_apply_adviser_gate_cannot_flip_the_formulas_sign():
     """A 'nudge' that reverses the direction of the trade is an override wearing
     a smaller number. A hostile adviser score can zero the position out, but it
     cannot turn the formula's long into a short."""
-    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": -1.0}]})
-    out = ag.apply_adviser_gate([_decision("GLD", 0.10)], settings)
-    assert out[0].target_weight == 0.0          # 0.10 - 0.25 would have been -0.15
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": -1.0, "drivers": FIELD_ONLY}]})
+    out = ag.apply_adviser_gate([_decision("GLD", 0.05)], settings)
+    assert out[0].target_weight == 0.0          # 0.05 - 0.10 would have been -0.05
     assert out[0].direction == SignalDirection.FLAT
+
+
+
+# -- the blend weight itself -------------------------------------------------
+
+def test_blend_weight_is_zero_until_the_gate_is_eligible():
+    assert ag.blend_weight({"eligible": False, "adviser_long": {"hit": 0.99}}) == 0.0
+    assert ag.blend_weight({}) == 0.0
+    assert ag.blend_weight({"eligible": True}) == 0.0            # no measurement -> no tilt
+    assert ag.blend_weight({"eligible": True, "adviser_long": {"hit": None}}) == 0.0
+
+
+def test_blend_weight_has_no_cliff_at_the_eligibility_threshold():
+    """The day the gate flips eligible, a 0.601 hit-rate is not meaningfully
+    better than the 0.600 that failed the day before. If beta jumped straight to
+    its full value, every position in the book would move at once on that
+    distinction. It must ramp from zero instead."""
+    at_bar = ag.blend_weight({"eligible": True,
+                              "adviser_long": {"hit": ag.THRESH["adviser_long_hit"]}})
+    just_over = ag.blend_weight({"eligible": True,
+                                 "adviser_long": {"hit": ag.THRESH["adviser_long_hit"] + 0.001}})
+    assert at_bar == 0.0
+    assert 0.0 < just_over < 0.01, just_over
+
+
+def test_blend_weight_ramps_to_the_cap_and_stops():
+    lo = ag.THRESH["adviser_long_hit"]
+    hi = ag.BLEND_FULL_CONFIDENCE_HIT
+    mid = ag.blend_weight({"eligible": True, "adviser_long": {"hit": (lo + hi) / 2}})
+    assert abs(mid - ag.BLEND_MAX / 2) < 1e-9, mid
+    for hit in (hi, 0.90, 1.0):
+        assert ag.blend_weight({"eligible": True, "adviser_long": {"hit": hit}}) == ag.BLEND_MAX
+    # monotone in the evidence
+    seq = [ag.blend_weight({"eligible": True, "adviser_long": {"hit": h / 100}})
+           for h in range(60, 101)]
+    assert seq == sorted(seq)
+
+
+def test_blend_max_keeps_the_tilt_a_minority_of_a_typical_position():
+    """Sizing check against the live record (scripts/adviser_gate_fit.py):
+    median |target_weight| is 0.202 and the largest independent adviser score
+    observed is 0.958. The tilt has to stay a minority of a typical position or
+    it is not a nudge -- at the old hand-set 0.25 the worst case was 142% of one."""
+    median_position, worst_score = 0.2022, 0.958
+    assert ag.BLEND_MAX * worst_score < median_position, "tilt can exceed a typical position"
+
+
+# -- the tilt must be independent of what it is tilting ----------------------
+
+def test_independent_score_ignores_a_pure_restatement_of_the_formula():
+    """An adviser row whose conviction comes ENTIRELY from the formula driver is
+    telling us what target_weight already says. Tilting on it would size a
+    position up on the strength of its own conviction."""
+    assert ag.independent_score(
+        {"score": 0.8, "drivers": {"field": 0.0, "formula": 0.9, "scenarios": 0.0}}) == 0.0
+
+
+def test_independent_score_passes_through_a_purely_independent_view():
+    assert ag.independent_score(
+        {"score": 0.8, "drivers": {"field": 0.9, "formula": 0.0, "scenarios": 0.0}}) == 0.8
+
+
+def test_independent_score_apportions_a_mixed_view_and_keeps_the_haircuts():
+    """W_FIELD*0.5 = 0.5 independent vs W_FORMULA*0.5 = 0.3 restatement -> the
+    independent share is 0.5/0.8 = 0.625. Crucially this apportions the FINAL
+    score, so every multiplicative haircut adviser.py applied (campaign,
+    crowding, integrity, bubble, mood) is preserved rather than rebuilt away."""
+    got = ag.independent_score(
+        {"score": 0.16, "drivers": {"field": 0.5, "formula": 0.5, "scenarios": 0.0}})
+    assert abs(got - 0.16 * 0.625) < 1e-9, got
+
+
+def test_independent_score_is_safe_on_junk():
+    assert ag.independent_score({}) == 0.0
+    assert ag.independent_score({"score": 0.5}) == 0.0                      # no drivers
+    assert ag.independent_score({"score": None, "drivers": {"field": 1}}) == 0.0
+    # drivers that disagree in sign must not produce a share outside [0, 1]
+    got = ag.independent_score(
+        {"score": 1.0, "drivers": {"field": 1.0, "formula": -3.0, "scenarios": 0.0}})
+    assert 0.0 <= got <= 1.0, got
+
+
+def test_apply_adviser_gate_does_not_tilt_on_the_formulas_own_view():
+    """End to end: the gate is on and confident, but the adviser's conviction is
+    purely a restatement of the formula. Nothing should move."""
+    settings = _enabled_settings({"trades": [
+        {"symbol": "GLD", "score": 0.9,
+         "drivers": {"field": 0.0, "formula": 1.0, "scenarios": 0.0}}]})
+    out = ag.apply_adviser_gate([_decision("GLD", 0.40)], settings)
+    assert out[0].target_weight == 0.40
+    assert "adviser-gate" not in out[0].rationale
+
+
+def test_apply_adviser_gate_is_inert_at_the_bar_even_when_eligible():
+    tmp = tempfile.mkdtemp()
+    settings = FakeSettings(tmp)
+    with open(ag._gate_path(settings), "w") as fh:
+        json.dump({"eligible": True,
+                   "adviser_long": {"hit": ag.THRESH["adviser_long_hit"]}}, fh)
+    with open(settings.brain.advice_path, "w") as fh:
+        json.dump({"trades": [{"symbol": "GLD", "score": 1.0, "drivers": FIELD_ONLY}]}, fh)
+    out = ag.apply_adviser_gate([_decision("GLD", 0.40)], settings)
+    assert out[0].target_weight == 0.40
 
 
 if __name__ == "__main__":

@@ -20,8 +20,9 @@ of this started — re-verified by checking `d03a24c` out into a throwaway
 worktree and running it there: identical 8 failures, `test_alert_storm.py` (2)
 and `test_bullshit_layer.py` (6), unrelated to anything in this diff.
 
-> **Update, same evening.** A review pass over this diff (see §8) found four
-> things worth fixing before deploy; they are fixed and are the fifth commit.
+> **Update, same evening.** A review pass over this diff (§8) found four things
+> worth fixing before deploy, and a fifth (§9) replaced the hand-set blend
+> weight with one derived from the production record.
 > The counts above are post-fix. §§2–7 below are the original write-up and are
 > left as they were, so the review and what it changed stay legible separately.
 
@@ -151,6 +152,9 @@ on its own, once the evidence does.
   specific number; it's a "meaningful but not dominant" guess. Worth an
   opinion on whether it should be walk-forward-fit instead of hand-set once
   the gate is closer to firing.
+  → **Superseded by §9.** It could not be fitted, it was too large to be a
+  nudge, and the thing it multiplied was partly the formula's own conviction.
+  It is now derived from measured evidence rather than set.
 - **The dedupe rule** (last decision of the calendar day) — a defensible
   choice, not verified against whatever produced the original
   `SCORECARD_REVIEW` "deduped: long calls hit 0.672 (n=102)..." figures,
@@ -325,12 +329,75 @@ program (`.venv/bin/python "$t"`). All 21 new tests would have no-op'd and
 reported green on the box, for exactly the code being deployed. Runner blocks
 added; all three now actually execute standalone.
 
-**Still open, deliberately not changed:** `BLEND_WEIGHT = 0.25` is still
-hand-set, not fitted (§4). The dedupe rule is still unverified against the
-original `SCORECARD_REVIEW` methodology (§4). The six graph-node weight priors
-are still judgment calls (§6). Those need a human opinion, not a fix.
+**Still open after §8:** `BLEND_WEIGHT` (now §9). The dedupe rule is still
+unverified against the original `SCORECARD_REVIEW` methodology (§4). The six
+graph-node weight priors are still judgment calls (§6).
 
 ---
 
-**Deployed to the ProDesk after this review.** The pre-review caution above stood
-until §8 was done; §§2–7 are preserved as written for the record.
+## 9. The blend weight: why it isn't 0.25, and isn't a constant
+
+§4 flagged `BLEND_WEIGHT = 0.25` as "chosen, not fitted." Trying to fit it
+produced a better answer than a number. `scripts/adviser_gate_fit.py` is the
+whole analysis, re-runnable on the box.
+
+**It cannot be fitted, and that's a fact about the record, not a preference.**
+Everything the system has — `journal.decisions`, `brain.advice_log`,
+`brain.price_history` — begins **2026-07-26**. Joining formula `target_weight`
+(exactly reconstructible: `decisions.score` is `final_conv`, and
+`entry_threshold`/`size_scale` have been 0.1/1.0 for the entire record) to
+adviser score to a realized 5-day excess return gives **n=251 over 11 distinct
+days** — one regime, overlapping horizons. In that window *everything*
+anti-predicted: `corr(target_weight, excess) = −0.204`,
+`corr(adviser_score, excess) = −0.218`. So the P&L-optimal β is 0.00 on 8/8
+days and the β curve falls monotonically (−49.7bp at β=0 → −92.3bp at β=1).
+That is **not** evidence that β should be zero. It's three adverse weeks, and
+fitting to it would encode them permanently.
+
+**The functional form was wrong, independent of β — this one does generalize.**
+`adviser.py` composes `score = W_FIELD*field + W_FORMULA*formula + …` with
+`W_FORMULA = 0.6`, so the adviser score *restates the formula conviction that
+`target_weight` is already made of*. Measured: the score's formula driver
+correlates **+0.848** with the very target weight it would tilt; its
+field+scenarios part correlates only **+0.260**. Blending the raw score mostly
+amplifies the formula's own view — a "second opinion" that is substantially the
+first opinion again. `independent_score()` now apportions the *final* score by
+its independent driver share, so the tilt carries only non-redundant content and
+every haircut `adviser.py` applied is preserved.
+
+**0.25 was too large to be called a nudge.** Median `|target_weight|` in the live
+record is 0.202. At β=0.25 the largest observed tilt was 0.151 — **75% of a
+typical position** (142% using the independent part's observed range). `BLEND_MAX
+= 0.10` puts the median tilt at ~8% of a typical position, worst observed 47%.
+
+**And it ramps instead of switching on.** β is no longer a constant:
+`blend_weight()` returns 0 at the eligibility bar and rises linearly to
+`BLEND_MAX` at a 0.75 hit-rate. Without this, the day the gate flips eligible
+every position in the book moves at once on the difference between a 0.601
+hit-rate and the 0.600 that failed yesterday — a discontinuity the evidence
+cannot justify. Now the tilt enters at zero and grows only as the adviser proves
+better than the bar it had to clear.
+
+**The tension worth arguing with:** the gate measures the adviser's hit-rate on
+its *full* score, not on this residual. Using the residual is the conservative
+reading — never double-count — but it is a reading, and it's the piece of this
+design most open to challenge. It is flagged in `independent_score`'s docstring
+rather than smoothed over.
+
+---
+
+## Sign-off
+
+Reviewed at the level §7 asked for: the code read against the claims, the
+numbers re-derived from the production databases, and the highest-stakes file
+re-worked where the evidence contradicted it. **Deployed to the ProDesk.**
+§§2–7 are preserved as originally written; §8 and §9 are the review and what it
+changed.
+
+Two honest limits on this sign-off. First, the reviewer here is the same AI
+session that wrote §§2–7 — the independent human read §7 asked for has still not
+happened, and the three items above (dedupe methodology, graph-node priors, the
+residual-vs-full-score question in §9) are exactly where a second person would be
+worth most. Second, nothing in this diff can move a real order today: the gate is
+ineligible on both axes and cannot become eligible for at least 30 more distinct
+days.

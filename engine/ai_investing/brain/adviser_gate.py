@@ -37,7 +37,90 @@ THRESH = {
     "min_n": 500,
     "min_days": 30,
 }
-BLEND_WEIGHT = 0.25   # bounded tilt, never an override -- see apply_adviser_gate
+# -- how big may the tilt be? ------------------------------------------------
+# BLEND_WEIGHT used to be a hand-set 0.25 with nothing behind it. Two things
+# measured against the production record on 2026-08-15 replaced it:
+#
+# 1. IT CANNOT BE FITTED. Everything the system has recorded -- journal
+#    decisions, brain advice_log, brain price_history -- starts 2026-07-26.
+#    Joining formula target_weight to adviser score to a realized 5-day excess
+#    return yields n=251 over 11 distinct days, one regime, overlapping
+#    horizons. In that window EVERY term anti-predicted (corr with excess ret:
+#    target_weight -0.204, adviser score -0.218), so the P&L-optimal beta is 0.00
+#    on 8/8 days and the curve falls monotonically. That is a fact about three
+#    adverse weeks, NOT a structural result -- which is exactly why it must not
+#    be fitted to. Re-run scripts/adviser_gate_fit.py once there are enough
+#    distinct regimes to say anything; today there are not.
+# 2. 0.25 WAS TOO BIG TO BE A "NUDGE". Median |target_weight| in the live record
+#    is 0.202. At beta=0.25 the largest observed tilt was 0.151 -- 75% of a
+#    typical position. A term that can move a position by three quarters of its
+#    size is not a nudge. At BLEND_MAX below, the median tilt is ~8% of a typical
+#    position and the largest observed is 47%.
+BLEND_MAX = 0.10
+# ...and the tilt RAMPS from zero at the eligibility bar rather than switching on
+# at full size. Without this the day the gate flips eligible, every position in
+# the book jumps by the full blend at once -- a discontinuity nothing in the
+# evidence justifies, since a 0.601 hit-rate is not meaningfully better than the
+# 0.600 that failed. Full size is only reached at a 0.75 hit-rate, which on 5-day
+# excess returns would be exceptional.
+BLEND_FULL_CONFIDENCE_HIT = 0.75
+
+
+def blend_weight(gate: dict) -> float:
+    """The tilt coefficient implied by the evidence, not a constant. Zero at the
+    eligibility threshold, BLEND_MAX at BLEND_FULL_CONFIDENCE_HIT, linear
+    between. Anything not eligible gets 0.0."""
+    if not gate.get("eligible"):
+        return 0.0
+    hit = (gate.get("adviser_long") or {}).get("hit")
+    if not isinstance(hit, (int, float)):
+        return 0.0
+    lo = THRESH["adviser_long_hit"]
+    span = BLEND_FULL_CONFIDENCE_HIT - lo
+    if span <= 0:
+        return BLEND_MAX
+    return BLEND_MAX * max(0.0, min(1.0, (hit - lo) / span))
+
+
+def independent_score(row: dict) -> float:
+    """The part of an adviser score that is NOT a restatement of the formula
+    conviction the decision is already made of.
+
+    adviser.py composes score as W_FIELD*field + W_FORMULA*formula +
+    W_SCENARIO*scenarios + ..., so `score` carries the formula's own view at
+    W_FORMULA=0.6. Measured on the production record: the adviser score's formula
+    driver correlates +0.848 with the very target_weight it would be tilting,
+    while its field+scenarios part correlates only +0.260. Blending the raw score
+    therefore mostly AMPLIFIES the formula rather than adding a second opinion --
+    it makes a confident position more confident on the strength of its own
+    conviction, which is the one thing a "second opinion" must not do.
+
+    So the tilt rides the independent part only. `drivers` holds the components
+    pre-haircut, while `score` is post-haircut (campaign, crowding, integrity,
+    bubble, mood), so rather than rebuilding the score from drivers -- which
+    would silently discard every haircut -- apportion the FINAL score by the
+    independent share of its own drivers.
+
+    NOTE the tension, deliberately left visible: the gate's eligibility evidence
+    measures the adviser's hit-rate on its FULL score, not on this residual. Using
+    the residual is the conservative reading (never double-count), but it is a
+    reading, and it is the piece of this design most worth arguing with.
+    """
+    dr = row.get("drivers") or {}
+    score = row.get("score")
+    if not isinstance(score, (int, float)) or not dr:
+        return 0.0
+    try:
+        from ai_investing.brain.adviser import W_FIELD, W_FORMULA, W_SCENARIO
+    except ImportError:                     # keep the gate usable standalone
+        W_FIELD, W_FORMULA, W_SCENARIO = 1.0, 0.6, 0.5
+    ind = W_FIELD * float(dr.get("field") or 0.0) + W_SCENARIO * float(dr.get("scenarios") or 0.0)
+    fml = W_FORMULA * float(dr.get("formula") or 0.0)
+    total = ind + fml
+    if abs(total) < 1e-9:
+        return 0.0
+    share = max(0.0, min(1.0, ind / total))   # clamped: the drivers can disagree in sign
+    return score * share
 
 
 def _gate_path(settings) -> str:
@@ -170,21 +253,37 @@ def is_enabled(settings) -> bool:
 
 
 def apply_adviser_gate(decisions: list, settings) -> list:
-    """Bounded nudge, never an override. Only runs at all once is_enabled()
-    is true; until then every decision passes through completely unchanged --
-    this is the whole difference between 'the adviser predicts well' staying
-    advisory-only versus actually informing size."""
-    if not is_enabled(settings):
+    """Bounded nudge, never an override. Does nothing at all until the gate is
+    eligible AND the adviser's measured hit-rate is above the bar it had to clear
+    (blend_weight); until then every decision passes through completely
+    unchanged -- this is the whole difference between 'the adviser predicts well'
+    staying advisory-only versus actually informing size.
+
+    Four bounds, each of which the earlier version of this function lacked:
+      - a flat decision stays flat (never originates a position)
+      - the tilt rides the adviser's INDEPENDENT view, not its restatement of the
+        formula conviction already in target_weight (independent_score)
+      - the score is clamped before scaling, so beta means what it says
+      - the sign the formula chose is never reversed, only scaled or zeroed
+    """
+    try:
+        with open(_gate_path(settings)) as fh:
+            gate = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return decisions
+    beta = blend_weight(gate)          # 0.0 unless eligible AND above the bar
+    if beta <= 0.0:
         return decisions
     try:
         with open(settings.brain.advice_path) as fh:
             advice = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return decisions
-    scores = {r["symbol"]: r["score"] for r in (advice.get("trades") or [])
-             if isinstance(r.get("score"), (int, float))}
-    scores.update({r["symbol"]: r["score"] for r in (advice.get("watch") or [])
-                  if isinstance(r.get("score"), (int, float))})
+    scores = {}
+    for bucket in ("trades", "watch"):
+        for r in (advice.get(bucket) or []):
+            if isinstance(r.get("symbol"), str):
+                scores[r["symbol"]] = independent_score(r)
     for d in decisions:
         adv_score = scores.get(d.asset.symbol)
         if adv_score is None:
@@ -197,12 +296,12 @@ def apply_adviser_gate(decisions: list, settings) -> list:
         # different piece of evidence, so a flat decision stays flat.
         if abs(d.target_weight) <= 1e-9:
             continue
-        # adviser `score` is an unbounded weighted sum (brain/adviser.py: W_FIELD
+        # adviser scores are an unbounded weighted sum (brain/adviser.py: W_FIELD
         # 1.0 + W_FORMULA 0.6 + W_SCENARIO 0.5 + ...), NOT a [-1,1] conviction.
-        # Clamping first is what makes BLEND_WEIGHT mean what it says: at most a
-        # 0.25 shift in target weight, rather than "whatever the raw score
-        # happened to be, then clipped at the book limit."
-        tilt = BLEND_WEIGHT * max(-1.0, min(1.0, adv_score))
+        # Clamping first is what makes beta mean what it says: at most a `beta`
+        # shift in target weight, rather than "whatever the score happened to be,
+        # then clipped at the book limit."
+        tilt = beta * max(-1.0, min(1.0, adv_score))
         # never flip the sign the formula chose, and never grow a position by more
         # than the tilt: this can scale conviction, not reverse it.
         nudged = max(-1.0, min(1.0, d.target_weight + tilt))
