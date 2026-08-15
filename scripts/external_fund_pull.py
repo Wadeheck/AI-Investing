@@ -18,13 +18,14 @@ URL = os.environ.get("FRIEND_FUND_URL", "https://funds.livelyfoodhub.com/portfol
 OUT_PATH = Path(__file__).resolve().parents[1] / "data" / "external_assets" / "friend_fund.json"
 
 # Values are server-rendered as plain text next to their labels, e.g.:
-#   ...CURRENT NAV</...>...$11,086.04...
+#   ...Current NAV</div>...$11,086.04...
+# (the all-caps look on the page is CSS text-transform, not the actual text)
 # so we match label -> next dollar amount rather than relying on markup,
 # which changes across deploys of the dashboard's Next.js build.
 FIELD_PATTERNS = {
-    "current_nav": r"CURRENT NAV.{0,300}?\$([\d,]+\.\d{2})",
-    "investor_equity": r"INVESTOR EQUITY.{0,300}?\$([\d,]+\.\d{2})",
-    "high_water_mark": r"HIGH-WATER MARK.{0,300}?\$([\d,]+\.\d{2})",
+    "current_nav": r"Current NAV.{0,300}?\$([\d,]+\.\d{2})",
+    "investor_equity": r"Investor Equity.{0,300}?\$([\d,]+\.\d{2})",
+    "high_water_mark": r"High-Water Mark.{0,300}?\$([\d,]+\.\d{2})",
 }
 
 
