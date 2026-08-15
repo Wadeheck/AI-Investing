@@ -658,6 +658,42 @@ def _covered_elsewhere(title: str, pool: list[dict]) -> bool:
     return False
 
 
+# A feed that has not successfully answered in this long is treated as dead:
+# stop replaying its last parse, and let the health check say so. Deliberately
+# generous -- some wires legitimately go quiet over a long holiday weekend, and
+# a 304 counts as success, so only real failure accumulates toward this.
+STALE_FEED_DAYS = 7
+
+
+def _feed_is_stale(entry: dict) -> bool:
+    """Has this feed failed continuously for longer than we tolerate?
+
+    `last_ok` is set on a 200-with-successful-parse and on a 304. Entries
+    written before last_ok existed fall back to `fetched`, which is the same
+    thing for every feed that was ever healthy.
+    """
+    last_ok = entry.get("last_ok") or entry.get("fetched") or 0
+    if not last_ok:
+        return False                      # never seen working: not yet evidence of death
+    return (time.time() - last_ok) > STALE_FEED_DAYS * 86400
+
+
+def dead_feeds(settings) -> list[tuple[str, str, float]]:
+    """(source, last status, days since anything worked) for every feed that has
+    been failing longer than STALE_FEED_DAYS. Aggregate article counts stay green
+    while individual wires die -- 44 healthy feeds hide two dead ones -- so this
+    is what the health check needs to see the difference."""
+    out = []
+    for feed, entry in (_load_feed_cache(settings) or {}).items():
+        if not _feed_is_stale(entry):
+            continue
+        last_ok = entry.get("last_ok") or entry.get("fetched") or 0
+        out.append((feed.split("//")[-1].split("/")[0].replace("www.", ""),
+                    str(entry.get("status", "?")),
+                    (time.time() - last_ok) / 86400))
+    return sorted(out, key=lambda r: -r[2])
+
+
 def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     """Poll all feeds with conditional GET: unchanged feeds answer 304 and cost
     nothing; their last parsed items are replayed from the disk cache (the brain's
@@ -679,16 +715,37 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
                 items = _parse_feed(resp.read(), source, limit_per_feed)
                 cache[feed] = {"etag": resp.headers.get("ETag", ""),
                                "last_modified": resp.headers.get("Last-Modified", ""),
-                               "items": items, "fetched": time.time(), "status": 200}
+                               "items": items, "fetched": time.time(), "status": 200,
+                               "last_ok": time.time()}
                 dirty = True
         except urllib.error.HTTPError as exc:
             if exc.code == 304 and entry.get("items"):
                 items = entry["items"]          # unchanged — replay cached parse
+                # A 304 is the server CONFIRMING the cache is current, which is a
+                # healthy answer, not a stale one. It must refresh last_ok or a
+                # quiet-but-live feed (federalreserve.gov goes days between posts)
+                # looks identical to a dead one.
+                cache.setdefault(feed, {})["last_ok"] = time.time()
+                cache[feed]["status"] = 304
+                dirty = True
             else:
                 cache.setdefault(feed, {})["status"] = exc.code
                 dirty = True
                 continue
-        except Exception:
+        except Exception as exc:                # network blip OR a feed that stopped being a feed
+            # Record WHY. A parse failure is invisible otherwise: the fetch
+            # returns 200, _parse_feed raises, and the generic replay below hands
+            # back the same cached items forever with `status` still reading 200.
+            # 36kr.com/feed did exactly this -- started serving an HTML page with
+            # a 200, and quietly replayed 10-day-old headlines (2026-08-15).
+            cache.setdefault(feed, {})["status"] = f"{type(exc).__name__}"
+            dirty = True
+            # Replaying a dead feed's last parse is right for a blip and wrong
+            # forever: it keeps occupying a round-robin slot under the per-cycle
+            # digest cap, crowding out feeds that still publish. Give up on it
+            # once nothing has succeeded for STALE_FEED_DAYS.
+            if _feed_is_stale(cache.get(feed, {})):
+                continue
             items = entry.get("items") or []    # network blip — stale beats nothing
             if not items:
                 continue

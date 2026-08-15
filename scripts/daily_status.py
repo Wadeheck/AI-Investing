@@ -140,6 +140,21 @@ def main() -> int:
                   f"newest article {lag_m:.0f}m old, {n_today} seen today")
     except Exception:
         pass
+    # PER-FEED death, which the aggregate row above cannot show: 44 healthy wires
+    # keep "newest article 2m old" green while individual feeds die silently.
+    # Found 2026-08-15 with two dead for a fortnight -- mining.com hard-403, and
+    # 36kr.com serving an HTML page with a 200 so its parse failed and the engine
+    # replayed 10-day-old headlines every cycle. Never fatal: a dead wire is a
+    # coverage gap to fix upstream, not a reason to fail the whole check.
+    try:
+        from ai_investing.data.news import STALE_FEED_DAYS, dead_feeds
+        dead = dead_feeds(Settings())
+        row("RSS feeds alive", not dead,
+            "all feeds answering" if not dead else
+            f"{len(dead)} dead >{STALE_FEED_DAYS}d: "
+            + ", ".join(f"{s} ({st}, {d:.0f}d)" for s, st, d in dead[:4]))
+    except Exception:
+        pass
     a = age_h(D("crypto_history", "fear_greed_daily.json"))
     ok &= row("market numbers (daily)", a is not None and a < 30,
               f"last refresh {a:.1f}h ago" if a else "missing")
