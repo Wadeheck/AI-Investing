@@ -153,12 +153,22 @@ def main() -> int:
         # which is the same silent-failure shape this row exists to expose.
         sys.path.insert(0, os.path.join(ROOT, "engine"))
         from ai_investing.config import Settings
-        from ai_investing.data.news import STALE_FEED_DAYS, dead_feeds
-        dead = dead_feeds(Settings())
+        from ai_investing.data.news import (SILENT_FEED_DAYS, STALE_FEED_DAYS,
+                                            dead_feeds, silent_feeds)
+        cfg = Settings()
+        dead = dead_feeds(cfg)
         row("RSS feeds alive", not dead,
             "all feeds answering" if not dead else
             f"{len(dead)} dead >{STALE_FEED_DAYS}d: "
             + ", ".join(f"{s} ({st}, {d:.0f}d)" for s, st, d in dead[:4]))
+        # Separate row on purpose: these answer fine and publish nothing, which
+        # is a different problem with a different fix (replace the source, not
+        # the transport). Report-only — see SILENT_FEED_DAYS.
+        mute = silent_feeds(cfg)
+        row("RSS feeds still publishing", not mute,
+            "all contributing" if not mute else
+            f"{len(mute)} frozen >{SILENT_FEED_DAYS}d: "
+            + ", ".join(f"{s} ({'never' if d < 0 else str(d) + 'd'})" for s, d in mute[:5]))
     except Exception as exc:                            # noqa: BLE001
         row("RSS feeds alive", True, f"not checked ({type(exc).__name__})")
     a = age_h(D("crypto_history", "fear_greed_daily.json"))

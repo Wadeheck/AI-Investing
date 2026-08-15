@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import re as _re
 import time
 import urllib.error
@@ -692,6 +693,47 @@ def dead_feeds(settings) -> list[tuple[str, str, float]]:
                     str(entry.get("status", "?")),
                     (time.time() - last_ok) / 86400))
     return sorted(out, key=lambda r: -r[2])
+
+
+# A feed can be perfectly healthy over HTTP and still be dead: 200 or 304, valid
+# RSS, parses fine -- and the newest item in it is years old. WSJ's public feeds
+# froze in Jan 2025 and xinhuanet's in 2017, and both still answer politely. No
+# HTTP-level check can see this, because nothing at the HTTP level is wrong.
+# The only honest signal is whether the feed still puts NEW articles in the brain.
+#
+# Longer window than STALE_FEED_DAYS and REPORT-ONLY, never auto-dropped: some
+# feeds are legitimately quiet (federalreserve.gov filed 1 article in 7 days, ECB
+# and BoE 2 each), and silently dropping a central bank during an August lull
+# would be a worse failure than the one this catches.
+SILENT_FEED_DAYS = 30
+
+
+def silent_feeds(settings) -> list[tuple[str, int]]:
+    """(source, days since its last new article) for configured feeds that still
+    answer over HTTP but have stopped contributing anything the brain hadn't
+    already seen. Returns [] if the article store can't be read."""
+    hosts = {f.split("//")[-1].split("/")[0].replace("www.", "") for f in settings.news_rss}
+    try:
+        conn = sqlite3.connect(f"file:{settings.brain.db_path}?mode=ro", uri=True)
+        seen = dict(conn.execute(
+            "select source, max(first_seen) from articles group by source"))
+        conn.close()
+    except sqlite3.Error:
+        return []
+    out = []
+    now = datetime.now(timezone.utc)
+    for host in hosts:
+        last = seen.get(host)
+        if not last:
+            out.append((host, -1))            # never delivered anything at all
+            continue
+        try:
+            age = (now - datetime.fromisoformat(last)).days
+        except ValueError:
+            continue
+        if age >= SILENT_FEED_DAYS:
+            out.append((host, age))
+    return sorted(out, key=lambda r: -r[1])
 
 
 def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:

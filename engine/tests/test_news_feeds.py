@@ -53,6 +53,61 @@ def test_a_never_seen_feed_is_not_yet_evidence_of_death():
     assert not _feed_is_stale({})
 
 
+
+# -- the third death mode: healthy HTTP, frozen content ----------------------
+
+def test_silent_feeds_catches_what_http_cannot():
+    """A feed can return 200/304 with valid, parseable RSS whose newest item is
+    years old. WSJ's public feeds froze in Jan 2025, xinhuanet's in 2017, and
+    both still answer politely — so _feed_is_stale calls them healthy (a 304 IS
+    a successful answer). The only signal left is whether new articles actually
+    reach the brain."""
+    import sqlite3
+    import tempfile
+    from datetime import datetime, timedelta, timezone
+    from ai_investing.data.news import SILENT_FEED_DAYS, silent_feeds
+
+    db = os.path.join(tempfile.mkdtemp(), "brain.db")
+    con = sqlite3.connect(db)
+    con.execute("create table articles (id integer primary key, title text, "
+                "source text, published text, first_seen text, digested int)")
+    now = datetime.now(timezone.utc)
+    for src, ts in [("live.com", now - timedelta(hours=2)),
+                    ("quiet.gov", now - timedelta(days=8)),
+                    ("frozen.com", now - timedelta(days=SILENT_FEED_DAYS + 5))]:
+        con.execute("insert into articles (title, source, first_seen, digested) "
+                    "values (?,?,?,1)", ("t", src, ts.isoformat()))
+    con.commit()
+    con.close()
+
+    class _Brain:
+        db_path = db
+
+    class _Cfg:
+        brain = _Brain()
+        news_rss = ["https://live.com/feed", "https://quiet.gov/feed",
+                    "https://frozen.com/feed", "https://never.com/feed"]
+
+    out = dict(silent_feeds(_Cfg()))
+    assert "live.com" not in out
+    assert "quiet.gov" not in out, "a merely quiet feed must not be called frozen"
+    assert out.get("frozen.com", 0) >= SILENT_FEED_DAYS
+    assert out.get("never.com") == -1, "a feed that never delivered must be flagged"
+
+
+def test_silent_feeds_survives_a_missing_article_store():
+    from ai_investing.data.news import silent_feeds
+
+    class _Brain:
+        db_path = "/nonexistent/brain.db"
+
+    class _Cfg:
+        brain = _Brain()
+        news_rss = ["https://x.com/feed"]
+
+    assert silent_feeds(_Cfg()) == []
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(list(globals().items())):
         if _name.startswith("test_") and callable(_fn):
