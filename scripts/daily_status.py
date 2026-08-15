@@ -147,14 +147,20 @@ def main() -> int:
     # replayed 10-day-old headlines every cycle. Never fatal: a dead wire is a
     # coverage gap to fix upstream, not a reason to fail the whole check.
     try:
+        # engine path + Settings are both function-local elsewhere in this file
+        # (see _free_token_cap); importing them here rather than assuming module
+        # scope is what keeps this row from vanishing into the except below --
+        # which is the same silent-failure shape this row exists to expose.
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings
         from ai_investing.data.news import STALE_FEED_DAYS, dead_feeds
         dead = dead_feeds(Settings())
         row("RSS feeds alive", not dead,
             "all feeds answering" if not dead else
             f"{len(dead)} dead >{STALE_FEED_DAYS}d: "
             + ", ".join(f"{s} ({st}, {d:.0f}d)" for s, st, d in dead[:4]))
-    except Exception:
-        pass
+    except Exception as exc:                            # noqa: BLE001
+        row("RSS feeds alive", True, f"not checked ({type(exc).__name__})")
     a = age_h(D("crypto_history", "fear_greed_daily.json"))
     ok &= row("market numbers (daily)", a is not None and a < 30,
               f"last refresh {a:.1f}h ago" if a else "missing")
