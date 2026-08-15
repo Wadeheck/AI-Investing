@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 37
+SEED_VERSION = 38
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -739,6 +739,30 @@ SEED_NODES = [
      "aliases": ["io.net", "ionet"]},
     {"id": "hype", "type": "asset", "label": "Hyperliquid", "symbol": "HYPE/USD", "market": "CRYPTO",
      "aliases": ["hyperliquid"]},
+    # ---- 2026-08-15: six coins on the LIVE CRYPTO_WATCHLIST with no node,
+    # found while tracing why UNI/USD long stayed miscalibrated (n=1,096,
+    # hit-rate 6.3%) even after brain/adviser.py's CONFIRMED_MISCALIBRATED
+    # zeroed its score -- the override protects the adviser's ranking, but a
+    # nodeless symbol skips every general-purpose haircut (crowding,
+    # priced-in, integrity, bubble froth) everywhere else in the system, and
+    # calibration.py can't score an edge that doesn't exist. Giving each a
+    # real node is the actual fix STATE_OF_THE_SYSTEM already named as this
+    # override's removal criterion, generalized to the other five coins with
+    # the identical defect. One conservative member_of edge each, same as
+    # every other altcoin above -- the graph earns trust in these the same
+    # way it did for link/arb/doge, not by assertion.
+    {"id": "uni", "type": "asset", "label": "Uniswap", "symbol": "UNI/USD", "market": "CRYPTO",
+     "aliases": ["uniswap"]},
+    {"id": "atom", "type": "asset", "label": "Cosmos", "symbol": "ATOM/USD", "market": "CRYPTO",
+     "aliases": ["cosmos"]},
+    {"id": "aave", "type": "asset", "label": "Aave", "symbol": "AAVE/USD", "market": "CRYPTO",
+     "aliases": ["aave"]},
+    {"id": "dot", "type": "asset", "label": "Polkadot", "symbol": "DOT/USD", "market": "CRYPTO",
+     "aliases": ["polkadot"]},
+    {"id": "ltc", "type": "asset", "label": "Litecoin", "symbol": "LTC/USD", "market": "CRYPTO",
+     "aliases": ["litecoin"]},
+    {"id": "bch", "type": "asset", "label": "Bitcoin Cash", "symbol": "BCH/USD", "market": "CRYPTO",
+     "aliases": ["bitcoin cash"]},
     # ------------- bill-of-materials sub-themes (seed v13) -------------
     # BOM decomposition of the big demand themes: each tier is a `theme` that
     # SUPPLIES its parent industry (supplies flows both ways: a tier shock hits
@@ -1511,6 +1535,24 @@ SEED_EDGES = [
              "no calibration run yet (added seed v37) — weight is a prior, not measured"},
     {"src": "hype", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
      "note": "Hyperliquid L1 + perp DEX token; also has a spot ETF wrapper (BHYP)"},
+    # ---- six coins added with the nodes above (seed v38, 2026-08-15): weights
+    # are priors matched to the nearest comparable already on this list, NOT
+    # measured -- no calibration run yet, same honest flag as io_net/akt above.
+    # This is what lets calibration.py (and the crowding/priced-in/integrity
+    # haircuts every other node already gets) actually judge these instead of
+    # the hardcoded CONFIRMED_MISCALIBRATED zero-out being UNI's only defense.
+    {"src": "uni", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
+     "note": "leading DEX by volume; DeFi blue-chip tier alongside link/aave — prior, not measured"},
+    {"src": "aave", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
+     "note": "leading DeFi lending protocol; DeFi blue-chip tier alongside link/uni — prior, not measured"},
+    {"src": "atom", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
+     "note": "established L1, interchain/IBC thesis; comparable tier to avax/near — prior, not measured"},
+    {"src": "dot", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
+     "note": "established L1, parachain/interop thesis; comparable tier to avax/near — prior, not measured"},
+    {"src": "ltc", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "BTC-fork payments coin, old-guard 'digital silver' — lower weight, thinner independent narrative"},
+    {"src": "bch", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "BTC-fork payments coin, same rationale as ltc — lower weight, thinner independent narrative"},
     # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
     # Direct edges rather than a new crypto_ai theme node, so the digester's §7
     # taggable set (brief v1.4) stays untouched; promote to a proper theme at

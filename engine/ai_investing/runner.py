@@ -589,6 +589,13 @@ class Runner:
                   if a.key not in bad_data and self.user_views.is_allowed(a.symbol)]
         decisions = [self.engine.decide(a, bars_by_key[a.key], context) for a in active]
         features_by_key = {d.asset.key: d.features for d in decisions}
+        # Adviser gate: a bounded, EVIDENCE-GATED nudge from the adviser's own
+        # (separately measured) conviction -- inert until scripts/adviser_gate_check.py
+        # has independently confirmed the adviser's long-side calls clear their bar.
+        # Applied AFTER features_by_key is captured so the RLS learning loop keeps
+        # training on the model's own pure signal, not on an adviser-nudged target.
+        from ai_investing.brain.adviser_gate import apply_adviser_gate
+        decisions = apply_adviser_gate(decisions, self.settings)
         for d in decisions:
             self.journal.record_decision(d)
 

@@ -26,13 +26,20 @@ DEFENSIVE = {"GLD", "XLP", "TLT"}
 HIGH_BETA = {"BTC/USD", "ETH/USD", "SOL/USD", "XLK", "NVDA", "TSLA"}
 
 # Confirmed-miscalibrated, formula-only symbols (SCORECARD_REVIEW_2026-08-15).
-# No graph node exists for these, so the causal-chain haircuts below (crowding,
-# priced-in, integrity, froth) never apply to them — nothing corrects a bad
-# formula read. UNI/USD: n=1,096 graded long calls, hit-rate 6.3%, avg excess
-# -7.1%, and it got WORSE (not better) as the sample grew from n=636 three
-# days earlier. Zeroed here rather than dropped from the watchlist, so it still
-# gets a `no_view` row and price data keeps flowing — remove this once it has
-# a real graph node and calibration.py can judge it on evidence instead.
+# UNI/USD: n=1,096 graded long calls, hit-rate 6.3%, avg excess -7.1%, and it
+# got WORSE (not better) as the sample grew from n=636 three days earlier.
+# Zeroed here rather than dropped from the watchlist, so it still gets a
+# `no_view` row and price data keeps flowing.
+#
+# Removal has TWO conditions, per the original note. ONE is now met (seed v38,
+# 2026-08-15): `uni` is a real graph node (member_of crypto_majors), so every
+# general-purpose haircut below (crowding, priced-in, integrity, froth) now
+# applies to it like any other coin, instead of nothing correcting a bad
+# formula read. STILL WAITING: calibration.py needs n>=20 realised-return
+# observations on the new `uni -> crypto_majors` edge before it can issue a
+# verdict -- that takes real elapsed time to accumulate and can't be
+# shortcut, so this override stays in place until it does. Do not remove on
+# the graph-node condition alone.
 CONFIRMED_MISCALIBRATED = {"UNI/USD"}
 
 W_FIELD, W_FORMULA, W_SCENARIO, W_REGIME, W_CROWD = 1.0, 0.6, 0.5, 0.25, 0.6

@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily, a cheap SQL check -- nothing about it needs a human to notice
+[Timer]
+# 09:35 SGT — after the digest and market-refresh timers, on the same day's data
+OnCalendar=*-*-* 01:35:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

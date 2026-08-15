@@ -353,6 +353,24 @@ def test_crypto_wiring():
     assert a5.get("TSM", {}).get("impact", 0) < 0
 
 
+def test_six_live_watchlist_coins_have_graph_nodes():
+    """UNI/ATOM/AAVE/DOT/LTC/BCH (seed v38, 2026-08-15) -- these are on the
+    ProDesk's live CRYPTO_WATCHLIST but had no node until now, which is why
+    UNI/USD long stayed miscalibrated even after adviser.py's
+    CONFIRMED_MISCALIBRATED zeroed its score: a nodeless symbol skips every
+    general-purpose haircut. Each must resolve to a real asset node and
+    receive a nonzero impact from a general crypto-liquidity shock, same as
+    every other crypto_majors member."""
+    g = KnowledgeGraph.seeded()
+    symbols = ["UNI/USD", "ATOM/USD", "AAVE/USD", "DOT/USD", "LTC/USD", "BCH/USD"]
+    impacts, _, _ = g.propagate({"crypto_liquidity": 0.5})
+    a = g.asset_impacts(impacts)
+    for sym in symbols:
+        node = g.node_for_symbol(sym)
+        assert node is not None and node.type == "asset", sym
+        assert a.get(sym, {}).get("impact", 0) > 0, sym
+
+
 def test_hard_data_anchors():
     from datetime import datetime, timedelta, timezone
     from ai_investing.brain import Brain

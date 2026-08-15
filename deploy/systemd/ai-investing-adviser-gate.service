@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily check: has the adviser earned a say in position sizing yet?
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/adviser_gate_check.py
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/adviser_gate_runs.log
+StandardError=inherit
