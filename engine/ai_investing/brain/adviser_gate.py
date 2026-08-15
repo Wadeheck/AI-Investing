@@ -110,7 +110,16 @@ def _formula_short_stats(journal_db_path: str, brain_db_path: str,
             bentry, bexit = _price(bench, day), _price(bench, exit_day)
             if bentry and bexit and bentry > 0:
                 excess = ret - (bexit / bentry - 1)
-        v = verdict("short", ret, excess)
+        # NOT verdict("short", ...) -- that branch grades the literal "will FALL"
+        # claim on absolute return, ignoring excess entirely. Nothing here can
+        # short stocks, so a formula "short" IS an "avoid" claim ("will lag the
+        # market"), and must be graded the same way: excess vs. benchmark. Passing
+        # the literal string "short" through was a real bug, caught 2026-08-15
+        # because the first test suite for this used a flat benchmark in every
+        # fixture, where absolute return and excess return are numerically
+        # identical -- the two methodologies could never disagree, so the bug
+        # was invisible to it. See test_formula_short_stats_diverges_from_absolute_fall_rule.
+        v = verdict("avoid", ret, excess)
         if v is not None:
             hits.append(v)
             days_seen.add(day)

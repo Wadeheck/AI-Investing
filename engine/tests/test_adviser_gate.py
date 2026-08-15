@@ -93,6 +93,27 @@ def test_formula_short_stats_dedupes_and_grades_against_benchmark():
     assert stats["days"] == 1
 
 
+def test_formula_short_stats_diverges_from_absolute_fall_rule():
+    """The case that pins down which grading rule is used. AAPL FELL (a hit
+    under the absolute-fall rule) but the market fell MORE, so AAPL actually
+    OUTPERFORMED -- a MISS under the excess/avoid rule this system is
+    supposed to use, since nothing here can short stocks. If this ever
+    regresses to verdict("short", ...), this test flips to a false hit."""
+    tmp = tempfile.mkdtemp()
+    day = "2026-08-01"
+    exit_day = (datetime.fromisoformat(day) + timedelta(days=ag.HORIZON_DAYS)).date().isoformat()
+    prices = [
+        (day, "AAPL", 100.0), (exit_day, "AAPL", 95.0),    # AAPL fell 5%...
+        (day, "SPY", 100.0), (exit_day, "SPY", 85.0),      # ...but SPY fell 15% -> AAPL beat it
+    ]
+    _make_brain_db(os.path.join(tmp, "brain.db"), [], prices)
+    decisions = [("2026-08-01T09:00:00", "AAPL", "short", -0.5, 0.5)]
+    _make_journal_db(os.path.join(tmp, "journal.db"), decisions)
+    stats = ag._formula_short_stats(os.path.join(tmp, "journal.db"), os.path.join(tmp, "brain.db"))
+    assert stats["n"] == 1
+    assert stats["hit"] == 0.0     # excess = -5% - (-15%) = +10% -> AAPL beat the market -> miss
+
+
 def test_evaluate_fails_closed_below_every_threshold():
     tmp = tempfile.mkdtemp()
     _make_brain_db(os.path.join(tmp, "brain.db"), [], [])
