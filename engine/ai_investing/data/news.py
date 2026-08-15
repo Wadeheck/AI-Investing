@@ -701,11 +701,20 @@ def dead_feeds(settings) -> list[tuple[str, str, float]]:
 # HTTP-level check can see this, because nothing at the HTTP level is wrong.
 # The only honest signal is whether the feed still puts NEW articles in the brain.
 #
-# Longer window than STALE_FEED_DAYS and REPORT-ONLY, never auto-dropped: some
-# feeds are legitimately quiet (federalreserve.gov filed 1 article in 7 days, ECB
-# and BoE 2 each), and silently dropping a central bank during an August lull
-# would be a worse failure than the one this catches.
-SILENT_FEED_DAYS = 30
+# The window is measured, not guessed. Days since each configured host last put a
+# NEW article in the brain, on the live record 2026-08-15:
+#
+#   41 healthy hosts   0-4 days   (quietest: bankofengland.co.uk 4d, ECB 2d)
+#   -- nothing at all between 5 and 9 --
+#    8 broken hosts   10-20 days  (each delivered exactly ONE batch of 15 when it
+#                                  was added, then never again -- the signature of
+#                                  a feed frozen before we ever subscribed)
+#
+# 12 sits in the empty gap with 8 days of margin over the quietest healthy feed.
+# REPORT-ONLY, never auto-dropped: a central bank can go quiet over a long
+# holiday, and dropping one for that would be a worse failure than the one this
+# catches. A false positive costs a line in the health check and nothing else.
+SILENT_FEED_DAYS = 12
 
 
 def silent_feeds(settings) -> list[tuple[str, int]]:
