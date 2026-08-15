@@ -19,6 +19,7 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 HELP = """*AI-Investing chat* — talk to your engine.
 
@@ -353,6 +354,17 @@ class ChatBot:
                 f"📡 ringing now: {act or 'quiet'}\n"
                 f"🎯 scenarios fired: {fired}")
 
+    def _read_friend_fund(self) -> dict:
+        """Latest snapshot from scripts/external_fund_pull.py (a fund a friend
+        trades manually, not this engine). List on disk, newest entry last."""
+        path = os.path.join(self.data_dir, "external_assets", "friend_fund.json")
+        try:
+            with open(path) as fh:
+                history = json.load(fh)
+            return history[-1] if history else {}
+        except (OSError, IndexError, json.JSONDecodeError):
+            return {}
+
     def _fmt_assets(self) -> str:
         """/assets — the whole balance sheet in six lines. /portfolio already
         exists but lists every position; this is the deliberately-boring
@@ -430,6 +442,28 @@ class ChatBot:
         for title, cash, npos in unpriced:
             lines.append(f"{title}: *value unknown* — {npos} position(s) unpriced, "
                          f"cash ${cash:,.0f}. NOT counted in the total below.")
+        # Friend's fund: he trades it, not this engine, and the source gives
+        # no position-level detail — folding it into `books` would force a
+        # fake "cash $0 + $0 invested" next to a real equity number, which is
+        # the exact kind of non-reconciling total the rest of this function
+        # exists to prevent. Kept as its own line, own total, not summed in.
+        ff = self._read_friend_fund()
+        if ff:
+            ff_eq = float(ff.get("investor_equity", 0) or 0)
+            ff_nav = float(ff.get("current_nav", 0) or 0)
+            ff_hwm = float(ff.get("high_water_mark", 0) or 0)
+            stale = ""
+            pulled_at = ff.get("pulled_at")
+            if pulled_at:
+                try:
+                    age_h = (datetime.now(timezone.utc)
+                              - datetime.fromisoformat(pulled_at)).total_seconds() / 3600
+                    if age_h > 36:
+                        stale = f"  ⚠️ stale ({age_h:.0f}h old — check external_fund_cron.log)"
+                except ValueError:
+                    pass
+            lines.append(f"\n🤝 *Friend's fund* (external, he trades it): *${ff_eq:,.0f}*"
+                         f"  (NAV ${ff_nav:,.0f}, HWM ${ff_hwm:,.0f}){stale}")
         te = sum(b[1] for b in books)
         tc = sum(b[2] for b in books)
         gross = sum(abs(float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0))
