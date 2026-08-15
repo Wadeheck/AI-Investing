@@ -142,19 +142,36 @@ def _adviser_long_stats(brain_db_path: str) -> dict:
 
 
 def _formula_short_stats(journal_db_path: str, brain_db_path: str,
-                         horizon_days: int = HORIZON_DAYS, deadband: float = DEADBAND) -> dict:
+                         horizon_days: int = HORIZON_DAYS, deadband: float = DEADBAND,
+                         rule: str = "last") -> dict:
     """Grade the formula-engine's own 'short' decisions the same way the
     adviser's 'avoid' calls are graded: excess return vs. benchmark, not an
     absolute-fall claim. Stocks can't be shorted on either paper venue, so a
-    formula 'short' functions exactly like an adviser 'avoid'. One graded call
-    per (symbol, calendar day): the LAST decision issued that day."""
+    formula 'short' functions exactly like an adviser 'avoid'.
+
+    One graded call per (symbol, calendar day). WHICH one is a judgment call --
+    the engine re-decides every symbol many times a day (56,155 raw short rows
+    collapse to 359 symbol-days), so the rule chosen changes the number. Measured
+    across every defensible rule on the production record 2026-08-15:
+
+        last of day   0.4150 (n=359)     <- rule="last"
+        first of day  0.4448 (n=353)     <- rule="first"
+        any-short     0.4292 (n=480)
+        no dedupe     0.4449 (n=56,155)
+
+    a spread of 0.030, with `last` the most PERMISSIVE (lowest hit-rate is the
+    direction that opens the gate). evaluate() therefore requires both `last` and
+    `first` to clear the bar, so the verdict never rests on the choice -- see the
+    robustness note there.
+    """
+    order = "max" if rule == "last" else "min"
     try:
         jcon = sqlite3.connect(journal_db_path)
         jcur = jcon.cursor()
-        jcur.execute("""
+        jcur.execute(f"""
             select d.symbol, date(d.ts) as day
             from decisions d
-            join (select symbol, date(ts) as day, max(ts) as mts
+            join (select symbol, date(ts) as day, {order}(ts) as mts
                   from decisions group by symbol, date(ts)) latest
               on d.symbol = latest.symbol and date(d.ts) = latest.day and d.ts = latest.mts
             where d.direction = 'short'
@@ -218,18 +235,29 @@ def evaluate(settings) -> dict:
     """Measure both sides and persist the verdict. Safe to call repeatedly
     (e.g. from a daily timer); never trades, only writes the gate file."""
     adv = _adviser_long_stats(settings.brain.db_path)
-    fml = _formula_short_stats(settings.db_path, settings.brain.db_path)
+    fml = _formula_short_stats(settings.db_path, settings.brain.db_path, rule="last")
+    # ROBUSTNESS: the (symbol, day) dedupe rule is a judgment call worth ~0.03 of
+    # hit-rate (see _formula_short_stats). Rather than defend the choice, require
+    # the evidence to clear the bar under BOTH the most permissive rule and its
+    # opposite -- then no part of the verdict rests on which one is "right".
+    fml_alt = _formula_short_stats(settings.db_path, settings.brain.db_path, rule="first")
+
+    def _clears(a):
+        return (a["n"] >= THRESH["min_n"] and a["days"] >= THRESH["min_days"]
+                and a["hit"] < THRESH["formula_short_hit"])
+
     eligible = (
         adv["n"] >= THRESH["min_n"] and adv["days"] >= THRESH["min_days"]
         and adv["hit"] > THRESH["adviser_long_hit"]
-        and fml["n"] >= THRESH["min_n"] and fml["days"] >= THRESH["min_days"]
-        and fml["hit"] < THRESH["formula_short_hit"]
+        and _clears(fml) and _clears(fml_alt)
     )
     result = {
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "eligible": eligible,
         "adviser_long": adv,
         "formula_short": fml,
+        "formula_short_alt_dedupe": fml_alt,   # the same statistic, other rule
+        "dedupe_rule_disagrees": _clears(fml) != _clears(fml_alt),
         "threshold": THRESH,
     }
     path = _gate_path(settings)

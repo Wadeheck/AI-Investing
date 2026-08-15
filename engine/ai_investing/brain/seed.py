@@ -17,7 +17,7 @@ knowledge_graph.json files merge the update in on next load (LLM-proposed edges
 are preserved).
 """
 
-SEED_VERSION = 38
+SEED_VERSION = 39
 
 SEED_NODES = [
     # ------------- macro factors (with stable points) -------------
@@ -1535,24 +1535,41 @@ SEED_EDGES = [
              "no calibration run yet (added seed v37) — weight is a prior, not measured"},
     {"src": "hype", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
      "note": "Hyperliquid L1 + perp DEX token; also has a spot ETF wrapper (BHYP)"},
-    # ---- six coins added with the nodes above (seed v38, 2026-08-15): weights
-    # are priors matched to the nearest comparable already on this list, NOT
-    # measured -- no calibration run yet, same honest flag as io_net/akt above.
-    # This is what lets calibration.py (and the crowding/priced-in/integrity
-    # haircuts every other node already gets) actually judge these instead of
-    # the hardcoded CONFIRMED_MISCALIBRATED zero-out being UNI's only defense.
-    {"src": "uni", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
-     "note": "leading DEX by volume; DeFi blue-chip tier alongside link/aave — prior, not measured"},
-    {"src": "aave", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
-     "note": "leading DeFi lending protocol; DeFi blue-chip tier alongside link/uni — prior, not measured"},
-    {"src": "atom", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
-     "note": "established L1, interchain/IBC thesis; comparable tier to avax/near — prior, not measured"},
-    {"src": "dot", "dst": "crypto_majors", "type": "member_of", "weight": 0.6,
-     "note": "established L1, parachain/interop thesis; comparable tier to avax/near — prior, not measured"},
+    # ---- six coins added with the nodes above (seed v38), weights MEASURED in
+    # v39 (2026-08-15). The v38 weights were narrative tiering ("DeFi blue-chip",
+    # "thinner independent narrative"); every one of them was too high.
+    #
+    # What replaced them: a member_of edge transmits a theme shock to its member,
+    # so its weight should track how tightly that coin actually co-moves with the
+    # majors complex. Across the 15 pre-existing members whose weights were set by
+    # hand, seed weight vs. measured correlation-to-basket (daily returns, 729
+    # days, basket = equal-weight BTC+ETH+SOL+XRP+BNB) correlates +0.888 with an
+    # RMSE of 0.084 -- i.e. this scale was ALREADY measuring co-movement, by eye.
+    # Making that explicit gives weight = -1.256 + 2.338*corr, which is what the
+    # six below now use, snapped to the file's 0.1 convention.
+    #
+    # (Notably the fit is on CORRELATION, not beta: corr(seed weight, beta) is
+    # -0.588. Membership is about how tightly a coin tracks the complex, not how
+    # violently it moves -- the high-beta narrative tokens like fet/tao/io sit at
+    # the BOTTOM of this scale, correctly.)
+    #
+    # Still a prior, not an outcome calibration: it is fitted to 15 points and
+    # says nothing about whether the edge predicts returns. calibration.py does
+    # that job and cannot start yet -- these six nodes had 0 node_history rows as
+    # of 2026-08-15, since they did not exist until today. Re-derive with
+    # scripts/calibrate_majors_weights.py.
+    {"src": "uni", "dst": "crypto_majors", "type": "member_of", "weight": 0.4,
+     "note": "leading DEX by volume; corr-to-majors 0.72 -> implied 0.43 (was 0.6 on narrative)"},
+    {"src": "aave", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "leading DeFi lending protocol; corr-to-majors 0.75 -> implied 0.49 (was 0.6)"},
+    {"src": "atom", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "established L1, interchain/IBC thesis; corr-to-majors 0.73 -> implied 0.45 (was 0.6)"},
+    {"src": "dot", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
+     "note": "established L1, parachain/interop thesis; corr-to-majors 0.77 -> implied 0.55 (was 0.6)"},
     {"src": "ltc", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
-     "note": "BTC-fork payments coin, old-guard 'digital silver' — lower weight, thinner independent narrative"},
-    {"src": "bch", "dst": "crypto_majors", "type": "member_of", "weight": 0.5,
-     "note": "BTC-fork payments coin, same rationale as ltc — lower weight, thinner independent narrative"},
+     "note": "BTC-fork payments coin; corr-to-majors 0.73 -> implied 0.45 (unchanged from 0.5)"},
+    {"src": "bch", "dst": "crypto_majors", "type": "member_of", "weight": 0.4,
+     "note": "BTC-fork payments coin; corr-to-majors 0.70 -> implied 0.37 (was 0.5)"},
     # AI-compute tokens: the GPU/AI narrative transmits into token valuations.
     # Direct edges rather than a new crypto_ai theme node, so the digester's §7
     # taggable set (brief v1.4) stays untouched; promote to a proper theme at

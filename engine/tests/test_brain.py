@@ -353,6 +353,28 @@ def test_crypto_wiring():
     assert a5.get("TSM", {}).get("impact", 0) < 0
 
 
+def test_six_new_majors_weights_are_measured_not_narrative():
+    """seed v39: the v38 weights for these six were narrative tiering and every
+    one was too high. They are now set from measured correlation-to-majors --
+    see the block comment in seed.py and scripts/calibrate_majors_weights.py,
+    which re-derives them. This pins the result so a future edit has to argue
+    with the measurement rather than silently restore a guess."""
+    from ai_investing.brain.seed import SEED_EDGES
+    w = {e["src"]: e["weight"] for e in SEED_EDGES
+         if e["dst"] == "crypto_majors" and e["type"] == "member_of"}
+    assert w["uni"] == 0.4 and w["bch"] == 0.4
+    assert w["aave"] == 0.5 and w["atom"] == 0.5 and w["dot"] == 0.5 and w["ltc"] == 0.5
+
+    # internal consistency of the scale: none of the six co-moves with the majors
+    # basket as tightly as the 0.7 tier (link/avax/near, corr 0.75-0.83) or the
+    # 0.8+ tier (btc/eth/sol, corr ~0.90), so none may sit at or above 0.6.
+    for coin in ("uni", "aave", "atom", "dot", "ltc", "bch"):
+        assert w[coin] < 0.6, f"{coin} outranks its measured co-movement"
+    # ...and none is below the narrative-token floor (tao/fet at 0.3, corr ~0.68)
+    for coin in ("uni", "aave", "atom", "dot", "ltc", "bch"):
+        assert w[coin] > w["tao"], coin
+
+
 def test_six_live_watchlist_coins_have_graph_nodes():
     """UNI/ATOM/AAVE/DOT/LTC/BCH (seed v38, 2026-08-15) -- these are on the
     ProDesk's live CRYPTO_WATCHLIST but had no node until now, which is why

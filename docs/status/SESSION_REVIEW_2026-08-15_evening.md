@@ -329,9 +329,8 @@ program (`.venv/bin/python "$t"`). All 21 new tests would have no-op'd and
 reported green on the box, for exactly the code being deployed. Runner blocks
 added; all three now actually execute standalone.
 
-**Still open after §8:** `BLEND_WEIGHT` (now §9). The dedupe rule is still
-unverified against the original `SCORECARD_REVIEW` methodology (§4). The six
-graph-node weight priors are still judgment calls (§6).
+**Still open after §8:** `BLEND_WEIGHT` (now §9), the dedupe rule (now §10),
+the six graph-node priors (now §11).
 
 ---
 
@@ -386,6 +385,91 @@ rather than smoothed over.
 
 ---
 
+## 10. The dedupe rule — and a fabricated citation
+
+§4 said the dedupe rule was *"not verified against whatever produced the original
+`SCORECARD_REVIEW` 'deduped: long calls hit 0.672 (n=102)…' figures, because that
+methodology isn't written down anywhere I could find."*
+
+**That figure does not exist.** `grep` across the repo and `git log -S` across all
+history find the string `0.672` and the phrase `deduped: long calls` in exactly
+one place: commit `71b4c47`, this document, citing them. Neither
+`SCORECARD_REVIEW_2026-08-12.md` nor `SCORECARD_REVIEW_2026-08-15.md` contains
+them, and no earlier revision did either. The methodology "isn't written down"
+because the number was never computed — §4 raised a concern against a citation it
+invented, which is worth recording plainly, since a fabricated reference that
+*sounds* like a caveat is more corrosive than no caveat at all.
+
+The underlying question was still real, so it got measured rather than argued.
+Recomputing the identical statistic under every defensible rule
+(`scripts/adviser_gate_fit.py`'s sibling check, production record):
+
+| dedupe rule | n | hit |
+|---|---|---|
+| **last of day** (what the gate used) | 359 | **0.4150** |
+| first of day | 353 | 0.4448 |
+| any-short-that-day | 480 | 0.4292 |
+| no dedupe at all | 56,155 | 0.4449 |
+
+Spread 0.030, against a threshold 0.065 away — the rule cannot flip the verdict
+at current levels. But note `last` is the **most permissive** of the four: the
+lowest hit-rate is the direction that opens the gate, so the original choice
+happened to be the one most favourable to firing.
+
+Rather than defend it, `evaluate()` now requires the evidence to clear the bar
+under **both** `last` and `first`, and records the alternative alongside
+(`formula_short_alt_dedupe`, `dedupe_rule_disagrees`). The judgment call is
+removed from the decision instead of documented in it.
+
+---
+
+## 11. The six graph priors — the scale was already measurable
+
+§6 said the weights (0.5–0.6) were *"judgment calls, not measurements,"* matched
+by eye to the nearest peer. They now aren't.
+
+A `member_of` edge transmits a theme shock to its member, so its weight should
+track how tightly the coin actually co-moves with the majors complex. Testing
+that against the **15 pre-existing** members whose weights were all set by hand
+(daily returns, 729 days, basket = equal-weight BTC+ETH+SOL+XRP+BNB):
+
+> **corr(seed weight, measured correlation-to-basket) = +0.888, RMSE 0.084**
+
+The scale was already measuring co-movement — by eye, and accurately. Making it
+explicit gives `weight = −1.256 + 2.338 × corr`, and applying that to the six:
+
+| coin | v38 (narrative) | measured corr | implied | **v39** |
+|---|---|---|---|---|
+| UNI | 0.6 | 0.72 | 0.43 | **0.4** |
+| AAVE | 0.6 | 0.75 | 0.49 | **0.5** |
+| ATOM | 0.6 | 0.73 | 0.45 | **0.5** |
+| DOT | 0.6 | 0.77 | 0.55 | **0.5** |
+| LTC | 0.5 | 0.73 | 0.45 | 0.5 |
+| BCH | 0.5 | 0.70 | 0.37 | **0.4** |
+
+**Every narrative prior was too high**, by 0.05–0.17. "DeFi blue-chip tier"
+over-weighted UNI and AAVE most — and UNI is precisely the coin whose long calls
+were miscalibrated at a 6.3% hit-rate, which an over-weighted majors edge would
+have made worse by propagating too much complex-wide impulse into it.
+
+A detail worth keeping: the fit is on **correlation, not beta**
+(`corr(seed weight, beta) = −0.588`, negative). Membership measures how tightly a
+coin tracks the complex, not how violently it moves — which is why the high-beta
+narrative tokens (fet, tao, io) correctly sit at the bottom of the scale.
+
+**This is still a prior, not an outcome calibration.** It is fitted to 15 points
+and says nothing about whether the edge predicts returns. `calibration.py` is the
+mechanism that answers *that*, and §6's claim that it can't run yet was accurate:
+all six nodes had **0 rows** in `node_history` as of 2026-08-15, because they did
+not exist until today. It needs real elapsed days and cannot be hurried. What
+changed is that the starting point it will refine is now measured rather than
+asserted. Re-derive with `scripts/calibrate_majors_weights.py`.
+
+`CONFIRMED_MISCALIBRATED` stays in place: its removal criteria are a real graph
+node (true since v38) **and** a `calibration.py` verdict at n≥20 (still false).
+
+---
+
 ## Sign-off
 
 Reviewed at the level §7 asked for: the code read against the claims, the
@@ -394,10 +478,17 @@ re-worked where the evidence contradicted it. **Deployed to the ProDesk.**
 §§2–7 are preserved as originally written; §8 and §9 are the review and what it
 changed.
 
+Every item §7 flagged has now been either fixed (§8), replaced with something
+derived from the record (§9, §11), or removed from the decision entirely (§10).
+One remains genuinely open and cannot be closed by analysis: `calibration.py`
+needs elapsed trading days on the six new nodes, which no amount of work today
+can produce.
+
 Two honest limits on this sign-off. First, the reviewer here is the same AI
-session that wrote §§2–7 — the independent human read §7 asked for has still not
-happened, and the three items above (dedupe methodology, graph-node priors, the
-residual-vs-full-score question in §9) are exactly where a second person would be
-worth most. Second, nothing in this diff can move a real order today: the gate is
-ineligible on both axes and cannot become eligible for at least 30 more distinct
-days.
+session that wrote §§2–7 — the independent human read §7 asked for still has not
+happened, and §10 is a concrete demonstration of why that matters: a previous
+pass invented a citation and dressed it as a caveat, and only re-deriving it from
+the repo caught that. The residual-vs-full-score question in §9 is the piece most
+worth a second opinion now. Second, nothing in this diff can move a real order
+today: the gate is ineligible on both axes and cannot become eligible for at
+least 30 more distinct days.
