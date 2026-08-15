@@ -53,6 +53,11 @@ Kept current. If reality changes, these change with it.
 - **STATE_OF_THE_SYSTEM.md** — architecture, the failure register, and the
   ranked list of what has never been verified.
 - **OPERATIONS.md** — the runbook.
+- **SCORECARD_REVIEW_2026-08-12.md**, **SCORECARD_REVIEW_2026-08-15.md** —
+  periodic post-mortems of the live scorecard: is the brain's edge real or
+  beta, per-book P&L pulled apart from the market it traded in, missed
+  opportunities, what's confirmed working on a large enough sample to trust.
+  Read the newest one first; each names what changed since the last.
 
 ## `design/` — how the system is built and why
 

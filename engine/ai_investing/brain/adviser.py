@@ -25,6 +25,16 @@ from datetime import datetime, timedelta, timezone
 DEFENSIVE = {"GLD", "XLP", "TLT"}
 HIGH_BETA = {"BTC/USD", "ETH/USD", "SOL/USD", "XLK", "NVDA", "TSLA"}
 
+# Confirmed-miscalibrated, formula-only symbols (SCORECARD_REVIEW_2026-08-15).
+# No graph node exists for these, so the causal-chain haircuts below (crowding,
+# priced-in, integrity, froth) never apply to them — nothing corrects a bad
+# formula read. UNI/USD: n=1,096 graded long calls, hit-rate 6.3%, avg excess
+# -7.1%, and it got WORSE (not better) as the sample grew from n=636 three
+# days earlier. Zeroed here rather than dropped from the watchlist, so it still
+# gets a `no_view` row and price data keeps flowing — remove this once it has
+# a real graph node and calibration.py can judge it on evidence instead.
+CONFIRMED_MISCALIBRATED = {"UNI/USD"}
+
 W_FIELD, W_FORMULA, W_SCENARIO, W_REGIME, W_CROWD = 1.0, 0.6, 0.5, 0.25, 0.6
 W_CONTRA, W_BENEF = 0.45, 0.3
 CAMPAIGN_HAIRCUT = 0.6         # long score x (1 - this x pressure) on campaigned names
@@ -191,6 +201,10 @@ def advise(settings, brain, log: bool = True) -> dict:
         if node is not None and node.type != "asset":
             continue
         if node is None and sym not in watched:
+            continue
+        if sym in CONFIRMED_MISCALIBRATED:
+            if sym in watched:
+                no_view.append(sym)
             continue
         impact = asset_impacts.get(sym, {}).get("impact", 0.0)
         pi = priced_in.get(sym, {}).get("priced_in", 0.0)
