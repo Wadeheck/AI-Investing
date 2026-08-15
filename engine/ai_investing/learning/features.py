@@ -16,12 +16,18 @@ FEATURE_NAMES = [
     "sentiment",       # news sentiment score × confidence
     "political_hype",  # hype-fade score × confidence (negative on detected pumps)
     "macro_linkage",   # brain: graph-propagated macro impact × confidence
+    "trend_zscore",    # EMA/stdev z-score trend filter × confidence (candidate, unweighted by default)
     "consensus",       # mean of the directional signal features
     "mom_lowvol",      # momentum × low-volatility regime (interaction term)
 ]
 
 _SIGNAL_FEATURES = ["momentum", "mean_reversion", "sentiment", "political_hype",
                     "macro_linkage"]
+# trend_zscore is deliberately excluded from _SIGNAL_FEATURES/consensus: it's an
+# unvalidated candidate (walk-forward rejected it, see chat log 2026-08-15) and
+# folding it into "consensus" would let it influence conviction through the back
+# door even while its own weight sits at 0. It only matters once it earns its own
+# nonzero theta.
 
 
 class FeatureExtractor:
@@ -35,6 +41,11 @@ class FeatureExtractor:
             f[nm] = (r.score * r.confidence) if r else 0.0
 
         f["consensus"] = sum(f[nm] for nm in _SIGNAL_FEATURES) / len(_SIGNAL_FEATURES)
+
+        # computed but kept OUT of consensus (see note above) -- still populated
+        # so the walk-forward optimizer can see and score it on its own merits
+        tz = by.get("trend_zscore")
+        f["trend_zscore"] = (tz.score * tz.confidence) if tz else 0.0
 
         vol = self._vol_regime(bars)
         f["mom_lowvol"] = f["momentum"] * (1.0 / (1.0 + vol))

@@ -29,7 +29,7 @@ def test_signals_and_decision():
     d = engine.decide(asset, bars, context={})
     assert -1.0 <= d.score <= 1.0
     assert 0.0 <= d.confidence <= 1.0
-    assert len(d.signals) == 5   # momentum, mean-rev, sentiment, hype, macro_linkage
+    assert len(d.signals) == 6   # momentum, mean-rev, sentiment, hype, macro_linkage, trend_zscore
 
 
 def test_paper_broker_roundtrip():

@@ -195,6 +195,13 @@ class AltDataConfig:
     coingecko_api_key: str = field(default_factory=lambda: _get("COINGECKO_API_KEY", ""))
     etherscan_api_key: str = field(default_factory=lambda: _get("ETHERSCAN_API_KEY", ""))
     reddit_user_agent: str = field(default_factory=lambda: _get("REDDIT_USER_AGENT", "ai-investing/0.1 (research)"))
+    # Binance long/short account ratio crowding signal (research/crypto_signals.py
+    # positioning_crowding_z). Computed and cached every cycle regardless; this
+    # flag only gates whether it's blended into brain resting levels. Off by
+    # default -- dormant until it has accumulated enough real days to trust
+    # (Binance only retains 30 days server-side, so there's no deep backtest to
+    # gate this on; see docs/status/STATE_OF_THE_SYSTEM.md §4A/4B). 2026-08-15.
+    positioning_enabled: bool = field(default_factory=lambda: _get_bool("CRYPTO_POSITIONING_ENABLED", False))
 
 
 @dataclass

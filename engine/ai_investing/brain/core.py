@@ -469,25 +469,46 @@ class Brain:
         extreme fear/greed (contrarian) and stretched funding (crowded
         leverage wants to unwind). Live values refreshed every ~6h, free."""
         try:
-            from ai_investing.research.crypto_signals import refresh_live
+            from ai_investing.research.crypto_signals import refresh_live, positioning_crowding_z
             cs = refresh_live()
             a: dict[str, float] = {}
             fng_days = sorted(cs.get("fng", {}).items())
             fng = int(fng_days[-1][1]) if fng_days else None
-            for sym, series in (cs.get("funding") or {}).items():
+            positioning_on = self.settings.altdata.positioning_enabled
+            funding = cs.get("funding") or {}
+            # positioning covers the WHOLE watchlist (17 symbols, verified free on
+            # Binance 2026-08-15); funding only covers BTC/ETH/SOL. Union the
+            # symbol sets so positioning-only coins get a resting level too, not
+            # just the three funding already reached.
+            symbols = set(funding) | (set(cs.get("positioning") or {}) if positioning_on else set())
+            for sym in symbols:
                 node = self.graph.node_for_symbol(sym)
-                if node is None or not series:
+                if node is None:
                     continue
-                vals = [v for _, v in sorted(series.items())][-90:]
-                latest = vals[-1]
-                mean = sum(vals) / len(vals)
-                sd = (sum((v - mean) ** 2 for v in vals) / max(1, len(vals) - 1)) ** 0.5
-                z = (latest - mean) / sd if sd > 1e-12 else 0.0
                 v = 0.0
-                if abs(z) > 1.0:
-                    v -= max(-1.0, min(1.0, z / 2.5)) * 0.15   # crowded longs = drag
-                if fng is not None and (fng <= 20 or fng >= 75):
-                    v += 0.12 if fng <= 20 else -0.12          # contrarian emotion
+                series = funding.get(sym)
+                if series:
+                    vals = [val for _, val in sorted(series.items())][-90:]
+                    latest = vals[-1]
+                    mean = sum(vals) / len(vals)
+                    sd = (sum((val - mean) ** 2 for val in vals) / max(1, len(vals) - 1)) ** 0.5
+                    z = (latest - mean) / sd if sd > 1e-12 else 0.0
+                    if abs(z) > 1.0:
+                        v -= max(-1.0, min(1.0, z / 2.5)) * 0.15   # crowded longs = drag
+                    if fng is not None and (fng <= 20 or fng >= 75):
+                        v += 0.12 if fng <= 20 else -0.12          # contrarian emotion
+                # positioning: a more direct long/short crowding read than funding
+                # alone (see research/crypto_signals.py), and the only source for
+                # the 14 watchlist coins funding never covered. Computed for every
+                # node regardless so it keeps accumulating real days from today,
+                # but it only moves the resting level once
+                # CRYPTO_POSITIONING_ENABLED=true -- dormant by design until there's
+                # enough accumulated history to trust it, same reasoning as
+                # trend_zscore in learning/formula.py.
+                if positioning_on:
+                    pz = positioning_crowding_z(cs, sym)
+                    if pz is not None and abs(pz) > 1.0:
+                        v -= max(-1.0, min(1.0, pz / 2.5)) * 0.15
                 if abs(v) >= 0.05:
                     a[node.id] = round(max(-0.3, min(0.3, v)), 4)
             # value-zone tilt: deep below long-run trend + usage/price

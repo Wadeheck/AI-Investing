@@ -17,7 +17,9 @@ predicted return:
 | `mean_reversion` | mean-reversion score × confidence |
 | `sentiment` | news sentiment score × confidence |
 | `political_hype` | hype-fade score × confidence (negative on detected pumps) |
-| `consensus` | mean of the four signal features |
+| `macro_linkage` | brain: graph-propagated macro impact × confidence |
+| `trend_zscore` | EMA/stdev z-score trend filter × confidence — **candidate, see §7** |
+| `consensus` | mean of the five signal features *above `trend_zscore`* (bias/mom_lowvol excluded; `trend_zscore` deliberately excluded too, see §7) |
 | `mom_lowvol` | `momentum × 1/(1+vol_regime)` — regime interaction |
 
 ## 2. The formula (`learning/formula.py`)
@@ -31,7 +33,7 @@ target_wt(t)  = deadzone(conviction, τ) · size_scale
 
 `target_wt` is then multiplied by `RISK_MAX_POSITION_WEIGHT` and clamped by the risk
 layer. **Decision variables:**
-- `θ` = the 7 feature weights (the heart of the model).
+- `θ` = the 9 feature weights (the heart of the model).
 - hyperparameters `{gain, entry_threshold τ, size_scale, stop_loss, take_profit}`.
 
 ## 3. Objective — what "wins long-run" means (`learning/objective.py`)
@@ -90,3 +92,59 @@ reconstruct exactly how and why the formula evolved.
   correctly receive zero weight.
 - Walk-forward reduces but never eliminates overfitting. Re-curate periodically; trust
   the out-of-sample gate over in-sample returns.
+
+## 7. Candidate features: the dormant-to-active lifecycle
+
+`trend_zscore` (`signals/trend_zscore.py`, added 2026-08-15) is the first feature added
+in this "dormant candidate" state, and sets the pattern for any future one. Origin: a
+widely-shared r/algotrading post claiming 65.92% CAGR / 26.79% max DD from an EMA(65)/
+stdev(65) z-score trend state machine on BTC since 2014. Independent replication on real
+BTC-USD daily data reproduced the CAGR in the right ballpark (51–67% across a 25-cell
+threshold grid) but **not** the drawdown claim (actual: 51–78%, never once under 50%),
+and the strategy lost to plain buy-and-hold over just the last 4 years (13.5% vs 27.1%
+CAGR) — the edge was concentrated in a handful of early-Bitcoin trend rides, not a
+repeatable property. A first walk-forward run through this project's own gauntlet
+(real Gemini OHLCV via ccxt, real transaction costs, embargoed OOS windows) confirmed
+that verdict on live data: Deflated Sharpe 0.001 against a 0.60 bar. **Rejected as
+"trust it blindly," not disproven as an idea** — the underlying hypothesis (a
+volatility-normalized distance-from-trend, read as trend *confirmation* rather than
+`mean_reversion`'s mirror-image "fade the extreme") is different enough from every
+existing signal to be worth letting it keep auditioning on more data, at zero cost or
+risk while it does.
+
+**Mechanically dormant, not administratively excluded.** It runs every cycle like any
+other signal and its value reaches `φ` (`learning/features.py`), but starts at
+`θ_trend_zscore = 0` (`learning/formula.py:_DEFAULT_WEIGHTS`) and is deliberately kept
+**out of `consensus`** — folding an unvalidated feature into an already-weighted
+aggregate would let it influence conviction through the back door even at weight 0.
+`0 × anything = 0`: it cannot move `raw(t)`, and therefore cannot move a single trade,
+until one of the two paths below gives it a nonzero weight. See
+`tests/test_trend_zscore.py` for a proof of each claim in this section (feature reaches
+`φ` but not `consensus`; an old saved formula migrates it in at weight 0; RLS can move
+its weight away from 0 given genuinely predictive data).
+
+**Path A — online RLS (automatic, continuous, already running for every feature).**
+Every closed trade feeds `(φ, realized_return)` through `learning/online.py`. If
+`trend_zscore` is genuinely predictive of realized returns on the assets it fires for,
+its weight drifts away from 0 on its own — no manual step. The trust region
+(`RLSLearner.trust_region`) caps how far any single trade can move it, and the
+confident prior means the first handful of trades can't swing it either; it has to earn
+the move gradually, the same as every other feature already does.
+
+**Path B — offline walk-forward re-curation (manual/discrete, the harder gate).**
+```bash
+cd engine
+python3 -m ai_investing.backtest.main --optimize --save
+```
+Re-fits `θ` by ridge regression + hyperparameter search on current data and **only
+overwrites the saved formula if the challenger beats the incumbent's Sharpe AND its
+Deflated Sharpe clears `settings.learning.min_dsr` (0.60)**. This is available any time
+by hand; unlike the causal-graph research pipeline (`scripts/research_retest.py`, run
+monthly by `deploy/systemd/ai-investing-retest.timer`), there is currently **no
+periodic timer for this formula-level re-curation** — re-run it by hand, or ask for a
+timer mirroring that pattern if continuous re-checking is wanted.
+
+**Status as of 2026-08-15:** uncommitted locally, weight 0, not deployed — the engine
+running in production has never evaluated this feature. Once committed and deployed it
+starts computing, logging, and (via Path A) quietly earning trust or not; it stays
+inert to every actual decision until it does.
