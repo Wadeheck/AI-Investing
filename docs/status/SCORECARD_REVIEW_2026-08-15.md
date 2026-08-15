@@ -297,40 +297,54 @@ that has not yet been tested by a losing leg.**
 
 ## 8. Actions
 
-1. **Review the JKS and INTC shorts in the investing book now**, not as a
-   hypothesis — both have crossed n>250 with a 0.0 hit rate, corroborated by
-   real unrealized losses on the exact same positions. This is the same
-   action item the 08-12 review made about JKS alone; it is now
-   overdue rather than new.
-2. **Investigate PDD and PRX.AS specifically.** Unlike JKS/INTC, nothing in
-   the scorecard or the failure register explains these two losses yet —
-   they are the book's two largest, and they are ordinary long theses, not
-   the already-diagnosed short-side problem.
-3. **Move UNI/USD long from §4A "unvalidated" language to a stated defect.**
-   n=1,096, hit 6.3%, avg excess −7.1%, and it got worse as the sample grew.
-   This is no longer "needs a down-week" — it has had two weeks and stayed
-   wrong.
-4. **CRWV deserves the same review MP already got**: why does the graph read
-   it bearish, on what edges, and is that read structural or stale.
+*Updated 2026-08-15, same day, after acting on the first four.*
+
+1. ~~Review the JKS and INTC shorts in the investing book now~~ — **DONE.**
+   Both closed on the live book: JKS realised −$29.77, INTC realised −$17.37.
+   Journalled in `data/invest_journal.jsonl`.
+2. ~~Investigate PDD and PRX.AS specifically~~ — **DONE, not a bug.** Both are
+   ~10-day-old positions in a book with an explicit 6-month horizon and a 10%
+   hard stop (PDD −6.0%, PRX.AS −7.2%, neither near the stop). Normal noise
+   for this book's mandate, not an undiagnosed defect. **Cue to revisit
+   PRX.AS**: crosses −8.5%, or `daily_manage` drops it from `strat.theses`
+   on its own — see STATE_OF_THE_SYSTEM §4B.
+3. ~~Move UNI/USD long from "unvalidated" to a stated defect~~ — **DONE, and
+   fixed.** Root cause: no graph node, so none of the causal-chain haircuts
+   ever corrected its formula-only score. `brain/adviser.py`'s
+   `CONFIRMED_MISCALIBRATED` set now zeroes it before ranking; deployed and
+   verified (commit `98a58a6`). **Cue to remove the override**: real graph
+   node + `calibration.py` verdict at n≥20 — see STATE_OF_THE_SYSTEM §4B.
+4. ~~CRWV deserves the same review MP already got~~ — **DONE.** Found the
+   mechanism: a curated edge, `ai_circularity → crwv` (−0.5, "the financed
+   party takes the direct hit" — the Nvidia/CoreWeave circular-financing
+   thesis), plus a 40% circular-financing haircut. Deliberate, not stale —
+   but never calibrated. **Cue**: `ai_circularity` needs n≥20 realised-return
+   observations before `calibration.py` can issue a verdict on this edge.
 5. **Do not treat the event sleeve's +10.96% as proof its risk/reward is
    fine.** The 32:1 asymmetry flagged in STATE_OF_THE_SYSTEM §4A is
-   unrelated to whether the last four cycles happened to win — it will only
-   be tested by a stopped-out leg, which has not happened yet.
+   unrelated to whether the last four cycles happened to win. **Cue**:
+   revisit at the first 10% stop-out on any leg (compare against the +$874.12
+   realised so far), or at 15 completed cycles (currently 4) — whichever
+   comes first.
 6. **The long/short conviction asymmetry is still not settled** — it
    reversed direction between the two reviews on the same underlying
-   mechanism. Keep accumulating regime diversity (a genuine down-week for US
-   equities specifically, which has not occurred yet in this sample) before
-   calling either side fixed or broken.
+   mechanism. **Cue**: a genuine down-week for US equities, defined as a
+   5-trading-day cumulative SPY return ≤ −3%. Nothing in the sample so far
+   has had one — SPY has been flat-to-up throughout.
 
-## 9. When is there enough to learn from — revisited
+## 9. When is there enough to learn from — revisited, with dates
 
-The 08-12 review set three bars. Status against each, three days later:
+The 08-12 review set three bars. Status against each, with concrete cues
+rather than "needs more data":
 
-- **Short-side asymmetry, confirmed or dismissed**: still needs a down-week
-  for US equities specifically. Crypto and HK/China *did* have a down window
-  in this data and the avoid-side hit rate held up reasonably (§3) — that is
-  one piece of the needed evidence, not all of it.
-- **Per-symbol reliability weights**: now 11 distinct issuance days instead
-  of 4; still short of the multi-week window needed to trust them unshrunk.
-- **Cross-book correlation for rebalancing**: unchanged — still ~2 months
-  for a loose read.
+- **Short-side asymmetry, confirmed or dismissed**: cue is the SPY ≤ −3%
+  down-week defined in Action 6 above. Crypto and HK/China *did* have a down
+  window in this data and the avoid-side hit rate held up reasonably (§3) —
+  one piece of the needed evidence, not all of it; US equities specifically
+  still hasn't been tested.
+- **Per-symbol reliability weights**: 11 distinct issuance days so far
+  (started 2026-07-26). Treat as provisional until 20–30 distinct days —
+  roughly **2026-09-04 to 2026-09-14** at the current pace.
+- **Cross-book correlation for rebalancing**: dated from the 2026-08-05
+  reset — a loose read from **~2026-10-05** (2 months), safe to size capital
+  allocation on from **~2027-04-05** (8 months).
