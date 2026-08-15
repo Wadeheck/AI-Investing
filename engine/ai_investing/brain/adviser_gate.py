@@ -13,8 +13,10 @@ switch by hand. `scripts/adviser_gate_check.py` (systemd timer, daily) calls
 evaluate() and persists the verdict; runner.py reads the cached verdict once per
 cycle (cheap file read, no live DB query in the hot path) via is_enabled() and,
 only when true, lets apply_adviser_gate() apply a small, BOUNDED nudge --
-never an override -- to that cycle's decisions. Checked live 2026-08-15: not
-eligible (adviser n=1,286/hit 0.532 on 11 days; needs >0.60 hit and 30+ days).
+never an override -- to that cycle's decisions. Checked live 2026-08-15 against
+production copies of journal.db/brain.db: not eligible on either side --
+adviser n=1,361 / hit 0.558 over 10 days (needs >0.60 and 30+ days), formula
+short/avoid n=359 / hit 0.415 over 11 days (needs <0.35 and 30+ days).
 Nothing here is a one-off manual judgment call; re-running evaluate() is what
 changes the answer, the same way the walk-forward Deflated-Sharpe gate already
 decides for the formula's own weights without asking anyone.
@@ -187,7 +189,25 @@ def apply_adviser_gate(decisions: list, settings) -> list:
         adv_score = scores.get(d.asset.symbol)
         if adv_score is None:
             continue
-        nudged = max(-1.0, min(1.0, d.target_weight + BLEND_WEIGHT * adv_score))
+        # A NUDGE, not an originator. The formula deciding "no position" is itself
+        # a decision, and the evidence measured by this gate is only that the
+        # adviser ranks better than the formula's SHORT/AVOID calls -- nothing
+        # here measures whether the adviser can pick entries the formula declined
+        # entirely. Sizing those from scratch would be a different claim on a
+        # different piece of evidence, so a flat decision stays flat.
+        if abs(d.target_weight) <= 1e-9:
+            continue
+        # adviser `score` is an unbounded weighted sum (brain/adviser.py: W_FIELD
+        # 1.0 + W_FORMULA 0.6 + W_SCENARIO 0.5 + ...), NOT a [-1,1] conviction.
+        # Clamping first is what makes BLEND_WEIGHT mean what it says: at most a
+        # 0.25 shift in target weight, rather than "whatever the raw score
+        # happened to be, then clipped at the book limit."
+        tilt = BLEND_WEIGHT * max(-1.0, min(1.0, adv_score))
+        # never flip the sign the formula chose, and never grow a position by more
+        # than the tilt: this can scale conviction, not reverse it.
+        nudged = max(-1.0, min(1.0, d.target_weight + tilt))
+        if (nudged >= 0) != (d.target_weight >= 0):
+            nudged = 0.0
         if abs(nudged - d.target_weight) < 1e-9:
             continue
         d.rationale = (d.rationale + f" | adviser-gate {adv_score:+.2f}")[:200]

@@ -15,10 +15,15 @@ f18dbb0  Add two dormant candidate signals: trend z-score and Binance positionin
 
 21 files changed, 1,020 insertions, 36 deletions. Full diff: `git diff d03a24c..HEAD`.
 
-**Test status:** 359 passed. 8 failing, all pre-existing on `d03a24c` before any
-of this started (verified via `git stash` + rerun before touching anything) —
-`test_alert_storm.py` (2) and `test_bullshit_layer.py` (6), unrelated to
-anything in this diff.
+**Test status:** 366 passed. 8 failing, all pre-existing on `d03a24c` before any
+of this started — re-verified by checking `d03a24c` out into a throwaway
+worktree and running it there: identical 8 failures, `test_alert_storm.py` (2)
+and `test_bullshit_layer.py` (6), unrelated to anything in this diff.
+
+> **Update, same evening.** A review pass over this diff (see §8) found four
+> things worth fixing before deploy; they are fixed and are the fifth commit.
+> The counts above are post-fix. §§2–7 below are the original write-up and are
+> left as they were, so the review and what it changed stay legible separately.
 
 ---
 
@@ -261,4 +266,71 @@ every other unmeasured edge already in this file.
    flag off) and would need a second, separate change to ever affect a
    trade.
 
-**Nothing here should be deployed to the ProDesk until this review is done.**
+---
+
+## 8. Review pass and what it changed
+
+A read of the actual code against the claims above (not just the doc) confirmed
+the load-bearing ones: the test numbers are exact, the §5 `verdict("avoid", …)`
+fix is the correct branch, `adviser_gate` genuinely fails closed on a missing
+gate file, and — the one I most expected to be wrong — inserting `trend_zscore`
+*mid-list* in `FEATURE_NAMES` while `ParamStore._migrate` *appends* it does
+**not** misalign θ, because both `FormulaModel.raw()` and `runner.py:737` key off
+`model.feature_names` by name rather than by position.
+
+Four things it did find, all now fixed:
+
+**8.1 — Deploying silently reset the online learner.** `_migrate` returning True
+made `store.py` null the RLS out entirely. θ survived, but the covariance — the
+"how confident am I in each weight" memory accumulated from every closed trade —
+was thrown away, for a reason having nothing to do with those trades. Every past
+feature addition paid this quietly. Now `RLSLearner.grow()` extends the state
+instead: old weights and their covariance block intact, new dimension appended
+with zero cross-covariance and a diagonal prior equal to the mean of the current
+diagonal (so a new feature is no more plastic than a typical existing one). Falls
+back to the old reset if the saved RLS doesn't match the saved model, where
+growing it would misalign θ. `test_migration_grows_rls_instead_of_discarding_what_it_learned`.
+
+**8.2 — The positioning fetch was unbounded, and ungated.** `refresh_live()` now
+issues one HTTP call *per watchlist symbol* (17, growing), unlike every other
+source here at 1–3 calls total, and it runs regardless of
+`CRYPTO_POSITIONING_ENABLED` — deliberately, since that's how history
+accumulates, but it means this is the one part of the diff that changes live
+behavior with nothing gating it. At the inherited 25s timeout, a rate-limited or
+hanging Binance would block `Brain._crypto_anchors()` in the think path for up to
+~7 minutes an hour. Now bounded twice: `POSITIONING_TIMEOUT = 6` per call and
+`POSITIONING_BUDGET = 25` for the whole sweep, which abandons the remainder of
+the sweep rather than the cycle. Missing a day costs nothing — it's a 30-day
+z-score and the next refresh tops it up. The offline `fetch_history()` seeding
+path passes a larger budget, since nothing waits on it.
+
+**8.3 — `apply_adviser_gate` was a weaker guarantee than "bounded nudge."** Three
+gaps, all latent (the gate can't fire for 30+ days) but all in the file §7 calls
+the highest-stakes one:
+- It applied to decisions the formula sized at exactly 0.0, so it could *open* a
+  position the formula declined. But the evidence this gate measures is only that
+  the adviser out-ranks the formula's short/avoid calls — nothing in it says the
+  adviser can pick entries the formula passed on. A flat decision now stays flat.
+- Adviser `score` is an unbounded weighted sum (`W_FIELD=1.0 + W_FORMULA=0.6 +
+  W_SCENARIO=0.5 + …`), not a [-1,1] conviction, so `0.25 * score` was bounded
+  only by the book's own ±1.0 cap. The score is now clamped to [-1,1] first,
+  which is what makes `BLEND_WEIGHT` mean "at most a 0.25 shift."
+- It could flip the sign of the trade, which is an override wearing a smaller
+  number. A hostile score can now zero a position out but not reverse it.
+
+**8.4 — All three new test files were invisible to the ProDesk runner.** None had
+the `if __name__ == "__main__"` block that 33 of the other 43 suites carry, and
+the canonical deploy check in `OPERATIONS.md` runs each suite as a standalone
+program (`.venv/bin/python "$t"`). All 21 new tests would have no-op'd and
+reported green on the box, for exactly the code being deployed. Runner blocks
+added; all three now actually execute standalone.
+
+**Still open, deliberately not changed:** `BLEND_WEIGHT = 0.25` is still
+hand-set, not fitted (§4). The dedupe rule is still unverified against the
+original `SCORECARD_REVIEW` methodology (§4). The six graph-node weight priors
+are still judgment calls (§6). Those need a human opinion, not a fix.
+
+---
+
+**Deployed to the ProDesk after this review.** The pre-review caution above stood
+until §8 was done; §§2–7 are preserved as written for the record.

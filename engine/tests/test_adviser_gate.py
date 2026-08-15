@@ -199,3 +199,56 @@ def test_apply_adviser_gate_nudges_and_caps_when_enabled():
     assert by_sym["O39.SI"].direction == SignalDirection.SHORT
 
     assert by_sym["UNRELATED"].target_weight == 0.2     # no adviser score -> untouched
+
+
+def _enabled_settings(advice):
+    """A gate that is switched ON, with a given adviser advice file."""
+    tmp = tempfile.mkdtemp()
+    settings = FakeSettings(tmp)
+    with open(ag._gate_path(settings), "w") as fh:
+        json.dump({"eligible": True}, fh)
+    with open(settings.brain.advice_path, "w") as fh:
+        json.dump(advice, fh)
+    return settings
+
+
+def test_apply_adviser_gate_never_originates_a_position():
+    """The gate scales conviction the formula already has; it does not create
+    conviction the formula declined to have. The evidence this gate measures is
+    that the adviser out-ranks the formula's short/avoid calls -- nothing in it
+    says the adviser can pick entries the formula passed on entirely, so a flat
+    decision must stay flat no matter how strongly the adviser likes the name."""
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 5.0}]})
+    out = ag.apply_adviser_gate([_decision("GLD", 0.0)], settings)
+    assert out[0].target_weight == 0.0
+    assert out[0].direction == SignalDirection.FLAT
+    assert "adviser-gate" not in out[0].rationale
+
+
+def test_apply_adviser_gate_clamps_an_unbounded_adviser_score():
+    """adviser.py's `score` is a weighted SUM (W_FIELD 1.0 + W_FORMULA 0.6 +
+    W_SCENARIO 0.5 + ...), not a [-1,1] conviction -- it can exceed 1 comfortably.
+    Without clamping, BLEND_WEIGHT stops meaning "at most a 0.25 shift" and the
+    tilt is bounded only by the book's own ±1.0 cap, which is a completely
+    different (and much larger) claim than 'bounded nudge, never an override'."""
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": 12.0}]})
+    out = ag.apply_adviser_gate([_decision("GLD", 0.30)], settings)
+    # 0.30 + 0.25*clamp(12.0) == 0.55, NOT 0.30 + 0.25*12.0 clipped to 1.0
+    assert abs(out[0].target_weight - 0.55) < 1e-9, out[0].target_weight
+
+
+def test_apply_adviser_gate_cannot_flip_the_formulas_sign():
+    """A 'nudge' that reverses the direction of the trade is an override wearing
+    a smaller number. A hostile adviser score can zero the position out, but it
+    cannot turn the formula's long into a short."""
+    settings = _enabled_settings({"trades": [{"symbol": "GLD", "score": -1.0}]})
+    out = ag.apply_adviser_gate([_decision("GLD", 0.10)], settings)
+    assert out[0].target_weight == 0.0          # 0.10 - 0.25 would have been -0.15
+    assert out[0].direction == SignalDirection.FLAT
+
+
+if __name__ == "__main__":
+    for _name, _fn in sorted(list(globals().items())):
+        if _name.startswith("test_") and callable(_fn):
+            _fn()
+    print("ok")

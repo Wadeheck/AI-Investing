@@ -23,8 +23,18 @@ class ParamStore:
                 d = json.load(fh)
             model = FormulaModel.from_dict(d["model"])
             rls = RLSLearner.from_dict(d["rls"]) if d.get("rls") else None
+            old_names = list(model.feature_names)
             if self._migrate(model):
-                rls = None   # dimensions changed: RLS state re-initializes from θ
+                # θ grew a dimension. Don't discard what RLS has already learned
+                # about the OTHER features just because the code added a signal --
+                # extend the covariance instead (see RLSLearner.grow). Only fall
+                # back to a reset if the saved RLS doesn't line up with the saved
+                # model, where growing it would silently misalign θ.
+                added = [n for n in model.feature_names if n not in old_names]
+                if rls is not None and rls.n == len(old_names):
+                    rls.grow([model.weights[model.feature_names.index(n)] for n in added])
+                else:
+                    rls = None
             return model, rls
         except (OSError, KeyError, json.JSONDecodeError):
             return FormulaModel(), None

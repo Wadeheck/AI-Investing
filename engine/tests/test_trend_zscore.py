@@ -111,3 +111,65 @@ def test_rls_can_graduate_trend_zscore_from_realized_pnl():
     assert abs(learner.theta[tz_idx] - true_tz_weight) < 0.01, learner.theta[tz_idx]
     # every other dimension had zero signal and should stay near zero
     assert all(abs(w) < 0.01 for i, w in enumerate(learner.theta) if i != tz_idx)
+
+
+def test_migration_grows_rls_instead_of_discarding_what_it_learned():
+    """Adding a feature to phi must not silently reset the online learner.
+
+    ParamStore used to null the RLS out whenever theta changed dimension, which
+    threw away the covariance -- the "how confident am I in each weight" memory
+    built from every closed trade so far -- for a reason that has nothing to do
+    with those trades. This pins the fix: the old weights and their covariance
+    block survive, the new dimension is appended with zero cross-covariance, and
+    `updates` (the count of realized outcomes learned from) is preserved."""
+    import json as _json
+    import tempfile as _tempfile
+    from ai_investing.learning.online import RLSLearner as _RLS
+
+    old_names = [n for n in FeatureExtractor.names if n != "trend_zscore"]
+    model = FormulaModel(feature_names=list(old_names),
+                         weights=[0.01 * (i + 1) for i in range(len(old_names))])
+    rls = _RLS.initialize(list(model.weights), prior_confidence=4.0)
+    rls.updates = 137
+    old_P00 = rls.P[0][0]
+
+    path = os.path.join(_tempfile.mkdtemp(), "params.json")
+    with open(path, "w") as fh:
+        _json.dump({"model": model.to_dict(), "rls": rls.to_dict()}, fh)
+
+    loaded, learner = ParamStore(path).load()
+    assert learner is not None, "RLS was discarded on a feature append"
+    assert learner.updates == 137
+    assert learner.n == len(loaded.feature_names)
+    assert learner.P[0][0] == old_P00                      # old covariance intact
+    tz = loaded.feature_names.index("trend_zscore")
+    assert learner.theta[tz] == 0.0                        # new dim at its default
+    assert learner.P[0][tz] == 0.0 and learner.P[tz][0] == 0.0   # no cross-covariance
+    assert learner.P[tz][tz] > 0.0                         # but a real prior
+    # theta stays aligned to the model's own name order, which is what runner.py
+    # builds phi from -- a mismatch here would silently mislearn every weight
+    assert len(learner.theta) == len(loaded.feature_names)
+
+
+def test_migration_still_resets_rls_when_it_does_not_match_the_model():
+    """Growing an RLS whose dimension never matched the saved model would
+    misalign theta against phi. That case must still fall back to a reset."""
+    import json as _json
+    import tempfile as _tempfile
+    from ai_investing.learning.online import RLSLearner as _RLS
+
+    model = FormulaModel(feature_names=["bias", "momentum"], weights=[0.0, 0.02])
+    mismatched = _RLS.initialize([0.0] * 5)          # 5 != 2
+    path = os.path.join(_tempfile.mkdtemp(), "params.json")
+    with open(path, "w") as fh:
+        _json.dump({"model": model.to_dict(), "rls": mismatched.to_dict()}, fh)
+
+    _loaded, learner = ParamStore(path).load()
+    assert learner is None
+
+
+if __name__ == "__main__":
+    for _name, _fn in sorted(list(globals().items())):
+        if _name.startswith("test_") and callable(_fn):
+            _fn()
+    print("ok")

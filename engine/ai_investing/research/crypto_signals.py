@@ -62,6 +62,39 @@ def _get(url: str, timeout: int = 25):
         return json.loads(resp.read().decode())
 
 
+# Positioning fetches one URL PER WATCHLIST SYMBOL (17 and growing), unlike every
+# other source here, which is 1-3 calls total. refresh_live() is called
+# synchronously from Brain._crypto_anchors() inside the think path, so at the
+# default 25s timeout a rate-limited or hanging Binance would block the engine for
+# 17x25s = ~7 minutes an hour. These two bounds keep the whole positioning sweep
+# to roughly one funding-rate call's worth of worst case: a short per-call
+# timeout, and a hard wall-clock budget that abandons the rest of the sweep
+# rather than the cycle. Missing a day of positioning costs nothing -- the series
+# is a 30-day z-score and the next refresh tops it back up.
+POSITIONING_TIMEOUT = 6      # seconds per symbol
+POSITIONING_BUDGET = 25      # seconds for the entire sweep
+
+
+def _positioning_sweep(limit: int, budget: float = POSITIONING_BUDGET):
+    """Yield (symbol, rows) per watchlist symbol, bounded in both directions.
+    Stops early and silently once the wall-clock budget is spent. fetch_history()
+    passes a larger budget: it is the offline seeding path, nothing is waiting on
+    it, and truncating the one call that can reach back 30 days would leave the
+    z-score short of history for no good reason."""
+    deadline = time.monotonic() + budget
+    for sym, perp in _positioning_symbols().items():
+        if time.monotonic() >= deadline:
+            print(f"[crypto] positioning: budget spent, skipping remainder", flush=True)
+            return
+        try:
+            rows = _get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
+                        f"?symbol={perp}&period=1d&limit={limit}",
+                        timeout=POSITIONING_TIMEOUT)
+        except Exception:
+            continue
+        yield sym, rows
+
+
 def _day(ms: float) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
 
@@ -125,14 +158,9 @@ def fetch_history(years: float = 3.2) -> dict:
     # positioning: Binance retains only 30 days server-side no matter what
     # startTime is requested (verified 2026-08-15) -- one call gets everything
     # available; refresh_live() tops it up daily from here on.
-    for sym, perp in _positioning_symbols().items():
-        try:
-            rows = _get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-                        f"?symbol={perp}&period=1d&limit=30")
-            d["positioning"][sym] = {_day(r["timestamp"]): float(r["longShortRatio"])
-                                     for r in rows if "timestamp" in r}
-        except Exception:
-            continue
+    for sym, rows in _positioning_sweep(limit=30, budget=180):
+        d["positioning"][sym] = {_day(r["timestamp"]): float(r["longShortRatio"])
+                                 for r in rows if "timestamp" in r}
     print(f"[crypto] positioning: {len(d['positioning'])} symbols", flush=True)
 
     _save(d)
@@ -156,16 +184,11 @@ def refresh_live(max_age_hours: float = 1.0) -> dict:
         for r in _get("https://api.alternative.me/fng/?limit=3")["data"]:
             day = datetime.fromtimestamp(int(r["timestamp"]), tz=timezone.utc).date().isoformat()
             d["fng"][day] = int(r["value"])
-        for sym, perp in _positioning_symbols().items():
-            try:
-                rows = _get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-                            f"?symbol={perp}&period=1d&limit=3")
-                for r in rows:
-                    if "timestamp" in r:
-                        d["positioning"].setdefault(sym, {})[_day(r["timestamp"])] = \
-                            float(r["longShortRatio"])
-            except Exception:
-                continue
+        for sym, rows in _positioning_sweep(limit=3):
+            for r in rows:
+                if "timestamp" in r:
+                    d["positioning"].setdefault(sym, {})[_day(r["timestamp"])] = \
+                        float(r["longShortRatio"])
         d["_refreshed"] = time.time()
         _save(d)
     except Exception:

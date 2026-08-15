@@ -92,3 +92,58 @@ def test_crypto_anchors_positioning_enabled_reaches_positioning_only_coin():
         assert link.id in a and a[link.id] < 0     # now reaches a coin funding never covered
     finally:
         del os.environ["CRYPTO_POSITIONING_ENABLED"]
+
+
+def test_positioning_sweep_is_bounded_by_a_wall_clock_budget():
+    """Positioning is the only source here that costs one HTTP call PER WATCHLIST
+    SYMBOL, and refresh_live() runs synchronously inside Brain._crypto_anchors()
+    in the think path. Unbounded, a rate-limited or hanging Binance would stall
+    the engine for symbols x timeout every hour. The sweep must abandon the rest
+    of the sweep rather than the cycle."""
+    import time as _time
+
+    calls = []
+    orig_get, orig_budget = cs_mod._get, cs_mod.POSITIONING_BUDGET
+
+    def _slow_get(url, timeout=25):
+        calls.append(url)
+        assert timeout <= cs_mod.POSITIONING_TIMEOUT, f"per-call timeout unbounded: {timeout}"
+        _time.sleep(0.05)
+        return [{"timestamp": 1755216000000, "longShortRatio": "1.5"}]
+
+    cs_mod._get, cs_mod.POSITIONING_BUDGET = _slow_get, 0.12
+    try:
+        got = list(cs_mod._positioning_sweep(limit=3, budget=0.12))
+    finally:
+        cs_mod._get, cs_mod.POSITIONING_BUDGET = orig_get, orig_budget
+
+    # ~0.05s per call against a 0.12s budget: a few calls get through, then the
+    # sweep gives up. The point is that it stops early, not the exact count.
+    assert len(calls) < len(cs_mod._positioning_symbols()), "budget never bit"
+    assert len(got) == len(calls)
+
+
+def test_positioning_sweep_survives_one_bad_symbol():
+    """A single delisted/unsupported perp must not cost the whole sweep."""
+    orig_get = cs_mod._get
+
+    def _flaky_get(url, timeout=25):
+        if "BTCUSDT" in url:
+            raise RuntimeError("binance says no")
+        return [{"timestamp": 1755216000000, "longShortRatio": "1.5"}]
+
+    cs_mod._get = _flaky_get
+    try:
+        got = dict(cs_mod._positioning_sweep(limit=3))
+    finally:
+        cs_mod._get = orig_get
+
+    assert "BTC/USD" not in got
+    assert len(got) >= 1
+
+
+if __name__ == "__main__":
+    for _name, _fn in sorted(list(globals().items())):
+        if _name.startswith("test_") and callable(_fn):
+            _fn()
+    print("ok")

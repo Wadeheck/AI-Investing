@@ -58,6 +58,36 @@ class RLSLearner:
         self.updates += 1
         return err
 
+    def grow(self, theta_new: list[float]) -> None:
+        """Append new regressors to the END of θ, preserving everything already
+        learned about the existing ones.
+
+        Adding a feature to φ used to throw the whole RLS state away (ParamStore
+        re-initialized it from θ), which silently reset the covariance — and with
+        it the "how confident am I in each weight" memory built from every closed
+        trade so far — every time the code grew a signal. That is a real cost paid
+        for an unrelated reason, so grow instead of reset.
+
+        The new dimensions start with zero cross-covariance against the old ones
+        (nothing has been observed yet that ties them together) and a diagonal
+        prior equal to the MEAN of the current diagonal, so a newly added feature
+        is no more plastic than a typical existing one. The trust region still
+        caps ‖Δθ‖ per update, so this cannot jerk the formula either way.
+        """
+        if not theta_new:
+            return
+        k = len(theta_new)
+        diag = [self.P[i][i] for i in range(self.n)] if self.n else []
+        prior = (sum(diag) / len(diag)) if diag else 1.0
+        for row in self.P:
+            row.extend([0.0] * k)
+        for j in range(k):
+            new_row = [0.0] * (self.n + k)
+            new_row[self.n + j] = prior
+            self.P.append(new_row)
+        self.theta.extend(theta_new)
+        self.n += k
+
     def to_dict(self) -> dict:
         return {"n": self.n, "theta": self.theta, "P": self.P, "mu": self.mu,
                 "trust_region": self.trust_region, "updates": self.updates}
