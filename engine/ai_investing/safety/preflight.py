@@ -37,4 +37,29 @@ def validate_settings(settings) -> tuple[list[str], list[str]]:
         if r.allow_short:
             warnings.append("shorting enabled in LIVE — confirm the venue/account supports it")
 
+    if getattr(settings, "shared_stock_account", False):
+        # An uncapped main book treats the WHOLE account as its own: its equity
+        # is the account's, so every risk limit is a fraction of money the other
+        # two books are also spending, and its ledger claims positions it never
+        # opened. Sharing without a cap is not a degraded mode, it is a book that
+        # cannot be right — so this is an error rather than a warning.
+        if settings.live_capital_base <= 0:
+            errors.append(
+                "SHARED_STOCK_ACCOUNT=true requires LIVE_CAPITAL_BASE > 0 — without a "
+                "slice the trading book claims the whole shared account as its own")
+        if not settings.live:
+            warnings.append(
+                "SHARED_STOCK_ACCOUNT=true but LIVE_TRADING=false — the books will "
+                "keep their own ledgers but no order reaches a venue (a useful "
+                "dry run; not the real thing)")
+        elif settings.stock_broker == "paper":
+            warnings.append(
+                "SHARED_STOCK_ACCOUNT=true with STOCK_BROKER=paper — there is no "
+                "shared account to share")
+        if r.allow_short:
+            warnings.append(
+                "SHARED_STOCK_ACCOUNT disables STOCK shorts for every book (a short "
+                "is indistinguishable from selling another book's shares); crypto "
+                "shorts are unaffected")
+
     return errors, warnings

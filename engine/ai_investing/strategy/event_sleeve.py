@@ -30,10 +30,11 @@ react on daily bars while this reacts within a cycle of the event.
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 
-from ai_investing.brokers.paper import PaperBroker
+from ai_investing.brokers.shared import build_book_broker
 from ai_investing.util import atomic
 from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
@@ -56,14 +57,24 @@ def _asset(sym: str, exchange: str) -> Asset:
 
 
 class EventSleeve:
-    def __init__(self, settings):
+    def __init__(self, settings, stock_broker=None):
+        """`stock_broker` is the ONE shared live stock adapter, or None.
+
+        None is the normal case and covers three of them: SHARED_STOCK_ACCOUNT
+        off, the engine not live, and the mark-only path (valuing a book must
+        never need a venue). Only `Runner.run_cycle` passes a real one, and it
+        passes the instance it already built rather than constructing a second —
+        `LongbridgeBroker.__init__` makes a live API call.
+        """
         self.settings = settings
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.path = os.path.join(data_dir, "event_state.json")
         self.journal = os.path.join(data_dir, "event_journal.jsonl")
         self._state = self._load()
-        self.broker = PaperBroker.from_state(self._state.get("broker", {})) \
-            if self._state.get("broker") else PaperBroker(START_CASH)
+        self.broker, migration = build_book_broker(
+            "event", settings, self._state, START_CASH, stock_broker=stock_broker)
+        if migration:
+            self._log("migrated_to_shared_account", **migration)
         try:                       # the expectation ledger: claim -> outcome -> learn
             from ai_investing.learning.spine import LearningSpine
             self.ledger = LearningSpine(settings)
@@ -77,6 +88,16 @@ class EventSleeve:
         except (OSError, json.JSONDecodeError):
             return {}
 
+    def _money(self) -> str:
+        """What every Telegram message calls this book's money.
+
+        Hardcoded as "pretend money" everywhere until now, which stops being true
+        the moment stock orders route to a real venue. A message that says
+        "pretend" about a real order is worse than no message: it is the one line
+        a reader would use to decide an alert can wait.
+        """
+        return ("real orders on the shared account"
+                if getattr(self.broker, "live", False) else "pretend money")
 
     def _stamp_marks(self, prices: dict) -> None:
         """Record equity and per-position marks into the saved state.
@@ -116,12 +137,28 @@ class EventSleeve:
         Valuation must not depend on whether the trading logic ran: this book
         gates itself (once a day, or only on fresh shocks), so its saved state
         could sit unmarked for hours while positions moved.
+
+        This is also the only path that runs EVERY cycle, so it is where the
+        shared account's two per-cycle obligations live: pick up late fills, and
+        book realised P&L. `cycle()` does both as well, but `cycle()` only wakes
+        on a fresh shock — an order that fills on a quiet day would otherwise sit
+        unclaimed until the next one, which is exactly the drift the pending
+        machinery exists to close.
         """
         self._mark_prices = prices
+        for note in (self.broker.resolve_pending()
+                     if hasattr(self.broker, "resolve_pending") else []):
+            self._log("pending", note=note)
+        if hasattr(self.broker, "settle"):
+            self.broker.settle(prices)
         self._save()
 
     def _save(self) -> None:
+        # `state()` is the reader-facing shape in BOTH modes (see BookBroker.state);
+        # `ledger_state()` is what actually reloads, so it has to be written too.
         self._state["broker"] = self.broker.state()
+        if hasattr(self.broker, "ledger_state"):
+            self._state["stock_ledger"] = self.broker.ledger_state()
         # AFTER the refresh: broker.state() rebuilds the positions list, so
         # marks written before this line are silently discarded.
         if getattr(self, "_mark_prices", None):
@@ -157,6 +194,15 @@ class EventSleeve:
         winter: BTC under its 100d average (R39 shorts gate input)."""
         labels = labels or {}
         opened, closed = [], []
+        # Orders the venue acknowledged but had not confirmed when a previous
+        # cycle ended. Resolved FIRST, before anything reads a position: a fill
+        # from three cycles ago is part of this book, and an exit decision taken
+        # without it is taken on a book that does not exist. No-op unless the
+        # shared account is on and something is actually outstanding.
+        for note in (self.broker.resolve_pending()
+                     if hasattr(self.broker, "resolve_pending") else []):
+            self._log("pending", note=note)
+            print(f"  [event sleeve] {note}")
         held = self._state.setdefault("held", {})     # sym -> {entry, opened_iso, bars}
         today = datetime.now(timezone.utc).date().isoformat()
         days = self._state.setdefault("seen_days", [])
@@ -179,15 +225,31 @@ class EventSleeve:
             elif age >= EVENT_HOLD_DAYS:
                 reason = f"clock {age}d {move*100:+.1f}%"
             if reason:
-                pnl = (px - pos.avg_price) * pos.qty
-                self.broker.submit(Order(pos.asset, Side.BUY if short else Side.SELL,
-                                         abs(pos.qty),
-                                         reason=f"event sleeve: {reason}"), px)
+                entry = pos.avg_price
+                o = self.broker.submit(Order(pos.asset, Side.BUY if short else Side.SELL,
+                                             abs(pos.qty),
+                                             reason=f"event sleeve: {reason}"), px)
+                filled = float(o.filled_qty or 0.0)
+                if filled <= 0:
+                    # THE EXIT DID NOT HAPPEN. A real venue acknowledges an order
+                    # without filling it, so this used to be safe only because the
+                    # simulator could not fail: the old code dropped `held[sym]`,
+                    # settled the learning spine and announced a close on the
+                    # strength of having ASKED. Against Longbridge that forgets a
+                    # position the book still owns — and a forgotten position has
+                    # no stop and no clock. Keep it; the exit re-fires next cycle
+                    # because the conditions above have not changed.
+                    self._log("exit_unfilled", symbol=pos.asset.symbol, price=px,
+                              requested_qty=round(abs(pos.qty), 6), reason=reason,
+                              detail=(o.reason or "no fill"))
+                    continue
+                pnl = (px - entry) * (filled if not short else -filled)
                 settled = (self.ledger.settle("event", pos.asset.symbol, move,
                                               held_days=age, exit_reason=reason)
                            if self.ledger else None)
                 self._log("sell", symbol=pos.asset.symbol, price=px,
-                          entry=round(pos.avg_price, 6), pnl=round(pnl, 2),
+                          qty=round(filled, 6), requested_qty=round(abs(pos.qty), 6),
+                          entry=round(entry, 6), pnl=round(pnl, 2),
                           ret=round(move, 4), held_days=age, reason=reason,
                           shock=meta.get("shock"),
                           **({"expected": settled["expected_move"],
@@ -197,7 +259,7 @@ class EventSleeve:
                 closed.append((pos.asset.symbol, reason, move))
                 if notifier:
                     notifier.send(f"⚡️ *Event sleeve — closed {labels.get(pos.asset.symbol, pos.asset.symbol)}*"
-                                  f" ({pos.asset.symbol}): {reason} (pretend money).")
+                                  f" ({pos.asset.symbol}): {reason} ({self._money()}).")
 
         # 2) entries — biggest fresh shocks above the floor. Long only by
         # default; negative shocks become shorts only when EVENT_SHORT is on
@@ -242,12 +304,41 @@ class EventSleeve:
                 if notional < 500:
                     continue
                 px = prices_by_sym[sym]
+                asset = _asset(sym, self.settings.crypto_exchange)
+                qty = notional / px
+                if asset.asset_class is AssetClass.STOCK:
+                    # WHOLE SHARES, AT THE SIZER (2026-08-16). `notional / px` is
+                    # a raw float and always was: the sleeve "bought" 0.71 shares
+                    # of NVDA and the simulator happily filled it. A real venue
+                    # truncates to `int(qty)` and rejects at zero, so a sub-share
+                    # entry is not a small position — it is a reject, repeated
+                    # every cycle the shock persists. Floor here, where the
+                    # refusal can be explained, rather than at the adapter where
+                    # it can only be counted.
+                    qty = float(math.floor(qty))
+                    if qty < 1:
+                        self._log("rejected", symbol=sym, price=round(px, 6),
+                                  requested_qty=round(notional / px, 6),
+                                  notional=round(notional, 2), shock=round(im, 4),
+                                  reason="floors to 0 whole shares — one share "
+                                         f"costs ${px:,.2f}, slice is ${notional:,.0f}")
+                        continue
                 o = self.broker.submit(
-                    Order(_asset(sym, self.settings.crypto_exchange),
-                          Side.BUY if im > 0 else Side.SELL,
-                          notional / px, reason=f"event sleeve: fresh shock {im:+.3f}"), px)
+                    Order(asset, Side.BUY if im > 0 else Side.SELL, qty,
+                          reason=f"event sleeve: fresh shock {im:+.3f}"), px)
+                if not o.filled_qty:
+                    # An entry that did not happen is information. Until now this
+                    # path was silent, so "why did the sleeve skip that shock" had
+                    # no answer anywhere — investor.py has logged its refusals
+                    # since it was written and this file never did.
+                    self._log("rejected", symbol=sym, price=round(px, 6),
+                              requested_qty=round(qty, 6), shock=round(im, 4),
+                              notional=round(notional, 2),
+                              reason=(o.reason or "no fill"))
                 if o.filled_qty:
-                    held[sym] = {"entry": px, "opened_day": today, "shock": round(im, 4)}
+                    notional = float(o.filled_qty) * float(o.filled_price or px)
+                    held[sym] = {"entry": float(o.filled_price or px),
+                                 "opened_day": today, "shock": round(im, 4)}
                     opened.append((sym, im, notional))
                     self._log("buy", symbol=sym, price=px, notional=round(notional, 2),
                               shock=round(im, 4), node=row.get("node", ""),
@@ -262,7 +353,20 @@ class EventSleeve:
                             f"⚡️ *Event sleeve — bought {labels.get(sym, sym)}* ({sym}), "
                             f"~${notional:,.0f} on a fresh news shock of {im:+.2f} "
                             f"via {row.get('node','the web')}. Out in {EVENT_HOLD_DAYS} days "
-                            f"or on a 10% stop — whichever comes first (pretend money).")
+                            f"or on a 10% stop — whichever comes first ({self._money()}).")
+        # Fold this cycle's closes into realised P&L and re-baseline the marks.
+        # Once, after all trading, before anything reports equity — the same
+        # placement and the same reason as the trading book's own ledger call.
+        for note in (self.broker.drain_notes()
+                     if hasattr(self.broker, "drain_notes") else []):
+            self._log("shared_account", note=note)
+            print(f"  [event sleeve] {note}")
+        if hasattr(self.broker, "settle"):
+            booked = self.broker.settle(prices_by_sym)
+            if abs(booked) > 0.005:
+                self._log("realised", pnl=round(booked, 2),
+                          total=round(self.broker.ledger.realized, 2),
+                          fees=round(self.broker.ledger.fees, 2))
         eqnow = self._equity(prices_by_sym)
         if self._state.get("last_mark") != today:
             self._state["last_mark"] = today

@@ -77,6 +77,9 @@ class Runner:
         self._submitted: set[str] = set()      # idempotency: client order IDs sent this run
         self._last_positions: dict[str, float] | None = None
         self._stats: dict = {}
+        # Set by `_reconcile_shared()` when the books and the shared account
+        # disagree; halts the next cycle until an operator clears it.
+        self._shared_drift: str | None = None
 
         # --- learning engine ---
         self.store = ParamStore(settings.params_path)
@@ -164,16 +167,105 @@ class Runner:
         self._ledger = None
         self._ledger_path = os.path.join(
             os.path.dirname(os.path.abspath(settings.state_path)), "live_book.json")
+        # `self.book` is what the MAIN book trades and reads through; `self.broker`
+        # stays the raw venue and is only for things that are genuinely about the
+        # account (resting stops, the paper-mode state file, reconciliation).
+        # They are the same object unless the account is being shared.
+        self.book = self.broker
         if settings.live and settings.live_capital_base > 0:
             from ai_investing.execution.capital import BookLedger
+            saved = {}
             try:
                 with open(self._ledger_path) as fh:
-                    self._ledger = BookLedger.from_dict(json.load(fh), settings.live_capital_base)
-            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                    saved = json.load(fh) or {}
+            except (OSError, json.JSONDecodeError, TypeError):
+                saved = {}
+            # Two shapes live here: the flat ledger dict this file has always
+            # held, and — once the account is shared — `{"ledger":…, "pending":…}`,
+            # because unconfirmed orders have to survive a restart too.
+            nested = saved.get("ledger") if isinstance(saved.get("ledger"), dict) else None
+            try:
+                self._ledger = BookLedger.from_dict(nested or saved, settings.live_capital_base)
+            except (KeyError, TypeError, ValueError):
                 self._ledger = BookLedger(base=settings.live_capital_base)
+            if settings.shared_stock_account:
+                # THE MAIN BOOK MUST BE WRAPPED TOO, not just the new ones. Its
+                # ledger reads `broker.get_positions()` — the raw account — as its
+                # own holdings, which is exactly right while it is the account's
+                # only user and exactly wrong the moment it is not: the sleeve's
+                # NVDA would become the trading book's NVDA, its P&L would be
+                # booked here, and `_reconcile` would halt on the difference.
+                from ai_investing.brokers.shared import BookBroker
+                stock = getattr(self.broker, "stock", None)
+                self.book = BookBroker("main", self._ledger,
+                                       stock_broker=stock if getattr(stock, "live", False) else None,
+                                       pending=saved.get("pending") or [],
+                                       base_currency=settings.base_currency)
             print(f"  LIVE BOOK  ${settings.live_capital_base:,.0f} slice of the account, "
                   f"realised so far ${self._ledger.realized:,.2f} — "
-                  f"{len(self._live_universe())} USD symbols tradable")
+                  f"{len(self._live_universe())} USD symbols tradable"
+                  + ("  [SHARED ACCOUNT]" if settings.shared_stock_account else ""))
+        self._check_shared_ceilings()
+
+    def _check_shared_ceilings(self) -> None:
+        """Do the three books' ceilings actually fit inside the account?
+
+        Each book's ceiling is a promise about how much it may spend. Nothing
+        checks those promises against each other, so three $100k books against a
+        $150k account is a config that looks fine, starts fine, and fails on
+        whichever book happens to trade last — with a venue rejection rather than
+        an explanation.
+
+        WARNS, never shrinks and never refuses. Auto-shrinking a ceiling would
+        silently change the size of a book the operator sized deliberately, and
+        the per-order real-cash ceiling in `BookBroker.submit` already makes
+        over-allocation safe rather than merely detectable. This exists so the
+        first symptom is a sentence at startup instead of a reject at 3am.
+        """
+        if not (self.settings.shared_stock_account and self.settings.live):
+            return
+        stock = getattr(self.broker, "stock", None)
+        if not getattr(stock, "live", False):
+            return
+        from ai_investing.strategy.event_sleeve import START_CASH as EVENT_CASH
+        ceilings = {"trading": self.settings.live_capital_base,
+                    "event sleeve": EVENT_CASH,
+                    "investing": float(getattr(self.settings, "invest_starting_cash", 0.0))}
+        try:
+            cash = float(stock.get_cash())
+            value = sum(abs(float(p.qty)) * float(p.avg_price)
+                        for p in stock.get_positions().values())
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"  [shared account] could not size the account: {exc}")
+            return
+        total, account = sum(ceilings.values()), cash + value
+        detail = ", ".join(f"{k} ${v:,.0f}" for k, v in ceilings.items())
+        if total > account:
+            msg = (f"the books are allowed ${total:,.0f} between them ({detail}) but "
+                   f"the shared account is worth ${account:,.0f}. No order can "
+                   f"overspend it, but the books will start refusing entries.")
+            print(f"  [shared account] OVER-ALLOCATED — {msg}")
+            self.journal.record_event("shared_over_allocated", msg[:300])
+            if self.notifier.enabled:
+                self.notifier.send(f"⚠️ *Shared account over-allocated* — {msg}")
+        else:
+            print(f"  [shared account] ${account:,.0f} available, ${total:,.0f} "
+                  f"allocated ({detail})")
+
+    def _shared_stock_broker(self):
+        """The ONE live stock adapter the other books may share, or None.
+
+        `LongbridgeBroker.__init__` builds a TradeContext and makes a live channel
+        assertion, so a second instance is a second API session, not a free
+        object — the books get the instance this runner already holds. Reached
+        through `RoutingBroker.stock` because that is where `build_live_broker`
+        put it; anything else (paper mode, a bare adapter) yields None and every
+        book stays exactly as it is today.
+        """
+        if not (self.settings.shared_stock_account and self.settings.live):
+            return None
+        stock = getattr(self.broker, "stock", None)
+        return stock if getattr(stock, "live", False) else None
 
     def _load_shadow(self, starting_cash: float) -> PaperBroker:
         # Persist in ALL modes: the paper track record (and its formula-only
@@ -232,6 +324,11 @@ class Runner:
         the data layer in §4.2: a cap applied at each use site is a cap you will
         eventually forget at one of them.
         """
+        if self.book is not self.broker:
+            # A wrapped book already IS the slice: its cash is the ledger's and
+            # its positions are the ones it claims. Nothing to filter, because
+            # nothing foreign can get in.
+            return self.book.portfolio()
         p = self.broker.portfolio()
         if self._ledger is None:
             return p
@@ -301,10 +398,15 @@ class Runner:
         from ai_investing.strategy.crypto_book import CryptoBook
         from ai_investing.strategy.event_sleeve import EventSleeve
         from ai_investing.strategy.investor import Investor
-        for name, cls in (("crypto", CryptoBook), ("event sleeve", EventSleeve),
-                          ("investor", Investor)):
+        # The sleeve and the investing book take the shared stock adapter; the
+        # crypto book never touches it (Longbridge is stock-only) and its
+        # constructor does not accept one.
+        shared = self._shared_stock_broker()
+        for name, cls, kw in (("crypto", CryptoBook, {}),
+                              ("event sleeve", EventSleeve, {"stock_broker": shared}),
+                              ("investor", Investor, {"stock_broker": shared})):
             try:
-                cls(self.settings).mark(px_by_sym)
+                cls(self.settings, **kw).mark(px_by_sym)
             except Exception as exc:                    # noqa: BLE001
                 print(f"  [mark:{name}] skipped: {type(exc).__name__}: {exc}")
 
@@ -361,6 +463,15 @@ class Runner:
         # read as "no change" instead of as a 13.8% collapse.
         safe_prices = ({k: v for k, v in prices.items() if k not in bad_data}
                        if bad_data else prices)
+
+        # Claim any order the venue confirmed after the last cycle ended, BEFORE
+        # the book is valued or reconciled. `LongbridgeBroker.submit` returns
+        # PENDING far more often than FILLED — it will not invent a fill — so
+        # without this the book is valued without positions it actually holds.
+        if hasattr(self.book, "resolve_pending"):
+            for note in self.book.resolve_pending():
+                print(f"  LIVE BOOK  {note}")
+                self.journal.record_event("late_fill", note[:200])
 
         portfolio = self._book_portfolio()
         equity = portfolio.equity(safe_prices)
@@ -469,7 +580,7 @@ class Runner:
             try:
                 from ai_investing.brain.strategist import load_strategy, _labels
                 from ai_investing.strategy.investor import Investor
-                Investor(self.settings).daily_manage(
+                Investor(self.settings, self._shared_stock_broker()).daily_manage(
                     px_by_sym, load_strategy(self.settings), self.notifier,
                     _labels(self.settings))
             except Exception as exc:
@@ -553,7 +664,7 @@ class Runner:
         # exit if you remove a held symbol from the watchlist — reported below, and
         # the better failure of the two.
         universe = self._tradable_universe()
-        foreign = foreign_positions(self.broker.get_positions(), universe)
+        foreign = foreign_positions(self.book.get_positions(), universe)
         if foreign:
             print(f"  !! {len(foreign)} position(s) not in this engine's universe — "
                   f"left untouched: {', '.join(sorted(foreign)[:8])}"
@@ -565,7 +676,7 @@ class Runner:
             executed.append(self._execute(o, prices, guard_slippage=False))
 
         # 2b) Exit any position you've blocked / de-focused (your input, applied).
-        for key, pos in list(self.broker.get_positions().items()):
+        for key, pos in list(self.book.get_positions().items()):
             if key not in universe:
                 continue          # re-checked against the universe, not the set
             if not self.user_views.is_allowed(pos.asset.symbol):
@@ -653,7 +764,7 @@ class Runner:
                 if len(btc_bars) >= 100:
                     closes = [b.close for b in btc_bars[-100:]]
                     winter = btc_bars[-1].close < sum(closes) / len(closes)
-                ev_res = EventSleeve(self.settings).cycle(
+                ev_res = EventSleeve(self.settings, self._shared_stock_broker()).cycle(
                     context["brain"]["shock_assets"], px_by_sym, self.notifier,
                     regime=regime_of(ra), risk=float(ra or 0.0), winter=winter)
                 if ev_res["opened"] or ev_res["closed"]:
@@ -667,13 +778,24 @@ class Runner:
         # only the ledger knows what they cost, and only until they are reduced —
         # so this must run every cycle or a closed trade's P&L is lost for good.
         if self._ledger is not None:
-            booked = self._ledger.observe(
-                {k: p for k, p in self.broker.get_positions().items() if k in universe},
-                prices)
+            if self.book is not self.broker:
+                # Its OWN claims, not a raw account read — the account is shared
+                # now, so a raw read is the sleeve's and the investing book's
+                # positions as well as this one's.
+                booked = self._ledger.observe(
+                    {k: p for k, p in self.book.get_positions().items() if k in universe},
+                    prices)
+                state = self.book.ledger_state()
+            else:
+                booked = self._ledger.observe(
+                    {k: p for k, p in self.broker.get_positions().items() if k in universe},
+                    prices)
+                state = self._ledger.to_dict()
             if abs(booked) > 0.005:
                 print(f"  LIVE BOOK  realised ${booked:+,.2f} this cycle "
                       f"(total ${self._ledger.realized:+,.2f})")
-            atomic.write_json(self._ledger_path, self._ledger.to_dict())
+            atomic.write_json(self._ledger_path, state)
+            self._reconcile_shared()
 
         # 5) Learn from trades that just closed.
         self._learn(prices, features_by_key)
@@ -706,10 +828,26 @@ class Runner:
         """Compare current broker positions with what we left last cycle. Any drift
         (external trade, async/partial fill, rejected order we assumed filled) means our
         world model is wrong — halt in live mode rather than trade on bad state."""
+        if self._shared_drift:
+            print(f"!! SHARED ACCOUNT DRIFT (unresolved): {self._shared_drift}")
+            print("   Refusing to trade until the books and the account agree. "
+                  "Fix, then restart.")
+            return False
         current = {k: p.qty for k, p in portfolio.positions.items()}
         if self._last_positions is None:
             self._last_positions = current
             return True
+        # A LATE FILL IS NOT DRIFT. `resolve_pending()` runs just above and can
+        # legitimately add shares that were not in last cycle's snapshot — the
+        # order was ours, the venue simply confirmed it after we stopped looking.
+        # Re-baseline exactly those keys, so the check still catches everything
+        # it is for (an external trade, a fill we never asked for) without
+        # halting on the one asynchronous outcome the design expects.
+        for key in getattr(self.book, "resolved_keys", ()) or ():
+            if key in current:
+                self._last_positions[key] = current[key]
+            else:
+                self._last_positions.pop(key, None)
         drift = []
         for key in set(current) | set(self._last_positions):
             a, b = current.get(key, 0.0), self._last_positions.get(key, 0.0)
@@ -727,10 +865,81 @@ class Runner:
         self._last_positions = current
         return True
 
+    def _reconcile_shared(self) -> bool:
+        """Do all the books' claims add up to what the account actually holds?
+
+        `_reconcile()` above asks a different and now-insufficient question: "did
+        MY positions change behind my back". Once three books write to one
+        account that is answered "yes" every time another book trades, which is
+        normal. The question that still has a right answer is whether the SUM of
+        what every book claims matches the account — and that one catches
+        everything the per-book rules cannot see: a trade placed by hand in the
+        Longbridge app, a fill nobody claimed, a book that died mid-cycle with
+        half its state written.
+
+        Read from each book's state file rather than from live objects, because
+        these books are constructed per-use and none of them is in memory by the
+        time this runs. That is also the stricter test: it verifies what was
+        actually PERSISTED, which is what the next cycle will act on.
+        """
+        if self.book is self.broker or not self.settings.shared_stock_account:
+            return True
+        from ai_investing.brokers.shared import reconcile_claims
+        from ai_investing.execution.capital import BookLedger
+
+        claims = {"main": self.book.working_positions()}
+        data_dir = os.path.dirname(os.path.abspath(self.settings.state_path))
+        for name, fname in (("event", "event_state.json"),
+                            ("investor", "invest_state.json")):
+            path = os.path.join(data_dir, fname)
+            if not os.path.exists(path):
+                # A book that has never traded has no file, and no claims. That
+                # is a real answer, not a missing one — treating it as unreadable
+                # would disable this check permanently on a fresh install.
+                claims[name] = {}
+                continue
+            try:
+                with open(path) as fh:
+                    saved = (json.load(fh) or {}).get("stock_ledger") or {}
+                claims[name] = BookLedger.from_dict(saved.get("ledger") or {}, 0.0).positions()
+            except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError):
+                # A file that EXISTS but cannot be parsed is different: the book
+                # holds something and we cannot tell what. Treating it as empty
+                # would report every share it owns as unclaimed drift and halt
+                # the engine on a half-written file.
+                print(f"  [reconcile] {name}'s book is unreadable — skipping the "
+                      f"aggregate check this cycle rather than guessing")
+                return True
+
+        stock = getattr(self.broker, "stock", None)
+        try:
+            real = stock.get_positions() if stock is not None else {}
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"  [reconcile] cannot read the shared account: {exc}")
+            return True
+        drift = reconcile_claims(claims, real, base_currency=self.settings.base_currency)
+        if not drift:
+            return True
+        detail = "; ".join(drift)
+        self.journal.record_event("shared_claim_drift", detail[:500])
+        print(f"!! SHARED ACCOUNT DRIFT: {detail}")
+        if self.settings.alerts.on_error:
+            self.notifier.send(f"⚠️ *SHARED ACCOUNT DRIFT* — the books and the "
+                               f"account disagree:\n{detail}")
+        if self.settings.live:
+            # This check runs late in the cycle — after every book has traded —
+            # so it cannot stop the cycle it detected the drift in. It stops the
+            # NEXT one, which is checked at the top of `run_cycle` alongside the
+            # per-book reconciliation. Cleared only by an operator: a disagreement
+            # about who owns which shares does not resolve itself.
+            self._shared_drift = detail
+            print("   Live mode — halting the next cycle for manual review.")
+        return False
+
     # -- learning -----------------------------------------------------------
     def _learn(self, prices: dict[str, float], features_by_key: dict[str, dict]) -> None:
         lc = self.settings.learning
-        samples = self.tracker.sync(self.broker.get_positions(), features_by_key, prices)
+        samples = self.tracker.sync(self.book.get_positions(), features_by_key, prices)
         if not lc.enable_online:
             return
         for s in samples:
@@ -892,7 +1101,7 @@ class Runner:
         order.client_order_id = cid
         eff = self._costs_for(order.asset).effective_price(order.side, mid, order.qty,
                                                            ms.adv if ms else None, ms.vol if ms else None)
-        filled = self.broker.submit(order, eff)
+        filled = self.book.submit(order, eff)
         self._submitted.add(cid)
         self.journal.record_order(filled, self.settings.live)
 
@@ -924,6 +1133,19 @@ class Runner:
         triggers on an intraday gap between cycles. Long-only case; experimental (untested
         vs. funded accounts). Requires a broker that implements place_stop (ccxt today)."""
         if filled.side is not Side.BUY or self.settings.risk.allow_short:
+            return
+        if self.book is not self.broker:
+            # A VENUE-SIDE STOP CANNOT BE ATTRIBUTED. It fires hours later, with
+            # no book in the loop, and reduces the account by shares that every
+            # book still claims — which reads as reconciliation drift and halts
+            # the engine, punishing a safety feature for working. The in-engine
+            # stop (step 4 of the cycle) still runs and still protects the
+            # position; what is lost is only protection BETWEEN cycles, and that
+            # is a smaller loss than an accounting model nobody can trust.
+            self.journal.record_event(
+                "exchange_stop_skipped",
+                f"{asset.symbol}: shared account — a venue-side fill cannot be "
+                f"attributed to a book")
             return
         entry = filled.filled_price or 0.0
         if entry <= 0:
@@ -969,7 +1191,7 @@ class Runner:
 
     def _flatten(self, prices: dict[str, float]) -> list[Order]:
         out: list[Order] = []
-        for key, pos in list(self.broker.get_positions().items()):
+        for key, pos in list(self.book.get_positions().items()):
             side = Side.SELL if pos.qty > 0 else Side.BUY
             out.append(self._execute(Order(pos.asset, side, abs(pos.qty), reason="flatten"),
                                      prices, guard_slippage=False))

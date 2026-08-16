@@ -310,6 +310,25 @@ class Settings:
     # sizing, exposure, stops and every breaker measure against the slice, while
     # orders still route to the real venue. See execution/capital.py.
     live_capital_base: float = field(default_factory=lambda: _get_float("LIVE_CAPITAL_BASE", 0.0))
+    # Route the sleeve's and the investing book's STOCK orders through the same
+    # real account the trading book already uses, instead of each book pretending
+    # against its own simulator. Off by default, and off is byte-for-byte the old
+    # behaviour — this can be deployed long before it is switched on.
+    #
+    # There is no second account to give them: Longbridge's dashboard only toggles
+    # between the one demo account and the real funded one. A funded account will
+    # be exactly one account too, so "several books, one account" has to be solved
+    # regardless; solving it against the demo account is the cheap version.
+    #
+    # Turning it on has three visible consequences, all deliberate:
+    #   - stock orders are whole-share and can be refused for want of real cash;
+    #   - stock SHORTS stop working (a short is indistinguishable from selling
+    #     another book's shares — see brokers/shared.py). Crypto shorts are fine;
+    #   - every book's stock positions become claims that must reconcile against
+    #     the account each cycle, and a mismatch halts live trading.
+    # It also requires LIVE_CAPITAL_BASE > 0; preflight refuses to start otherwise.
+    shared_stock_account: bool = field(
+        default_factory=lambda: _get_bool("SHARED_STOCK_ACCOUNT", False))
     stock_watchlist: list[str] = field(default_factory=lambda: _get_list("STOCK_WATCHLIST", _default_stock_watchlist()))
     crypto_watchlist: list[str] = field(default_factory=lambda: _get_list("CRYPTO_WATCHLIST", _default_crypto_watchlist()))
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))

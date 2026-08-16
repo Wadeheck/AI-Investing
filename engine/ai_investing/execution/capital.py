@@ -41,7 +41,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from ai_investing.models import Portfolio, Position
+from ai_investing.models import Asset, AssetClass, Portfolio, Position
 
 
 @dataclass
@@ -50,14 +50,28 @@ class BookLedger:
 
     base: float
     realized: float = 0.0
-    # {position key: {"qty": float, "avg": float}} as of the last observation —
-    # needed because realized P&L can only be computed against the cost basis a
-    # position had BEFORE it was reduced, and the broker stops reporting it after.
+    # {position key: {"qty": float, "avg": float, ...asset identity}} as of the
+    # last observation — needed because realized P&L can only be computed against
+    # the cost basis a position had BEFORE it was reduced, and the broker stops
+    # reporting it after. See `positions()` on the identity fields.
     marks: dict = field(default_factory=dict)
+    # Transaction fees paid, cumulative. Held APART from `realized` on purpose:
+    # both reduce cash identically, but "did this strategy pick winners" and
+    # "what did the venue charge for finding out" are different questions, and
+    # folding the second into the first makes the first unanswerable. The
+    # learning spine reads realized P&L.
+    fees: float = 0.0
+    # One-off cash corrections that are not trading outcomes — today, only the
+    # migration of a book off its simulated pot onto a real shared account
+    # (see brokers/shared.py). Same reasoning as `fees`: a book whose realised
+    # P&L jumps $12,000 because its accounting changed has a corrupt track
+    # record, even though its cash is right.
+    adjust: float = 0.0
 
     # -- serialisation ------------------------------------------------------
     def to_dict(self) -> dict:
-        return {"base": self.base, "realized": self.realized, "marks": self.marks}
+        return {"base": self.base, "realized": self.realized, "marks": self.marks,
+                "fees": self.fees, "adjust": self.adjust}
 
     @classmethod
     def from_dict(cls, d: dict, base: float) -> "BookLedger":
@@ -66,7 +80,38 @@ class BookLedger:
         silently override the setting the operator just edited."""
         return cls(base=base,
                    realized=float(d.get("realized", 0.0) or 0.0),
-                   marks=dict(d.get("marks") or {}))
+                   marks=dict(d.get("marks") or {}),
+                   fees=float(d.get("fees", 0.0) or 0.0),
+                   adjust=float(d.get("adjust", 0.0) or 0.0))
+
+    # -- rebuilding a live position set from the marks ----------------------
+    def positions(self) -> dict[str, Position]:
+        """The marks, as real `Position` objects.
+
+        Needed because a book that owns its positions locally (rather than
+        reading them back off a broker) has nowhere else to restore them from
+        after a restart — and these books are re-constructed from disk on every
+        cycle, not held in memory.
+
+        `Asset.key` is `"{asset_class}:{symbol}"`, which loses `exchange` and
+        `quote`. For a stock that is harmless (both are at their defaults) but a
+        crypto asset carries the exchange it trades on, so `observe()` writes the
+        identity fields alongside qty/avg and this reads them back. Marks written
+        before those fields existed fall back to parsing the key, which is exact
+        for stocks and merely lossy for crypto — the same degradation the old
+        code had, rather than a new crash.
+        """
+        out: dict[str, Position] = {}
+        for key, m in (self.marks or {}).items():
+            try:
+                qty = float(m.get("qty", 0.0) or 0.0)
+                avg = float(m.get("avg", 0.0) or 0.0)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if abs(qty) <= 1e-9:
+                continue
+            out[key] = Position(asset_from_mark(key, m), qty, avg)
+        return out
 
     # -- accounting ---------------------------------------------------------
     def observe(self, positions: dict[str, Position], prices: dict[str, float]) -> float:
@@ -112,9 +157,18 @@ class BookLedger:
 
         self.realized += booked
         # re-baseline to what the account holds now
-        self.marks = {k: {"qty": float(p.qty), "avg": float(p.avg_price)}
-                      for k, p in positions.items() if abs(float(p.qty)) > 1e-9}
+        self.marks = {k: _mark_of(p) for k, p in positions.items()
+                      if abs(float(p.qty)) > 1e-9}
         return booked
+
+    def charge(self, fee: float) -> None:
+        """Book a transaction cost. Reduces cash, never `realized`."""
+        try:
+            fee = float(fee)
+        except (TypeError, ValueError):
+            return
+        if fee > 0:
+            self.fees += fee
 
     def book_portfolio(self, positions: dict[str, Position]) -> Portfolio:
         """The slice, as a Portfolio the rest of the engine can use unchanged.
@@ -124,7 +178,39 @@ class BookLedger:
         broker — the same accounting whose absence caused §4.7.
         """
         cost = sum(float(p.avg_price) * float(p.qty) for p in positions.values())
-        return Portfolio(cash=self.base + self.realized - cost, positions=dict(positions))
+        return Portfolio(cash=self.base + self.realized + self.adjust - self.fees - cost,
+                         positions=dict(positions))
+
+
+def _mark_of(p: Position) -> dict:
+    """One mark entry: the accounting numbers plus enough identity to rebuild
+    the `Asset` after a restart. See `BookLedger.positions()`."""
+    a = getattr(p, "asset", None)
+    m = {"qty": float(p.qty), "avg": float(p.avg_price)}
+    if a is not None:
+        m.update({"symbol": a.symbol,
+                  "asset_class": a.asset_class.value,
+                  "exchange": a.exchange, "quote": a.quote})
+    return m
+
+
+def asset_from_mark(key: str, mark: dict | None = None) -> Asset:
+    """Rebuild an `Asset` from a mark entry, falling back to the position key."""
+    mark = mark or {}
+    sym = mark.get("symbol")
+    cls_raw = mark.get("asset_class")
+    if not sym:
+        cls_raw, _, sym = str(key).partition(":")
+        if not sym:                      # a key with no class prefix at all
+            sym, cls_raw = str(key), None
+    try:
+        cls = AssetClass(cls_raw) if cls_raw else None
+    except ValueError:
+        cls = None
+    if cls is None:
+        cls = AssetClass.CRYPTO if "/" in sym else AssetClass.STOCK
+    return Asset(sym, cls, exchange=mark.get("exchange", "") or "",
+                 quote=mark.get("quote", "USD") or "USD")
 
 
 def own_positions(positions: dict[str, Position], universe) -> dict[str, Position]:

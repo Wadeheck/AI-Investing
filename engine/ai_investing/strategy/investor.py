@@ -19,10 +19,11 @@ every exit is reported.
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 
-from ai_investing.brokers.paper import PaperBroker
+from ai_investing.brokers.shared import build_book_broker
 from ai_investing.util import atomic
 from ai_investing.execution.approvals import ProposalBook
 from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
@@ -46,7 +47,9 @@ def _asset(symbol: str, crypto_exchange: str = "") -> Asset:
 
 
 class Investor:
-    def __init__(self, settings):
+    def __init__(self, settings, stock_broker=None):
+        """`stock_broker` is the ONE shared live stock adapter, or None — see
+        `EventSleeve.__init__` for why None is the normal case."""
         self.settings = settings
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
         self.path = os.path.join(data_dir, "invest_state.json")
@@ -60,9 +63,12 @@ class Investor:
         # which is the same problem one step removed.
         self.journal = os.path.join(data_dir, "invest_journal.jsonl")
         self._state = self._load()
-        self.broker = PaperBroker.from_state(self._state.get("broker", {}), allow_short=True) \
-            if self._state.get("broker") else PaperBroker(
-                float(getattr(settings, "invest_starting_cash", 100000.0)), allow_short=True)
+        self.broker, migration = build_book_broker(
+            "investor", settings, self._state,
+            float(getattr(settings, "invest_starting_cash", 100000.0)),
+            allow_short=True, stock_broker=stock_broker)
+        if migration:
+            self._log("migrated_to_shared_account", **migration)
 
     def _load(self) -> dict:
         try:
@@ -118,8 +124,18 @@ class Investor:
         Valuation must not depend on whether the trading logic ran: this book
         gates itself (once a day, or only on fresh shocks), so its saved state
         could sit unmarked for hours while positions moved.
+
+        Also the only every-cycle path, so — as in the sleeve — this is where
+        late fills are picked up and realised P&L is booked. `daily_manage()`
+        runs at most once per SGT day; an order that fills an hour after it
+        returns must not wait until tomorrow to be claimed.
         """
         self._mark_prices = prices
+        for note in (self.broker.resolve_pending()
+                     if hasattr(self.broker, "resolve_pending") else []):
+            self._log("pending", note=note)
+        if hasattr(self.broker, "settle"):
+            self.broker.settle(prices)
         self._save()
         # One equity line per day, matching the sleeve and crypto book. Marking
         # runs every cycle (~288/day), so logging each one would bury the trades
@@ -146,8 +162,18 @@ class Investor:
             self._save()
             self._save()
 
+    def _money(self) -> str:
+        """See `EventSleeve._money` — "(pretend money)" must not survive the
+        switch to a real venue."""
+        return ("real orders on the shared account"
+                if getattr(self.broker, "live", False) else "pretend money")
+
     def _save(self) -> None:
+        # `state()` is the reader-facing shape in BOTH modes (see BookBroker.state);
+        # `ledger_state()` is what actually reloads, so it has to be written too.
         self._state["broker"] = self.broker.state()
+        if hasattr(self.broker, "ledger_state"):
+            self._state["stock_ledger"] = self.broker.ledger_state()
         # AFTER the refresh: broker.state() rebuilds the positions list, so
         # marks written before this line are silently discarded.
         if getattr(self, "_mark_prices", None):
@@ -162,6 +188,13 @@ class Investor:
         if self._state.get("last_managed") == _today_sgt():
             return
         labels = labels or {}
+        # Late fills first, before any exit decision reads a position — see
+        # `mark()`. A no-op unless the shared account is on and something from a
+        # previous run is still outstanding.
+        for note in (self.broker.resolve_pending()
+                     if hasattr(self.broker, "resolve_pending") else []):
+            self._log("pending", note=note)
+            print(f"  [investor] {note}")
         book = ProposalBook(self.settings.proposals_path, ttl_hours=48)   # long book: 2 days to answer
 
         # which symbols the CURRENT strategy wants, and in which direction
@@ -193,7 +226,22 @@ class Investor:
                 entry = pos.avg_price
                 o = self.broker.submit(Order(pos.asset, side, qty_closed, reason=reason), px)
                 filled = float(o.filled_qty or 0.0)
-                pnl = (px - entry) * pos.qty
+                if filled <= 0:
+                    # The venue took the order and has not filled it (or refused
+                    # it). Announcing a close that did not happen loses the
+                    # position: it would still be held, still be unstopped, and
+                    # the daily gate means nothing would look at it again until
+                    # tomorrow. Record the miss and leave the position alone —
+                    # the same exit condition re-fires on the next run.
+                    self._log("exit_unfilled", symbol=sym, price=round(px, 6),
+                              requested_qty=round(qty_closed, 6), reason=reason,
+                              detail=(o.reason or "no fill"),
+                              side=("sell" if side is Side.SELL else "buy"))
+                    notifier.send(f"🏛 *Investing book — could NOT close "
+                                  f"{labels.get(sym, sym)}* ({sym}): {o.reason or 'no fill'}. "
+                                  f"Still holding; it will retry.")
+                    continue
+                pnl = (px - entry) * (filled if pos.qty > 0 else -filled)
                 # Journalled BEFORE the notifier, and with the fill rather than the
                 # request: a partial close that reported a full one is exactly the
                 # fabrication §4.15 found in the live adapter. `entry` is captured
@@ -205,7 +253,7 @@ class Investor:
                           reason=reason, requested_qty=round(qty_closed, 6),
                           side=("sell" if side is Side.SELL else "buy"))
                 notifier.send(f"🏛 *Investing book — closed {labels.get(sym, sym)}* ({sym}): {reason}. "
-                              f"P&L ${pnl:,.0f} (pretend money).")
+                              f"P&L ${pnl:,.0f} ({self._money()}).")
 
         # 2) execute entries you approved
         for sym, t in want.items():
@@ -291,7 +339,7 @@ class Investor:
 
             p = book.propose(sym, side, qty, px, f"thesis: {t.get('title', '')}", extra)
             notifier.send(
-                f"🏛 *Investing book — approval needed* (pretend money)\n\n"
+                f"🏛 *Investing book — approval needed* ({self._money()})\n\n"
                 f"*{verb}: {name}* ({sym}) — about *${qty * px:,.0f}* "
                 f"({weight:.0%} of the investing pot)\n"
                 f"📜 *Thesis “{t.get('title')}”:* {extra['why']}\n"
@@ -304,6 +352,17 @@ class Investor:
                   ("❌ skip", f"rj:{p['id']}"),
                   ("🚫 never", f"b:{sym}")]])
 
+        # Book this run's closes into realised P&L before the state is written.
+        for note in (self.broker.drain_notes()
+                     if hasattr(self.broker, "drain_notes") else []):
+            self._log("shared_account", note=note)
+            print(f"  [investor] {note}")
+        if hasattr(self.broker, "settle"):
+            booked = self.broker.settle(prices_by_symbol)
+            if abs(booked) > 0.005:
+                self._log("realised", pnl=round(booked, 2),
+                          total=round(self.broker.ledger.realized, 2),
+                          fees=round(self.broker.ledger.fees, 2))
         self._state["last_managed"] = _today_sgt()
         self._save()
 
@@ -320,6 +379,7 @@ class Investor:
         `side` may be a Side or the strings "buy"/"sell"; both callers exist.
         """
         s = Side.BUY if side in (Side.BUY, "buy") else Side.SELL
+        asset = _asset(sym, self.settings.crypto_exchange)
         equity = self._equity(prices_by_symbol)
         # DRY-POWDER RESERVE: never let buying drain the pot — keep CASH_RESERVE of
         # equity liquid so the NEXT good thesis has budget. Buys shrink to fit;
@@ -345,8 +405,24 @@ class Investor:
                               f"({CASH_RESERVE:.0%} of the pot stays liquid for "
                               f"future opportunities). It can re-propose after an exit.")
                 return False
-        o = self.broker.submit(Order(_asset(sym, self.settings.crypto_exchange),
-                                     s, qty, reason=f"thesis: {thesis.get('title', '')}"), px)
+        # WHOLE SHARES (2026-08-16). Both callers reach the broker through here —
+        # the approved-proposal path and the autonomous path — so the floor goes
+        # here once rather than at each of them, for the same reason the reserve
+        # rule does. A real venue truncates to `int(qty)` and rejects at zero, so
+        # a sub-share order is a reject that repeats daily, not a small position.
+        requested = qty
+        if asset.asset_class is AssetClass.STOCK:
+            qty = float(math.floor(qty))
+            if qty < 1:
+                self._log("rejected", symbol=sym, price=round(px, 6),
+                          requested_qty=round(requested, 6),
+                          side=("buy" if s is Side.BUY else "sell"),
+                          reason=f"floors to 0 whole shares — one share costs "
+                                 f"${px:,.2f}",
+                          thesis=str(thesis.get("title", ""))[:120])
+                return False
+        o = self.broker.submit(Order(asset, s, qty,
+                                     reason=f"thesis: {thesis.get('title', '')}"), px)
         if not (o.filled_qty or 0) > 0:
             # A rejected entry is recorded too. An entry that never happened is
             # information -- the dry-powder floor and the paper broker's
@@ -359,15 +435,21 @@ class Investor:
                       thesis=str(thesis.get("title", ""))[:120])
             return False
         filled = float(o.filled_qty or 0.0)
+        fill_px = float(o.filled_price or px)
         self._log("buy" if s is Side.BUY else "short", symbol=sym,
-                  qty=round(filled, 6), price=round(float(o.filled_price or px), 6),
-                  notional=round(filled * float(o.filled_price or px), 2),
-                  requested_qty=round(qty, 6),
+                  qty=round(filled, 6), price=round(fill_px, 6),
+                  notional=round(filled * fill_px, 2),
+                  requested_qty=round(requested, 6),
                   thesis=str(thesis.get("title", ""))[:120])
         verb = "Bought" if s is Side.BUY else "Shorted"
+        # The notional ACTUALLY filled, not the one asked for. Against a real
+        # venue those differ — the size can be trimmed by the shared account's
+        # cash or floored to whole shares — and the message is the only thing
+        # most of these trades are ever read through.
         notifier.send(f"🏛 *Investing book — {verb} {labels.get(sym, sym)}* ({sym}), "
-                      f"~${qty * px:,.0f}, under thesis “{thesis.get('title')}”. "
-                      f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop.")
+                      f"~${filled * fill_px:,.0f}, under thesis “{thesis.get('title')}”. "
+                      f"Held while the thesis holds; wide {STOP_PCT:.0%} safety stop "
+                      f"({self._money()}).")
         return True
 
     def _held(self, symbol: str) -> bool:

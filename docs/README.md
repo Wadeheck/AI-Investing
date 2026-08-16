@@ -70,6 +70,9 @@ Durable design intent. Changes only when the design changes.
   anything that adapts.
 - **FORMULA.md** — the adaptive scoring formula.
 - **STRATEGY.md** — policy design across the four books.
+- **SHARED_ACCOUNT.md** — `SHARED_STOCK_ACCOUNT`: several books safely sharing
+  the one real Longbridge account. **Built and tested; still switched off.**
+  Read before turning it on — it lists what changes and in what order.
 - **PIPELINE.md** — how data flows end to end.
 
 ## `data-pipeline/` — getting the world into the brain
