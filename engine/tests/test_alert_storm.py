@@ -273,11 +273,23 @@ def test_falls_back_when_no_hourly_history():
 
 def test_no_paging_on_the_discredited_estimator():
     """The elapsed-rate fallback is the estimator that produced the storm. It
-    may still report a number; it must not be allowed to page."""
-    src = (ROOT / "scripts" / "daily_status.py").read_text()
-    block = src.split("--- LLM free-allowance budget ---")[1]
-    assert "trustworthy" in block and 'basis != "elapsed-rate"' in block, \
-        "a projection from the discredited basis must not set the alert"
+    may still report a number; it must not be allowed to page.
+
+    Checked by CALLING the gate rather than grepping this file for a literal —
+    the previous version asserted on source text and broke on a refactor that
+    strengthened the very guarantee it was protecting (2026-08-16)."""
+    import daily_status as ds
+
+    # every discredited basis is barred, with a reason to show the reader
+    assert ds._why_not_paging("elapsed-rate")
+    assert ds._why_not_paging("too few complete hours")
+    # ...and a basis measured from real complete hours is allowed through
+    assert ds._why_not_paging("last 4h rate, burst hour dropped") is None
+
+    # the gate is actually wired into the row, not merely defined
+    block = (ROOT / "scripts" / "daily_status.py").read_text().split(
+        "--- LLM free-allowance budget ---")[1]
+    assert "_why_not_paging(basis)" in block, "the allowance row must consult the gate"
 
 
 def test_cap_comes_from_settings_not_a_copy():

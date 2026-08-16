@@ -72,6 +72,23 @@ def _free_token_cap() -> int:
         return 5_000_000                                # documented default
 
 
+# Bases that may REPORT a number but must never raise ACTION NEEDED, and why.
+# Both are the line-through-the-origin that produced the 2026-08-05 storm: the
+# first is it in its original form, the second is it standing in for the first
+# two hours of the day, before there are enough complete hours to measure a
+# baseline. A named map rather than an inline condition so the guarantee can be
+# tested by calling it instead of grepping this file for a literal.
+_UNTRUSTED_BASIS = {
+    "elapsed-rate": "no hourly history",
+    "too few complete hours": "too early to measure",
+}
+
+
+def _why_not_paging(basis: str):
+    """Reason this basis is barred from alerting, or None if it may alert."""
+    return _UNTRUSTED_BASIS.get(basis)
+
+
 def _project_eod(usage: dict, cap: int) -> tuple[float, str]:
     """Percent of an endpoint's daily allowance in use by 23:59 UTC.
 
@@ -89,6 +106,24 @@ def _project_eod(usage: dict, cap: int) -> tuple[float, str]:
     still projects over the cap. Falls back to the old shape only when no
     hourly history exists (a file written by an older build), and says which
     basis it used so a surprising number can be traced.
+
+    WHY THE LARGEST HOUR IS DROPPED. The above was still wrong for ~3 hours
+    every night, for the same reason in miniature: at 02:14 the trailing 4h
+    window contains NOTHING BUT the 01:20 digest burst, so the measured rate was
+    305k/h against a true quiet-hours baseline of ~130k/h, and the projection
+    read 146% on a day that finished near 48% (2026-08-16). The burst had not
+    "stopped counting" yet -- it was still inside the window.
+
+    The digest is one hour of burst per day, and it has already happened by the
+    time it distorts anything, so it will not recur before 23:59. Dropping the
+    single largest COMPLETE hour removes it without hardcoding when the cron
+    runs (the timers move; 01:20 UTC today is not a law). A genuine runaway
+    survives this untouched: if the burn is real, the hour after the dropped one
+    is also high, so the rate stays high and the alert still fires.
+
+    The partial current hour is counted in `total` (those tokens are spent) but
+    never used to measure a RATE -- a 4-minute-old hour divided by 4 minutes is
+    noise, and it was part of what made 02:00 so unstable.
     """
     by_model = usage.get("by_model") or {}
     if not by_model:
@@ -100,14 +135,20 @@ def _project_eod(usage: dict, cap: int) -> tuple[float, str]:
     worst, basis = 0.0, "elapsed-rate"
     for model, total in by_model.items():
         hours = by_hour.get(model) or {}
-        if hours:
-            recent = sum(t for h, t in hours.items()
-                         if hour_now - int(h) < RECENT_H)
-            # tokens/hour over the window actually covered so far today
-            window = min(RECENT_H, max(hour_now, 0.25))
-            rate = recent / window
+        # complete hours only, inside the trailing window
+        complete = [t for h, t in hours.items()
+                    if int(h) < int(hour_now) and hour_now - int(h) < RECENT_H]
+        if len(complete) >= 2:
+            trimmed = sorted(complete)[:-1]          # drop the burst hour
+            rate = sum(trimmed) / len(trimmed)
             projected = total + rate * remaining_h
-            basis = f"last {RECENT_H:.0f}h rate"
+            basis = f"last {RECENT_H:.0f}h rate, burst hour dropped"
+        elif hours:
+            # too early in the day to measure a baseline at all: report a number
+            # but flag it, so main() does not page on it (same rule as the
+            # elapsed-rate fallback -- see the `trustworthy` check there).
+            projected = total * 24.0 / max(hour_now, 0.5)
+            basis = "too few complete hours"
         else:
             projected = total * 24.0 / max(hour_now, 0.5)
         worst = max(worst, 100.0 * projected / cap)
@@ -325,11 +366,11 @@ def main() -> int:
             # today's, so this is self-expiring. The real protection against
             # overspend is `_over_free_budget`, which rotates an endpoint away on
             # 90% ACTUAL use and does not extrapolate at all.
-            trustworthy = basis != "elapsed-rate"
-            ok &= row("LLM free allowance", proj < 100 or not trustworthy,
+            why = _why_not_paging(basis)
+            ok &= row("LLM free allowance", proj < 100 or why is not None,
                       f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
                       f" — busiest projects to {proj:.0f}% by day end ({basis}"
-                      f"{'' if trustworthy else ', not alerting: no hourly history'})")
+                      f"{'' if why is None else ', not alerting: ' + why})")
         else:
             row("LLM free allowance", True, "no calls yet today")
     except (OSError, json.JSONDecodeError):
