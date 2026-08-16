@@ -840,10 +840,19 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     # hand-harvested, low-volume, carries the highest per-source trust in the
     # table (Farside 0.80 vs a 0.5 default), and reports things the wires do not.
     #
-    # User-submitted items go even ahead of that: they are the one channel
-    # curated by a human with skin in the game rather than harvested from a
-    # feed, so they get first crack at the 30-headline-per-cycle digest cap.
-    return _user_submitted_headlines(settings) + _x_capture_headlines(settings) + headlines
+    # User-submitted items deliberately do NOT live here (see
+    # build_market_context, which prepends _user_submitted_headlines itself).
+    # This function is also called by research/accumulate.py on its own 4h
+    # timer, purely to archive headlines for future offline retraining — it
+    # calls store.filter_new + mark_digested with no LLM extraction at all. A
+    # submission landing here would race that job: whichever process's
+    # filter_new ran first would permanently claim the "digested" flag, and if
+    # accumulate.py won, the item would be archived for a future retrain and
+    # silently skipped by the live brain forever (§ observed 2026-08-16 —
+    # accumulate's timer fires at :17 past the hour, the same minute a live
+    # submission landed, and it won the race). Keeping this channel exclusive
+    # to the live path removes the race entirely.
+    return _x_capture_headlines(settings) + headlines
 
 
 # X capture is harvested by a browser session (no API, by instruction) into
@@ -1028,7 +1037,14 @@ def build_market_context(settings, assets, price_moves: Optional[dict] = None) -
     new happened, no LLM is called at all — scores replay from a 24h disk cache."""
     symbols = [a.symbol for a in assets]
     ctx: dict = {"sentiment_scores": {}, "hype_flags": {}, "briefing": "", "headlines": []}
-    headlines = fetch_headlines(settings)
+    # User submissions (Telegram /submit) are merged in ONLY here, not inside
+    # fetch_headlines — this is the one call path that reaches brain.think()
+    # for real. Keeping them out of fetch_headlines keeps them invisible to
+    # research/accumulate.py's separate archiving cron, which would otherwise
+    # race this cycle for the article's one-time "digested" flag and win
+    # sometimes purely by timer coincidence (see the comment in
+    # fetch_headlines). First in line, ahead of even the X capture.
+    headlines = _user_submitted_headlines(settings) + fetch_headlines(settings)
     ctx["headlines"] = headlines
 
     brain = None
