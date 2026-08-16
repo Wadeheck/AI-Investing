@@ -124,7 +124,7 @@ It's called out explicitly here so it never gets mistaken for one.
 
 ## Daily driving
 
-Run these **on the ProDesk** — `ssh -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103`
+Run these **on the ProDesk** — `ssh prodesk`
 first, and use `.venv/bin/python`, not the system `python3`.
 
 ```bash
@@ -319,7 +319,7 @@ assumes that.
 | | |
 |---|---|
 | Host | `eugene-HP-ProDesk-400-G6` — 12 cores, 14 GB, always on |
-| Reach | `ssh -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103` (Tailscale) |
+| Reach | `ssh prodesk` (Tailscale) |
 | Repo | `~/Projects/AI-Investing`, venv at `.venv/` |
 | Supervised | engine, chat bot, **dashboard** (new — was unsupervised anywhere before), watchdog / backup / logrotate / digest / needs-you timers |
 | Crons | the 3 data pulls (RSS accumulate, market refresh, crypto refresh) |
@@ -335,7 +335,7 @@ is the *interactive login authorization*, not the machine.
 The tailnet's SSH rule uses `"action": "check"`, which forces a browser re-auth every
 `checkPeriod` — **12 hours by default**. It is a deliberate Tailscale feature: a stolen
 laptop cannot hold a shell open forever. A key does not bypass it; Tailscale SSH
-intercepts port 22 before any key is considered, so `prodesk_ed25519` gets the same
+intercepts port 22 before any key is considered, so the configured key gets the same
 prompt.
 
 | | |
@@ -387,7 +387,7 @@ test here, deploy by pulling there.** Never edit source on the ProDesk — a
 change that exists only on the trading box is a change with no history.
 
 ```bash
-PD="ssh -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103"
+PD="ssh prodesk"
 
 # 1. develop on the ThinkStation, run the suites locally, commit, push
 # 2. deploy
@@ -413,7 +413,7 @@ with the key loaded in the ThinkStation's agent:
 
 ```bash
 ssh-add -l | grep eug.law.ys        # the GitHub key must be listed
-ssh -A -i ~/.ssh/prodesk_ed25519 eugene@100.64.113.103 \
+ssh -A prodesk \
     'cd ~/Projects/AI-Investing && git pull --ff-only'
 ```
 
@@ -449,7 +449,7 @@ Worth stating, because the list below is all problems and the baseline is good.
 | Money | `LIVE_TRADING=false`, and `brokers/get_broker()` is a **single choke point** — it returns `PaperBroker` unless the flag is set, so a missing SDK or a stray key cannot route a real order |
 | Telegram | the chat bot checks `sender != self.chat_id` on **both** the message and the inline-button paths before acting. Verified in `alerts/chat.py`, not just claimed in its docstring. |
 | Patching | `unattended-upgrades` enabled |
-| Key | `~/.ssh/prodesk_ed25519` is passphrase-protected, so the file alone is not access |
+| Key | Per-workstation, named for the CLIENT not the target — `~/.ssh/t480_ed25519` on the T480, which is why `~/.ssh/config` carries a `Host prodesk` block and every command below says `ssh prodesk`. An earlier revision of this page said `~/.ssh/prodesk_ed25519`, which exists on no machine. |
 | Data dirs | `data/` and the repo root tightened to `750`, `data/backups/` to `700` |
 
 ### Broker credentials — resolved 2026-08-04
