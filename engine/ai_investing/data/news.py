@@ -684,9 +684,14 @@ def dead_feeds(settings) -> list[tuple[str, str, float]]:
     been failing longer than STALE_FEED_DAYS. Aggregate article counts stay green
     while individual wires die -- 44 healthy feeds hide two dead ones -- so this
     is what the health check needs to see the difference."""
+    # Only feeds STILL CONFIGURED. The cache is keyed by URL and nothing prunes
+    # it, so a feed removed from news_rss keeps its last entry forever and would
+    # be reported as dead long after it was dealt with -- which is how a health
+    # check trains people to ignore it.
+    configured = set(settings.news_rss)
     out = []
     for feed, entry in (_load_feed_cache(settings) or {}).items():
-        if not _feed_is_stale(entry):
+        if feed not in configured or not _feed_is_stale(entry):
             continue
         last_ok = entry.get("last_ok") or entry.get("fetched") or 0
         out.append((feed.split("//")[-1].split("/")[0].replace("www.", ""),

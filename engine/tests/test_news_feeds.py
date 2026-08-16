@@ -108,6 +108,33 @@ def test_silent_feeds_survives_a_missing_article_store():
     assert silent_feeds(_Cfg()) == []
 
 
+
+def test_dead_feeds_ignores_urls_no_longer_configured():
+    """The cache is keyed by URL and nothing prunes it, so a feed REMOVED from
+    news_rss keeps its last entry forever. Reporting it as dead long after it was
+    dealt with is how a health check trains people to ignore it — which is the
+    failure this whole check exists to prevent."""
+    import json as _json
+    import tempfile
+    from ai_investing.data.news import STALE_FEED_DAYS, dead_feeds
+
+    tmp = tempfile.mkdtemp()
+    old = time.time() - (STALE_FEED_DAYS + 5) * DAY
+    with open(os.path.join(tmp, "feed_cache.json"), "w") as fh:
+        _json.dump({"https://kept.com/feed":    {"last_ok": old, "status": 403},
+                    "https://removed.com/feed": {"last_ok": old, "status": 403}}, fh)
+
+    class _Brain:
+        feed_cache_path = os.path.join(tmp, "feed_cache.json")
+
+    class _Cfg:
+        news_rss = ["https://kept.com/feed"]      # removed.com is gone from config
+        brain = _Brain()
+
+    hosts = [h for h, _s, _d in dead_feeds(_Cfg())]
+    assert hosts == ["kept.com"], hosts
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(list(globals().items())):
         if _name.startswith("test_") and callable(_fn):

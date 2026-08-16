@@ -407,7 +407,11 @@ class Settings:
         # fast crypto-native tier — these break hours ahead of the wires, and
         # they also carry the pump material; trust is scored low in
         # brain/events.py SOURCE_TRUST so the chorus signature can use them
-        "https://www.dlnews.com/arc/outboundfeeds/rss/",          # DL News (DeFi/investigative)
+        # DL News SHUT DOWN — its feed still serves, and the newest item in it is
+        # literally headlined "DL News is closing" (5 May 2026). Replaced with two
+        # tested peers for the same DeFi/institutional-investigative slot.
+        "https://thedefiant.io/api/feed",                         # The Defiant (DeFi/investigative)
+        "https://blockworks.co/feed",                             # Blockworks (institutional)
         "https://protos.com/feed/",                               # Protos (skeptical, scam-focused)
         "https://cointelegraph.com/rss",                          # Cointelegraph (fast, hype-prone)
         "https://bitcoinmagazine.com/feed",                       # Bitcoin Magazine (BTC-native)

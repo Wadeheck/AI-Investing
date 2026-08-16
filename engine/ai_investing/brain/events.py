@@ -61,7 +61,9 @@ SOURCE_TRUST = {
     # credibility() fires precisely when a story runs across many low-trust
     # crypto feeds and NO trusted one, which is what a coordinated pump looks like.
     "protos": 0.6,                        # investigative, skeptical house style
-    "dlnews": 0.6, "cointelegraph": 0.45, "bitcoinmagazine": 0.4,
+    "dlnews": 0.6,                        # outlet closed 2026-05; key kept for syndication
+    "thedefiant": 0.6, "blockworks.co": 0.6,   # replacements; blockworks matches its X handle
+    "cointelegraph": 0.45, "bitcoinmagazine": 0.4,
     "cryptobriefing": 0.35, "ambcrypto": 0.3,
     "binance.com": 0.7, "upbit.com": 0.7,  # primary-source exchange announcements
     # curated X handles (news_archive_x.jsonl capture) — listed BEFORE the
