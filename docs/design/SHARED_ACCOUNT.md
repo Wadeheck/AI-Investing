@@ -4,10 +4,15 @@
 **stock** orders through the same real Longbridge account the 📈 trading book
 already uses, instead of each pretending against its own simulator.
 
-**Status: built, unit- and integration-tested, and OFF.** Nothing in this
-document has been exercised against Longbridge. Off is byte-for-byte the old
-behaviour, so it is safe to deploy long before it is switched on. See
-*Turning it on* at the end — that part is an operator job on the ProDesk.
+**Status: LIVE on the ProDesk since 2026-08-16 14:24 UTC.** Cut over against the
+demo account (`LBPT10097995`, `lb_papertrading` channel — real orders, not funded
+money). Migration matched its dry run to the cent; zero reconciliation drift
+since. See *The cutover* at the end for what actually happened and what to watch.
+
+Off remains byte-for-byte the old behaviour, so `SHARED_STOCK_ACCOUNT=false` is a
+complete rollback — though the books' `stock_ledger` state would then be ignored
+rather than reverted, so a rollback needs the pre-cutover backup
+(`~/ai-investing-presharedaccount-20260816-183118`), not just the flag.
 
 ---
 
@@ -153,26 +158,52 @@ special cycle to run.
 
 ---
 
-## Turning it on (operator, on the ProDesk)
+## The cutover (2026-08-16)
 
-Not done. In order:
+Backup taken first: `~/ai-investing-presharedaccount-20260816-183118` (89 files,
+books + `brain.db` + `journal.db`). `.env` backed up to `.env.bak-presharedaccount`.
 
-1. Deploy with the flag off and let it run a few cycles. Confirm the books look
-   exactly as before and no `stock_ledger` key appears anywhere.
-2. Set `LIVE_CAPITAL_BASE` if it is not already set — the flag will not start
-   without it.
-3. Dry run: `SHARED_STOCK_ACCOUNT=true` with `LIVE_TRADING=false`. The books keep
-   real ledgers, migrate their state, and reach no venue. Check
-   `event_state.json` / `invest_state.json` for a `migrated_to_shared_account`
-   line in each journal, and that each book's cash is unchanged across the
-   migration.
-4. Compare `reconcile_claims()`'s view against the Demo A/C's actual
-   `stock_positions()` by hand, **before** trusting it to gate a halt.
-5. Flip `SHARED_STOCK_ACCOUNT=true` with `LIVE_TRADING=true` and soak. Watch for:
-   `shared_claim_drift` (should never appear), `late_fill` notes (should appear
-   and resolve), `shared_account` notes (books competing for cash), and fees
-   showing up in `event_journal.jsonl` / `invest_journal.jsonl`.
-6. Only after a deliberate soak should a funded account be discussed.
+The migration was dry-run locally against a copy of the real books before the
+flag was touched, and the live result matched it exactly:
+
+| Book | cash before | cash after | closed at cost (became real) | kept simulated |
+|---|---|---|---|---|
+| ⚡ sleeve | $408.81 | **$11,096.18** | NVDA 15.8219, TSM 8.3557, AMD 6.9256 | — |
+| 🏛 investor | $6,913.07 | **$5,655.04** | TSLA −2.7983, PDD 16.6371, JKS −57.0307, INTC −8.8496 | PRX.AS, 2331.HK, 2097.HK |
+
+The investing book's cash **falls** because three of those four were shorts:
+closing at cost returns the proceeds opening them had raised. That is correct,
+not a loss. `realized` stayed $0.00 in both books — the whole correction went to
+`adjust`, so nothing fictional reached the learning spine.
+
+Account at cutover: $999,557.88 cash + AAPL 1 + USO 1 ≈ $1.00M, against $30,000
+allocated across the three books ($10k each). The trading book's claims already
+matched the account exactly, so reconciliation was clean from the first cycle.
+
+### What to watch
+
+- `shared_claim_drift` in `engine.log` / the journal — **should never appear**.
+  It halts the next cycle and stays latched until an operator clears it.
+- `late fill` notes — should appear once real orders start flowing, and resolve.
+- `shared_account` notes — books competing for the same cash. Harmless at $30k
+  against $1M; the signal to watch if the allocation ever grows.
+- Fees appearing in `event_journal.jsonl` / `invest_journal.jsonl`. Zero fees
+  after the books have traded would mean the fee model is not wired.
+
+### Known cosmetic artefact
+
+`invest_journal.jsonl` carries **two** `migrated_to_shared_account` lines for the
+one migration, 52ms apart, both from the cutover. Only the second reached disk,
+so the state is right; the record is the part that lied. Fixed in `e1e7d41`
+(journal from `_save()`, after the write). The two historical lines are left
+alone — a journal is not rewritten.
+
+### If it needs to come back off
+
+`SHARED_STOCK_ACCOUNT=false` restores the old code path immediately, but the
+books' pre-cutover *positions* are gone (closed at cost, deliberately). A true
+rollback restores `data/` from the backup above **and** flattens whatever the
+books have since opened at the venue. Decide which you want before doing either.
 
 ## Tests
 

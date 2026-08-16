@@ -100,12 +100,27 @@ correlation convergence, τ-delayed edges, per-type half-lives.
 
 **Four books, one brain:**
 
-| Book | Horizon | Mandate |
-|---|---|---|
-| 📈 trading | days–weeks | field conviction, long/short |
-| 🏛 investing | ~6 months | thesis-driven |
-| ⚡ event sleeve | 2 days | fresh shocks only, long-only, unlevered |
-| ₿ crypto | 24/7 | own bear-exit logic, HODL core + tactical |
+| Book | Horizon | Mandate | US stocks execute on |
+|---|---|---|---|
+| 📈 trading | days–weeks | field conviction, long/short | the shared Longbridge account |
+| 🏛 investing | ~6 months | thesis-driven | the shared Longbridge account |
+| ⚡ event sleeve | 2 days | fresh shocks only, long-only, unlevered | the shared Longbridge account |
+| ₿ crypto | 24/7 | own bear-exit logic, HODL core + tactical | local sim (Longbridge is stock-only) |
+
+**`SHARED_STOCK_ACCOUNT=true` since 2026-08-16.** All three stock books now
+place real orders against the one Longbridge demo account (`LBPT10097995`,
+`lb_papertrading` channel — still not funded money) instead of each pretending
+against its own simulator. That simulator is how the sleeve "bought" 15.82
+shares of NVDA on a Sunday. Each book keeps its own `BookLedger`, sees and sells
+only what it has claimed, and reconciles against the account every cycle.
+
+Three consequences, all deliberate: **stock shorts are off** for every book (at
+the venue, opening a short and selling another book's shares are the same
+order); **venue-side resting stops are skipped** (a stop firing hours later
+cannot be attributed to a book); **non-USD listings stay simulated** (`PRX.AS`,
+`*.HK` — Longbridge symbols only round-trip for `.US`). Read
+[`design/SHARED_ACCOUNT.md`](../design/SHARED_ACCOUNT.md) before changing any of
+it.
 
 **The learning spine** (`docs/design/LEARNING.md`) — Beta posteriors over directional
 skill, conditioned on regime; sizing shrunk by sample count; weekly capital
