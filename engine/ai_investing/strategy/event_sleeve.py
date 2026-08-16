@@ -73,8 +73,14 @@ class EventSleeve:
         self._state = self._load()
         self.broker, migration = build_book_broker(
             "event", settings, self._state, START_CASH, stock_broker=stock_broker)
+        # Journalled by `_save()`, once the migration has actually been
+        # PERSISTED — not here. These books are constructed several times a
+        # cycle and some paths return without saving (`Investor.daily_manage`
+        # bails early when the day is already managed), so logging at
+        # construction records migrations that were computed and thrown away.
+        # It happened on the real cutover: two identical lines, one book.
+        self._migration = migration
         if migration:
-            self._log("migrated_to_shared_account", **migration)
             # THE RE-ENTRY GUARD OUTLIVES THE POSITION IT GUARDED. `held` is
             # popped on exit, and migration is not an exit — it closes the
             # simulated position directly. Left alone, `sym in held` (the entry
@@ -178,7 +184,10 @@ class EventSleeve:
         try:
             atomic.write_json(self.path, self._state, indent=1)
         except OSError:
-            pass
+            return
+        if self._migration:
+            self._log("migrated_to_shared_account", **self._migration)
+            self._migration = None
 
     def _log(self, event: str, **kw) -> None:
         try:

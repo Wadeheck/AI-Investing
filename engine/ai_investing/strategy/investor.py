@@ -63,12 +63,15 @@ class Investor:
         # which is the same problem one step removed.
         self.journal = os.path.join(data_dir, "invest_journal.jsonl")
         self._state = self._load()
-        self.broker, migration = build_book_broker(
+        self.broker, self._migration = build_book_broker(
             "investor", settings, self._state,
             float(getattr(settings, "invest_starting_cash", 100000.0)),
             allow_short=True, stock_broker=stock_broker)
-        if migration:
-            self._log("migrated_to_shared_account", **migration)
+        # Journalled by `_save()`, once actually PERSISTED. `daily_manage()`
+        # returns early when the day is already managed — before any save — so
+        # logging here records a migration that was computed and discarded, and
+        # then `_mark_books` does it again. Two lines, one book; seen for real
+        # on the 2026-08-16 cutover.
 
     def _load(self) -> dict:
         try:
@@ -179,6 +182,9 @@ class Investor:
         if getattr(self, "_mark_prices", None):
             self._stamp_marks(self._mark_prices)
         atomic.write_json(self.path, self._state, indent=1)
+        if self._migration:
+            self._log("migrated_to_shared_account", **self._migration)
+            self._migration = None
 
     # ------------------------------------------------------------------ core --
     def daily_manage(self, prices_by_symbol: dict[str, float], strat: dict,

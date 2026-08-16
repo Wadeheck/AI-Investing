@@ -180,6 +180,26 @@ def test_the_books_competing_for_cash_leaves_a_trace():
         assert notes and "shared-account cash" in notes[0]["note"]
 
 
+def test_a_migration_is_journalled_once_and_only_once_persisted():
+    """These books are constructed several times a cycle, and some paths return
+    without saving — `daily_manage` bails early when the day is already managed.
+    Logging at construction records migrations that were computed and thrown
+    away: the real 2026-08-16 cutover wrote two identical lines for one book."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, venue = _settings(tmp, shared=False), FakeStock()
+        Investor(st).daily_manage({"AAA": 333.0}, _strategy(), Quiet(), {})
+        st.shared_stock_account = True
+
+        # Construct twice with an early return in between, then save once.
+        again = Investor(st, venue)
+        again.daily_manage({"AAA": 333.0}, _strategy(), Quiet(), {})  # early return
+        Investor(st, venue).mark({"AAA": 333.0})                      # this one saves
+
+        rows = [json.loads(l) for l in open(os.path.join(tmp, "invest_journal.jsonl"))]
+        migs = [r for r in rows if r["event"] == "migrated_to_shared_account"]
+        assert len(migs) == 1, f"one book, one migration line; got {len(migs)}"
+
+
 def test_migration_clears_the_re_entry_guard_for_what_it_closed():
     """`held` is popped on exit, and migration is not an exit. Left alone, the
     entry filter (`sym in held`) blocks those symbols forever, and the symptom is
