@@ -180,6 +180,24 @@ def test_the_books_competing_for_cash_leaves_a_trace():
         assert notes and "shared-account cash" in notes[0]["note"]
 
 
+def test_migration_clears_the_re_entry_guard_for_what_it_closed():
+    """`held` is popped on exit, and migration is not an exit. Left alone, the
+    entry filter (`sym in held`) blocks those symbols forever, and the symptom is
+    a sleeve that quietly never trades its best-known names again."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st = _settings(tmp, shared=False)
+        sl = es.EventSleeve(st)                       # build a simulated book
+        sl.cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        assert "AAA" in _state(tmp, "event_state.json")["held"]
+
+        st.shared_stock_account = True                # flip
+        venue = FakeStock()
+        after = es.EventSleeve(st, venue)
+        assert after._state["held"] == {}, "the guard must not outlive the position"
+        after.cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        assert venue.sent, "and the symbol must be tradable again"
+
+
 # ---------------------------------------------------------- investing book --
 def _strategy(sym="AAA"):
     return {"theses": [{"stance": "long", "symbols": [sym], "title": "t",

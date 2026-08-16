@@ -75,6 +75,17 @@ class EventSleeve:
             "event", settings, self._state, START_CASH, stock_broker=stock_broker)
         if migration:
             self._log("migrated_to_shared_account", **migration)
+            # THE RE-ENTRY GUARD OUTLIVES THE POSITION IT GUARDED. `held` is
+            # popped on exit, and migration is not an exit — it closes the
+            # simulated position directly. Left alone, `sym in held` (the entry
+            # filter below) would block NVDA, TSM and AMD from this sleeve
+            # permanently, and the symptom would be a sleeve that quietly never
+            # trades its three best-known names again.
+            closed = {c["symbol"] for c in migration["closed_simulated_stock"]}
+            held = self._state.get("held") or {}
+            for sym in closed:
+                held.pop(sym, None)
+            self._state["held"] = held
         try:                       # the expectation ledger: claim -> outcome -> learn
             from ai_investing.learning.spine import LearningSpine
             self.ledger = LearningSpine(settings)
