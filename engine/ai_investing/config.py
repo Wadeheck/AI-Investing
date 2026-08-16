@@ -344,8 +344,12 @@ class Settings:
         default_factory=lambda: _get_int("LLM_DAILY_FREE_TOKENS", 5_000_000))
     news_rss: list[str] = field(default_factory=lambda: _get_list("NEWS_RSS", [
         # global markets / macro
-        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-        "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+        # WSJ's two feeds sat here from the initial commit and never delivered a
+        # single fresh article: feeds.a.dj.com froze in Jan 2025, long before it
+        # was subscribed (2026-08-16). FT is the same tier and already carries
+        # SOURCE_TRUST 0.9, matching what wsj/dj.com had.
+        "https://www.ft.com/rss/home",
+        "https://feeds.content.dowjones.io/public/rss/mw_topstories",
         "http://feeds.bbci.co.uk/news/business/rss.xml",
         "https://feeds.marketwatch.com/marketwatch/topstories/",
         "https://www.theguardian.com/uk/business/rss",
@@ -357,15 +361,14 @@ class Settings:
         "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=10416", # CNA Singapore
         "https://www.japantimes.co.jp/feed/",
         "https://www.koreaherald.com/rss/newsAll",
-        "https://www.globaltimes.cn/rss/outbrain.xml",
+        "https://www.scmp.com/rss/4/feed",       # SCMP China desk
+        "https://www.scmp.com/rss/92/feed",      # SCMP China business/economy
         "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
         # Asia expansion (probed working 2026-07-30): KR/JP/CN/ID/TH/VN/IN/SG
         "https://en.yna.co.kr/RSS/news.xml",                      # Yonhap (KR)
-        "https://www.kedglobal.com/rss",                          # Korea Economic Daily (KR)
+        "https://www.koreatimes.co.kr/www/rss/rss.xml",           # Korea Times (KR)
         "https://asia.nikkei.com/rss/feed/nar",                   # Nikkei Asia (JP/pan-Asia)
         "https://mainichi.jp/rss/etc/english_latest.rss",         # Mainichi EN (JP)
-        "http://www.xinhuanet.com/english/rss/businessrss.xml",   # Xinhua business (CN)
-        "https://www.chinadaily.com.cn/rss/bizchina_rss.xml",     # China Daily biz (CN)
         "https://en.antaranews.com/rss/news.xml",                 # Antara (ID)
         "https://voi.id/en/rss",                                  # VOI (ID)
         "https://www.bangkokpost.com/rss/data/business.xml",      # Bangkok Post biz (TH)
@@ -382,7 +385,11 @@ class Settings:
         "https://feeds.feedburner.com/rsscna/finance",            # CNA finance (TW, zh)
         "https://rthk.hk/rthk/news/rss/e_expressnews_efinance.xml",  # RTHK finance (HK, en)
         "https://rthk.hk/rthk/news/rss/c_expressnews_cfinance.xml",  # RTHK finance (HK, zh)
-        "https://36kr.com/feed",                                  # 36kr (CN, zh — tech)
+        # 36kr is the only one of these that ever worked (257 articles,
+        # 2026-07-31 to 08-05) before it swapped its feed for an HTML page.
+        "https://technode.com/feed/",                             # TechNode (CN tech, en)
+        "https://www.cnbeta.com.tw/backend.php",                  # cnBeta (CN, zh — tech)
+        "https://www.ifanr.com/feed",                             # ifanr (CN, zh — consumer tech)
         # official / central banks
         "https://www.federalreserve.gov/feeds/press_all.xml",
         "https://www.boj.or.jp/en/rss/whatsnew.xml",
@@ -394,7 +401,9 @@ class Settings:
         # depth + zh-language crypto wire (same early-Asia edge as the TW feeds)
         "https://www.theblock.co/rss.xml",                        # The Block (institutional/reg)
         "https://decrypt.co/feed",                                # Decrypt (broad crypto)
-        "https://wublockchain.substack.com/feed",                 # Wu Blockchain (CN mining/exchange/reg)
+        # Wu Blockchain's substack feed froze in Jan 2021; the channel is fully
+        # covered by the x.com/WuBlockchain capture (98 posts/7d), which the
+        # existing "wublock" SOURCE_TRUST key already matches.
         # fast crypto-native tier — these break hours ahead of the wires, and
         # they also carry the pump material; trust is scored low in
         # brain/events.py SOURCE_TRUST so the chorus signature can use them
@@ -406,7 +415,11 @@ class Settings:
         "https://ambcrypto.com/feed/",                            # AMBCrypto (altcoin chatter/pumps)
         "https://rss.panewslab.com/zh/tvsq/rss",                  # PANews (CN, zh crypto wire)
         "https://oilprice.com/rss/main",
-        "https://www.mining.com/feed/",
+        # mining.com hard-403s our reader UA (an explicit "no bots" — not routed
+        # around). Trade press replaces it; its syndicated stories still arrive
+        # via NewsData, which is why the mining.com trust key stays.
+        "https://www.northernminer.com/feed/",
+        "https://www.mining-technology.com/feed/",
     ]))
     db_path: str = field(default_factory=lambda: _get("DB_PATH", str(PROJECT_ROOT / "data" / "journal.db")))
     state_path: str = field(default_factory=lambda: _get("STATE_PATH", str(PROJECT_ROOT / "data" / "state.json")))

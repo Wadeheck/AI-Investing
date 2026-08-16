@@ -34,12 +34,23 @@ EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency"
 SOURCE_TRUST = {
     # official / central banks: primary sources, near-total trust
     "federalreserve": 0.95, "boj.or.jp": 0.95, "ecb.europa.eu": 0.95,
+    # BoE was the one central bank with no key, so it silently took the 0.5
+    # default while its three peers sat at 0.95 — a primary source discounted by
+    # oversight rather than by anyone's decision (2026-08-16).
+    "bankofengland": 0.95,
     "reuters": 0.95, "wsj": 0.9, "dowjones": 0.9, "dj.com": 0.9, "bloomberg": 0.9,
     "ft.com": 0.9, "theguardian": 0.85, "bbc": 0.85, "cnbc": 0.75, "nikkei": 0.85,
     "scmp": 0.75,
     "caixin": 0.8, "straitstimes": 0.8, "businesstimes": 0.8,
     "japantimes": 0.8, "koreaherald": 0.75, "channelnewsasia": 0.8,
-    "economictimes": 0.65, "mining.com": 0.6,
+    "economictimes": 0.65, "mining.com": 0.6, "koreatimes": 0.7,
+    # replacements wired in 2026-08-16 for feeds that were dead on arrival (see
+    # the block comments in config.news_rss). ft.com/dowjones/scmp already scored
+    # above; these are the sources that had no entry and would otherwise have
+    # fallen to the 0.5 default without anyone choosing it.
+    "technode": 0.6,                      # China tech, EN, reported not aggregated
+    "northernminer": 0.65, "mining-technology": 0.6,   # specialist trade press
+    "cnbeta": 0.45, "ifanr": 0.5,         # zh consumer-tech; ifanr reports, cnbeta aggregates
     # state media: useful policy signal, but reads like advocacy
     "globaltimes": 0.45,
     "coindesk": 0.6, "theblock": 0.65, "decrypt": 0.5, "panewslab": 0.5,
