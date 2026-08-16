@@ -31,7 +31,11 @@ HELP = """*AI-Investing chat* — talk to your engine.
 /portfolio — equity, positions, you-vs-formula
 /assets — one-glance totals: cash + holdings per book, nothing else
 /news — what was digested recently (signal vs noise)
-/simulate <headline> — ripple a hypothetical through the graph
+/submit <text> — feed in a real article, trend, or your own take.
+   Digested for real on the next engine cycle (not a what-if) and
+   trusted like a serious outlet by default, since you chose to type it.
+/simulate <headline> — ripple a hypothetical through the graph, no
+   memory, right now — for testing a "what if", not for real news
 /view SYM=0.5 — set your tilt on an asset (-1..1)
 /block SYM · /unblock SYM — never / again trade a symbol
 /stance aggressive|normal|cautious|defensive|cash
@@ -165,6 +169,27 @@ class ChatBot:
             [("💼 portfolio", "c:/portfolio"), ("📰 news", "c:/news")],
             [("💰 assets", "c:/assets"), ("⚖️ my reads", "c:/inferences")]]
 
+    # Registered with Telegram via setMyCommands so "/" pops the native
+    # autocomplete list in the client (the same mechanism BotFather uses for
+    # its own /newbot etc.) — this repo answers commands by parsing text, which
+    # gives the bot no menu unless it explicitly tells Telegram what exists.
+    COMMANDS = [
+        ("advise", "Top trade ideas, with reasons"),
+        ("inferences", "News reads awaiting your 👍/😐/👎"),
+        ("pending", "Legacy per-trade approvals"),
+        ("brain", "Regime, mood, what's active"),
+        ("portfolio", "Equity, positions, you vs formula"),
+        ("assets", "Cash + holdings, one line per book"),
+        ("news", "What was digested recently"),
+        ("submit", "Feed in real news/trend/opinion to digest"),
+        ("simulate", "Ripple a hypothetical headline (no memory)"),
+        ("view", "Set your tilt on an asset, e.g. NVDA=0.5"),
+        ("block", "Never trade a symbol"),
+        ("unblock", "Allow a symbol again"),
+        ("stance", "aggressive|normal|cautious|defensive|cash"),
+        ("help", "Show this command menu"),
+    ]
+
     def handle(self, text: str) -> tuple[str, list | None]:
         """Returns (message, inline_buttons)."""
         text = text.strip()
@@ -189,6 +214,11 @@ class ChatBot:
             headline = text[len("/simulate"):].strip()
             return (self._fmt_simulate(headline) if headline
                     else "Give me a headline: /simulate PBOC cuts rates"), None
+        if low.startswith("/submit"):
+            body = text[len("/submit"):].strip()
+            return (self._submit_news(body) if body
+                    else "Paste the article/trend/take after the command, e.g.\n"
+                         "/submit Unitree's IPO is heavily oversubscribed per..."), None
         if low.startswith(("/view", "/block", "/unblock", "/stance")):
             return self._apply_view(text), None
         return self._ask_llm(text), self.MENU
@@ -572,6 +602,26 @@ class ChatBot:
         return (f"🧪 *{headline}*\nverdict: {verdict}\nripple: {top or 'no node matched'}\n"
                 f"assets touched: {assets}")
 
+    def _submit_news(self, text: str) -> str:
+        """Queue a real news item for the engine's own next cycle. Unlike
+        /simulate this WRITES to disk (data/news.py submit_user_news) and
+        persists through the normal digest -> credibility -> graph path — but
+        it only appends a file here; the actual digestion still happens inside
+        the runner process, so two processes never touch brain state at once."""
+        from ai_investing.data.news import submit_user_news
+        try:
+            rec = submit_user_news(self.settings, text)
+        except ValueError:
+            return "That looked empty — paste the text after /submit."
+        poll_min = max(1, round(self.settings.poll_seconds / 60))
+        return (f"📥 Queued for digestion: _{rec['title'][:160]}_\n\n"
+                f"Goes through the real pipeline on the engine's next cycle "
+                f"(~every {poll_min} min) — credibility-scored, ripples the graph, "
+                f"sizes positions, remembered in brain.db. Trusted like a serious "
+                f"outlet by default since you chose to send it, but it still has to "
+                f"clear the same credibility bar as everything else. Check /news "
+                f"after the next cycle to see how it landed.")
+
     def _apply_view(self, text: str) -> str:
         from ai_investing.strategy import UserViews
         from ai_investing.strategy import user_views as uv_mod
@@ -613,6 +663,18 @@ class ChatBot:
         self.history = self.history[-6:]
         return out.strip()[:3900]
 
+    def _register_commands(self) -> None:
+        """Tell Telegram what commands exist so typing "/" shows them, the same
+        popup BotFather's own commands produce. Cheap and idempotent — safe to
+        call on every boot; Telegram just overwrites its stored list."""
+        try:
+            self._api("setMyCommands",
+                      {"commands": json.dumps(
+                          [{"command": c, "description": d} for c, d in self.COMMANDS])},
+                      timeout=10)
+        except Exception:
+            pass   # the menu is a convenience; commands still work typed out in full
+
     # -- the loop --------------------------------------------------------------------
     def run_forever(self) -> None:
         # First outbound call of the process: at boot it ran before DNS was up and
@@ -622,6 +684,7 @@ class ChatBot:
         me = retry_transient(lambda: self._api("getMe", {}, timeout=10),
                              what="telegram getMe")
         name = (me.get("result") or {}).get("username", "?")
+        self._register_commands()
         print(f"Chat bot up as @{name} — talking only to chat {self.chat_id}. Ctrl-C to stop.")
         self._send("🧠 Chat is live — ask me anything about the brain, the book, or the trades.",
                    self.MENU)

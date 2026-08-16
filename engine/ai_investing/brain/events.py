@@ -32,6 +32,16 @@ EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency"
 
 # Default per-source trust. Keyed by substring of the feed/source host or name.
 SOURCE_TRUST = {
+    # Hand-picked by the user via Telegram /submit (data/news.py
+    # _user_submitted_headlines) — a human with capital at risk chose to type
+    # this in, which is a stronger filter than any wire's editorial process.
+    # Trust sits with WSJ/Bloomberg, not at the primary-source 0.95 tier: a
+    # curated read can still be one-sided or wrong, so it still needs the same
+    # corroboration/manipulation math as everything else, just from a much
+    # better prior than the 0.5 default that would otherwise send a single,
+    # zero-corroboration submission (credibility ~0.375) right to the noise
+    # line at BRAIN_CREDIBILITY_THRESHOLD (0.35).
+    "user_curated": 0.9,
     # official / central banks: primary sources, near-total trust
     "federalreserve": 0.95, "boj.or.jp": 0.95, "ecb.europa.eu": 0.95,
     # BoE was the one central bank with no key, so it silently took the 0.5

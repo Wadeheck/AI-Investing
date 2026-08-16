@@ -839,7 +839,11 @@ def fetch_headlines(settings, limit_per_feed: int = 15) -> list[dict]:
     # Priority is justified on the merits, not just mechanics: this channel is
     # hand-harvested, low-volume, carries the highest per-source trust in the
     # table (Farside 0.80 vs a 0.5 default), and reports things the wires do not.
-    return _x_capture_headlines(settings) + headlines
+    #
+    # User-submitted items go even ahead of that: they are the one channel
+    # curated by a human with skin in the game rather than harvested from a
+    # feed, so they get first crack at the 30-headline-per-cycle digest cap.
+    return _user_submitted_headlines(settings) + _x_capture_headlines(settings) + headlines
 
 
 # X capture is harvested by a browser session (no API, by instruction) into
@@ -897,6 +901,66 @@ def _x_capture_headlines(settings, limit: int = 60) -> list[dict]:
                         "summary": (h.get("summary") or "")[:500]})
             if len(out) >= limit:
                 return out
+    return out
+
+
+# Hand-picked by the user, not fetched — the intended selectivity is the whole
+# point, so this channel gets a long window (submissions are rare) and the
+# highest priority slot: it goes ahead of even the X capture in fetch_headlines,
+# ahead of every RSS wire. See SOURCE_TRUST["user_curated"] in brain/events.py.
+_USER_NEWS_WINDOW_H = 24.0 * 30
+
+
+def _user_news_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)),
+                        "news_user_submitted.jsonl")
+
+
+def submit_user_news(settings, text: str, sender: str = "you") -> dict:
+    """Append one user-submitted item (news, a trend, an opinion) to the queue
+    `_user_submitted_headlines` reads. Digestion happens on the engine's own next
+    cycle via fetch_headlines — this function only writes the file, so it is safe
+    to call from a second process (the chat bot) without touching brain state."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("empty submission")
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    first_line = text.splitlines()[0].strip() if text.splitlines() else text
+    title = first_line[:200] + ("…" if len(first_line) > 200 else "")
+    rec = {"title": title, "summary": text[:4000], "source": "user_curated",
+          "published": ts, "ts": ts, "sender": sender}
+    with open(_user_news_path(settings), "a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+    return rec
+
+
+def _user_submitted_headlines(settings, limit: int = 30) -> list[dict]:
+    """Recent items you fed in by hand, newest first. Same dedupe-safe replay
+    pattern as `_x_capture_headlines`: BrainStore.filter_new keys on (title,
+    source) and only counts an article seen once DIGESTED, so replaying the
+    whole window every cycle is safe — it costs nothing after the first pass."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=_USER_NEWS_WINDOW_H)).isoformat()
+    out: list[dict] = []
+    try:
+        with open(_user_news_path(settings), errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return out
+    for line in reversed(lines):            # newest records are appended last
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = rec.get("ts") or rec.get("published") or ""
+        if ts and ts < cutoff:
+            continue
+        out.append({"title": rec.get("title", ""), "source": rec.get("source", "user_curated"),
+                    "published": rec.get("published", ts), "summary": rec.get("summary", "")})
+        if len(out) >= limit:
+            return out
     return out
 
 
