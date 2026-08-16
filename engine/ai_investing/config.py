@@ -362,6 +362,12 @@ class Settings:
         "https://www.japantimes.co.jp/feed/",
         "https://www.koreaherald.com/rss/newsAll",
         "https://www.scmp.com/rss/4/feed",       # SCMP China desk
+        # State media, restored deliberately at LOW trust (0.45, "reads like
+        # advocacy") for the official policy line. The earlier 11-day lag was not
+        # CGTN being dead — it was the wrong section: /business.xml is neglected,
+        # while /china.xml and /world.xml are current (0-1d, probed 2026-08-16).
+        "https://www.cgtn.com/subscribe/rss/section/china.xml",   # CGTN China
+        "https://www.cgtn.com/subscribe/rss/section/world.xml",   # CGTN World
         "https://www.scmp.com/rss/92/feed",      # SCMP China business/economy
         "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
         # Asia expansion (probed working 2026-07-30): KR/JP/CN/ID/TH/VN/IN/SG
@@ -395,6 +401,15 @@ class Settings:
         "https://www.boj.or.jp/en/rss/whatsnew.xml",
         "https://www.ecb.europa.eu/rss/press.html",
         "https://www.bankofengland.co.uk/rss/news",   # BoE — feeds the boe_rate/uk_* nodes (seed v12)
+        # RBI is the only Asian central bank with a working public feed: PBoC,
+        # HKMA, MAS, BoK, BIS and IMF were all probed 2026-08-16 and none serves
+        # discoverable RSS. India is a large slice of this watchlist's news, so
+        # the primary source is worth having on its own.
+        "https://www.rbi.org.in/pressreleases_rss.xml",           # Reserve Bank of India
+        # China's State Council publishing its own decisions — a PRIMARY source,
+        # not state media commentary, and the closest thing to a PBoC/NBS feed
+        # that actually exists. Chinese-language, read natively by the LLM.
+        "https://www.gov.cn/pushinfo/v150203/rss.xml",            # PRC State Council (zh)
         # crypto + energy + commodities
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         # crypto expansion (probed working 2026-07-31): institutional/regulatory

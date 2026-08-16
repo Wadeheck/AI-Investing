@@ -44,6 +44,39 @@ SOURCE_TRUST = {
     "caixin": 0.8, "straitstimes": 0.8, "businesstimes": 0.8,
     "japantimes": 0.8, "koreaherald": 0.75, "channelnewsasia": 0.8,
     "economictimes": 0.65, "mining.com": 0.6, "koreatimes": 0.7,
+    # --- scored 2026-08-16 -------------------------------------------------
+    # 16 configured hosts had no key and were silently taking the 0.5 default —
+    # not a judgement anyone made, just an absence. Placed against the tiers
+    # already here rather than on a new scale.
+    #
+    # national wire services: the same role Reuters plays, for their own country
+    "yna.co.kr": 0.8,                     # Yonhap — Korea's national wire
+    "antaranews": 0.7,                    # Antara — Indonesia's national wire
+    "feedburner": 0.75,                   # currently ONLY CNA Taiwan's finance feed;
+                                          # revisit if another feedburner feed is added
+    # established national dailies / public broadcasters
+    "mainichi": 0.75,                     # Mainichi Shimbun (JP)
+    "rthk.hk": 0.75,                      # RTHK — HK public broadcaster
+    "marketwatch": 0.75,                  # Dow Jones property, below WSJ's own 0.9
+    "bangkokpost": 0.7,                   # TH broadsheet of record
+    "thehindubusinessline": 0.7,          # IN business daily
+    "livemint": 0.7,                      # Mint (IN) business daily
+    "ltn.com.tw": 0.65,                   # Liberty Times — TW's largest daily
+    "taipeitimes": 0.65,                  # TW English daily
+    "technews.tw": 0.65,                  # TW semiconductor trade press — narrow but expert
+    "vnexpress": 0.6,                     # VN's largest online paper
+    # high volume, thinner editing — the trust number is what stops raw volume
+    # from reading as corroboration in credibility()
+    "cnyes": 0.55,                        # Anue (TW) financial portal, largely aggregated
+    "oilprice": 0.55,                     # commodity commentary, promotional register
+    "voi.id": 0.55,                       # ID digital outlet; 143 articles/day, our 2nd
+                                          # highest volume source — see note above
+    # official primary sources added alongside these
+    "rbi.org.in": 0.95,                   # Reserve Bank of India — central bank tier
+    "gov.cn": 0.9,                        # PRC State Council publishing its own decisions:
+                                          # a primary source, NOT the 0.45 state-media tier
+    "cgtn": 0.45,                         # state media — same tier as globaltimes
+    # -----------------------------------------------------------------------
     # replacements wired in 2026-08-16 for feeds that were dead on arrival (see
     # the block comments in config.news_rss). ft.com/dowjones/scmp already scored
     # above; these are the sources that had no entry and would otherwise have

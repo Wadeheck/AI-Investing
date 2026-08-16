@@ -135,6 +135,27 @@ def test_dead_feeds_ignores_urls_no_longer_configured():
     assert hosts == ["kept.com"], hosts
 
 
+
+def test_every_configured_feed_has_an_explicit_trust_score():
+    """source_trust() falls back to 0.5 for anything unlisted, so a feed added
+    without a SOURCE_TRUST key gets a middling trust nobody chose — invisibly,
+    because 0.5 is a perfectly plausible number to see. Sixteen hosts were
+    sitting at that default on 2026-08-16, including Yonhap (a national wire)
+    and the Bank of England (a central bank, whose three peers were at 0.95).
+
+    This fails on the NEXT feed added without a score, which is the only moment
+    the omission is cheap to fix."""
+    from ai_investing.brain.events import SOURCE_TRUST
+    from ai_investing.config import Settings
+
+    hosts = {f.split("//")[-1].split("/")[0].replace("www.", "")
+             for f in Settings().news_rss}
+    unscored = sorted(h for h in hosts if not any(k in h for k in SOURCE_TRUST))
+    assert not unscored, (
+        f"{len(unscored)} configured feed host(s) have no SOURCE_TRUST key and "
+        f"would silently take the 0.5 default: {unscored}")
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(list(globals().items())):
         if _name.startswith("test_") and callable(_fn):
