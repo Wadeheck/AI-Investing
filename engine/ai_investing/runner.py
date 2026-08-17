@@ -192,16 +192,28 @@ class Runner:
         # That is §4.16 one level up: the CONDITION survives a restart and the
         # memory of having reported it does not, so a latched condition becomes
         # an event again on every boot.
-        self._flags_path = os.path.join(
-            os.path.dirname(os.path.abspath(settings.state_path)), "data_guard_flags.json")
-        try:
-            with open(self._flags_path) as fh:
-                self._flagged_symbols: set[str] = set(json.load(fh) or [])
-        except (OSError, json.JSONDecodeError, TypeError):
-            self._flagged_symbols = set()
+        # ALERT STATE = what the user has already been told about. Every entry
+        # here is a latched CONDITION, and the rule for all of them is the same:
+        # announce the change, never the state. That rule was already written
+        # four times in this file and all four kept it in memory, so every
+        # restart rediscovered every ongoing condition as new and said it again.
+        self._alert_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "alert_state.json")
+        _alerts = {}
+        for _p in (self._alert_path,
+                   os.path.join(os.path.dirname(self._alert_path), "data_guard_flags.json")):
+            try:
+                with open(_p) as fh:
+                    _raw = json.load(fh)
+                _alerts = ({"flagged_symbols": _raw} if isinstance(_raw, list)
+                           else dict(_raw or {}))
+                break
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+        self._flagged_symbols: set[str] = set(_alerts.get("flagged_symbols") or [])
         # last news/context failure signature, so a persistent provider outage is
         # one alert rather than one per cycle (the 4th announce-the-state instance)
-        self._last_news_error: str | None = None
+        self._last_news_error: str | None = _alerts.get("news_error") or None
 
         # --- shadow "formula-only" portfolio (ignores your input) for the comparison ---
         self._shadow_path = os.path.join(
@@ -336,6 +348,17 @@ class Runner:
         else:
             print(f"  [shared account] ${account:,.0f} available, ${total:,.0f} "
                   f"allocated ({detail})")
+
+    def _save_alert_state(self) -> None:
+        """Persist what the user has already been told. Never fatal: failing to
+        remember an alert costs a duplicate message, and failing to trade costs
+        more."""
+        try:
+            atomic.write_json(self._alert_path, {
+                "flagged_symbols": sorted(self._flagged_symbols),
+                "news_error": self._last_news_error})
+        except OSError:
+            pass
 
     def _shared_stock_broker(self):
         """The ONE live stock adapter the other books may share, or None.
@@ -554,10 +577,7 @@ class Runner:
             self.notifier.send("\n".join(parts))
         if set(bad_data) != self._flagged_symbols:
             self._flagged_symbols = set(bad_data)
-            try:
-                atomic.write_json(self._flags_path, sorted(self._flagged_symbols))
-            except OSError:
-                pass
+            self._save_alert_state()
 
         # Prices the guard did NOT reject. Valuation must use these, not the raw
         # feed: equity is the number the circuit breaker judges, and judging it
@@ -619,11 +639,15 @@ class Runner:
                 sig = f"{type(exc).__name__}: {exc}"[:200]
                 if self.settings.alerts.on_error and sig != self._last_news_error:
                     self.notifier.send(f"⚠️ news/context error: {exc}")
-                self._last_news_error = sig
+                if sig != self._last_news_error:
+                    self._last_news_error = sig
+                    self._save_alert_state()
             else:
                 if self._last_news_error and self.settings.alerts.on_error:
                     self.notifier.send("✅ news/context recovered.")
-                self._last_news_error = None
+                if self._last_news_error is not None:
+                    self._last_news_error = None
+                    self._save_alert_state()
         if context.get("briefing"):
             print(f"[briefing] {context['briefing']}")
 
