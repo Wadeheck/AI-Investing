@@ -1702,6 +1702,25 @@ as "needs more data":
    $10,000 slice ceiling. **The safety now comes from the accounts, not from the
    flags.** That is a real reduction in defence-in-depth and it is the reason the
    Gemini key had to be segregated first.
+
+   **Re-verified 2026-08-17**, ahead of a real-money transition review. The
+   IP-allowlist failure this section describes is exactly the kind of thing
+   that silently breaks between checks (a home IP rotates, a key expires), so
+   a stale "it worked once" is worth re-confirming before trusting it going
+   into a bigger decision. `--check-broker` still passes both legs
+   (`stocks: cash $990,894.8, positions 7` on the Longbridge paper account;
+   `crypto: cash $0.0, positions 0` on the segregated Gemini production
+   account, unchanged). Beyond the existing check, also confirmed: all 17
+   watchlist crypto symbols resolve in Gemini's production market list with
+   live lot-size/precision metadata (`load_markets()`), and live tickers
+   return current prices for a spot-check (BTC/ETH/SOL) — i.e. everything the
+   sizer would need to size a crypto order is reachable. **Still not
+   verified**: the crypto ORDER path itself (the Ford buy/sell/stop/take-profit
+   round-trip above proved this for Longbridge; nothing equivalent has ever
+   been run against Gemini, sandbox or production) — the sandbox key remains a Gemini master-key
+   (rejected by ccxt's signer, see above) and the account is deliberately
+   unfunded, so proving a real fill needs a funding decision this review did
+   not make on the user's behalf.
 2. **The learning spine has run exactly once.** As of 2026-08-05:
    1 settled claim, 2 open, both `expectations.jsonl` and `learning_state.json` now
    on disk. The one settlement (`event:USO`, expected +0.31%, realised −10.06%) was
