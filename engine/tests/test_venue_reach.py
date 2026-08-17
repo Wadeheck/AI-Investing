@@ -185,6 +185,57 @@ def test_usd_prices_are_converted_back_to_the_listing_currency():
         fx._mem.update(ts=0.0, rates={})
 
 
+# ------------------------------------- a fill price is money crossing in ----
+def test_a_foreign_fill_price_is_converted_on_the_way_back_in():
+    """THE ONE THAT ACTUALLY HAPPENED. The first Hong Kong order this engine
+    placed — 100 shares of 3690.HK for HKD 8,870, about USD 1,129 — was booked
+    into a USD ledger at a cost basis of 8,870. Cash fell by seven times what
+    was spent, equity read $2,256 against a true $10,000, and the daily notional
+    cap, the drawdown breaker and the learning spine all inherited it."""
+    from ai_investing.brokers.live import LongbridgeBroker
+    from ai_investing.data import fx
+
+    class Detail:
+        status, executed_quantity, executed_price, symbol = "Filled", 100, 88.70, "3690.HK"
+
+    class Ctx:
+        def order_detail(self, oid):
+            return Detail()
+
+    class S:
+        state_path = "/nonexistent/state.json"
+        base_currency = "USD"
+
+    b = LongbridgeBroker.__new__(LongbridgeBroker)   # no network, no channel check
+    b.ctx, b.settings = Ctx(), S()
+    fx._mem.update(ts=9e18, rates={"HKD": 7.85})
+    try:
+        status, qty, px = b.fetch_fill("any")
+        assert qty == 100
+        assert abs(px - 11.30) < 0.05, f"HKD 88.70 must come back as ~USD 11.30, got {px}"
+    finally:
+        fx._mem.update(ts=0.0, rates={})
+
+
+def test_a_us_fill_price_is_untouched():
+    from ai_investing.brokers.live import LongbridgeBroker
+
+    class Detail:
+        status, executed_quantity, executed_price, symbol = "Filled", 5, 275.90, "AAPL.US"
+
+    class Ctx:
+        def order_detail(self, oid):
+            return Detail()
+
+    class S:
+        state_path = "/nonexistent/state.json"
+        base_currency = "USD"
+
+    b = LongbridgeBroker.__new__(LongbridgeBroker)
+    b.ctx, b.settings = Ctx(), S()
+    assert b.fetch_fill("any")[2] == 275.90
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -149,7 +149,8 @@ class BookBroker(BrokerAdapter):
     def __init__(self, book_id: str, ledger: BookLedger,
                  stock_broker: BrokerAdapter | None = None,
                  pending: list | None = None, allow_short: bool = False,
-                 base_currency: str = "USD", lots=None):
+                 base_currency: str = "USD", lots=None,
+                 sim_keys=None):
         self.book_id = book_id
         self.ledger = ledger
         self.base_currency = base_currency
@@ -180,6 +181,17 @@ class BookBroker(BrokerAdapter):
         # when it submitted has to be told to forget it, or the symbol stays
         # blocked by a trade that never happened.
         self.dropped_symbols: set[str] = set()
+        # Keys whose position was filled LOCALLY rather than at the venue. A
+        # book can hold both kinds at once — `PRX.AS` has no Longbridge symbol
+        # and never will, so the investing book simulates it forever — and only
+        # the venue-held ones may be reconciled against the account.
+        #
+        # It matters most for a symbol that CHANGES side. `2331.HK` was
+        # simulated while Hong Kong was unreachable; the day it became
+        # reachable, reconciliation started comparing 734 simulated shares
+        # against an account holding none, and halted the engine. Simulated-ness
+        # is a fact about how a position was filled, not about its market today.
+        self.sim_keys: set[str] = set(sim_keys or [])
 
     # -- the BrokerAdapter surface ------------------------------------------
     def get_positions(self) -> dict[str, Position]:
@@ -207,6 +219,21 @@ class BookBroker(BrokerAdapter):
         resolves the moment the venue answers.
         """
         return self.ledger.book_portfolio(self.get_positions()).cash - self.pending_commitment()
+
+    def portfolio(self):
+        """The book as the rest of the engine VALUES it.
+
+        Deliberately not `Portfolio(self.get_cash(), ...)`, which is the default.
+        `get_cash()` reports SPENDABLE cash, net of what live orders have
+        committed — right for deciding whether another order fits, and wrong for
+        equity: cash promised to an unfilled buy is earmarked, not spent, and
+        subtracting it makes the book look like it crashed. On a $10,000 book
+        three queued entries would read as a 45% drawdown and trip a breaker
+        whose whole job is to notice a 5% one.
+        """
+        from ai_investing.models import Portfolio
+        pos = self.get_positions()
+        return Portfolio(self.ledger.book_portfolio(pos).cash, pos)
 
     def pending_commitment(self) -> float:
         """Cash promised to buy orders the venue has taken but not yet answered."""
@@ -238,8 +265,12 @@ class BookBroker(BrokerAdapter):
         return {str(p.get("symbol")) for p in self.pending if p.get("symbol")}
 
     def working_positions(self) -> dict[str, Position]:
-        """This book's claim on the shared account. Feed to `reconcile_claims`."""
-        return dict(self.get_positions())
+        """This book's claim on the shared ACCOUNT — venue-held only.
+
+        Locally simulated positions are excluded because the account genuinely
+        does not hold them, so counting them is not a claim, it is drift.
+        """
+        return {k: p for k, p in self.get_positions().items() if k not in self.sim_keys}
 
     def submit(self, order: Order, price: float) -> Order:
         if order.qty <= 0 or price <= 0 or not math.isfinite(price):
@@ -336,6 +367,7 @@ class BookBroker(BrokerAdapter):
         result = self.stock_broker.submit(order, price)
 
         if result.status is OrderStatus.FILLED and (result.filled_qty or 0) > 0:
+            self.sim_keys.discard(key)      # this one is genuinely at the venue
             self._apply_fill(result, price)
         elif result.status is OrderStatus.PENDING and result.id:
             # Acknowledged but unconfirmed. Remember it so the fill lands in THIS
@@ -393,6 +425,7 @@ class BookBroker(BrokerAdapter):
         order.filled_qty = qty
         order.filled_price = price
         order.status = OrderStatus.FILLED
+        self.sim_keys.add(key)
         self._apply_fill(order, price, charge_fees=False)
         return order
 
@@ -568,7 +601,8 @@ class BookBroker(BrokerAdapter):
 
     def ledger_state(self) -> dict:
         """THE authoritative record — everything needed to rebuild this book."""
-        return {"ledger": self.ledger.to_dict(), "pending": self.pending}
+        return {"ledger": self.ledger.to_dict(), "pending": self.pending,
+                "sim_keys": sorted(self.sim_keys)}
 
     def state(self) -> dict:
         """The same book in `PaperBroker.state()`'s shape, FOR READERS ONLY.
@@ -677,10 +711,11 @@ def build_book_broker(book_id: str, settings, state: dict, base_cash: float,
         return PaperBroker(float(base_cash), allow_short=allow_short), None
 
     saved = state.get("stock_ledger") or {}
-    note, pending = None, []
+    note, pending, sim = None, [], []
     if saved.get("ledger"):
         ledger = BookLedger.from_dict(saved["ledger"], float(base_cash))
         pending = saved.get("pending") or []
+        sim = saved.get("sim_keys") or []
     elif state.get("broker"):
         # There is a simulated book to carry over. Only here — a book with no
         # prior state has nothing to migrate, and running the migration on it
@@ -688,12 +723,14 @@ def build_book_broker(book_id: str, settings, state: dict, base_cash: float,
         ledger, note = migrate_paper_state(
             state["broker"], float(base_cash),
             getattr(settings, "base_currency", "USD"))
+        # Everything the migration KEPT was a simulated position and stays one.
+        sim = list(note["carried_simulated"])
     else:
         ledger = BookLedger(base=float(base_cash))
     return BookBroker(book_id, ledger, stock_broker=stock_broker,
                       pending=pending, allow_short=allow_short,
                       base_currency=getattr(settings, "base_currency", "USD"),
-                      lots=lots), note
+                      lots=lots, sim_keys=sim), note
 
 
 # -- aggregate reconciliation ------------------------------------------------

@@ -231,7 +231,8 @@ class Runner:
                                        stock_broker=stock if getattr(stock, "live", False) else None,
                                        pending=saved.get("pending") or [],
                                        base_currency=settings.base_currency,
-                                       lots=self.lots)
+                                       lots=self.lots,
+                                       sim_keys=saved.get("sim_keys") or [])
             print(f"  LIVE BOOK  ${settings.live_capital_base:,.0f} slice of the account, "
                   f"realised so far ${self._ledger.realized:,.2f} — "
                   f"{len(self._live_universe())} USD symbols tradable"
@@ -998,7 +999,13 @@ class Runner:
             try:
                 with open(path) as fh:
                     saved = (json.load(fh) or {}).get("stock_ledger") or {}
-                claims[name] = BookLedger.from_dict(saved.get("ledger") or {}, 0.0).positions()
+                pos = BookLedger.from_dict(saved.get("ledger") or {}, 0.0).positions()
+                # Locally simulated holdings are not claims on the account. The
+                # investing book's 2331.HK was filled by a simulator back when
+                # Hong Kong was unreachable; comparing it against a venue that
+                # holds none of it is not drift detection, it is a false halt.
+                sim = set(saved.get("sim_keys") or [])
+                claims[name] = {k: v for k, v in pos.items() if k not in sim}
             except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError):
                 # A file that EXISTS but cannot be parsed is different: the book
                 # holds something and we cannot tell what. Treating it as empty

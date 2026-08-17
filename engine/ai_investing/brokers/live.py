@@ -428,11 +428,30 @@ class LongbridgeBroker(BrokerAdapter):
         `Expired`, `PartialFilled`, `New`, ...) the shared `confirm_or_pend` maps
         case-insensitively. Anything it does not recognise counts as still working,
         never as a fill: an unknown state must not be optimistically booked.
+
+        THE FILL PRICE IS CONVERTED HERE, and this is the only place it can be.
+        `executed_price` arrives in the LISTING currency. On 2026-08-17 the first
+        Hong Kong order this engine ever placed — 100 shares of 3690.HK for
+        HKD 8,870, about USD 1,129 — was booked into a USD ledger at a cost basis
+        of 8,870. The book's cash fell by seven times what it had spent, its
+        equity read $2,256 against a true $10,000, and every downstream number
+        (the daily notional cap, the drawdown breaker, the learning spine's
+        realized return) inherited it.
+
+        Both fill paths run through here — `confirm_or_pend` for a synchronous
+        fill and `BookBroker.resolve_pending` for a late one — which is why the
+        conversion belongs at this boundary rather than at either caller. Same
+        rule as `get_positions`'s `cost_price` and `_venue_price`'s limits: money
+        crossing this adapter is converted at the crossing, never after.
         """
+        from ai_investing.data import fx
+
         d = self.ctx.order_detail(order_id)
+        px = float(getattr(d, "executed_price", 0) or 0)
+        sym = self.watchlist_symbol(str(getattr(d, "symbol", "") or ""))
         return (getattr(d, "status", None),
                 getattr(d, "executed_quantity", 0) or 0,
-                getattr(d, "executed_price", 0) or 0)
+                fx.to_usd(px, sym, self.settings) if sym else px)
 
     def place_stop(self, asset, side, qty: float, stop_price: float):
         """Rest a protective STOP at Longbridge, so it survives a crash and fires on

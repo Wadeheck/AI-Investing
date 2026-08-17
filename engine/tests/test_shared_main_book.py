@@ -140,7 +140,7 @@ def test_the_ledger_file_carries_pending_orders_and_still_loads_the_old_shape():
     with tempfile.TemporaryDirectory() as tmp:
         r, _ = _runner(tmp)
         state = r.book.ledger_state()
-        assert set(state) == {"ledger", "pending"}
+        assert set(state) == {"ledger", "pending", "sim_keys"}
 
         # The flat shape this file held before pending orders existed.
         with open(r._ledger_path, "w") as fh:

@@ -585,6 +585,66 @@ def test_reconcile_still_checks_usd_listings_alongside_them():
         "and it must not mask a real disagreement about the USD one"
 
 
+# ------------------------- simulated holdings are not claims on the account --
+def test_a_locally_filled_position_is_not_claimed_against_the_account():
+    """A book can hold both kinds at once. `PRX.AS` has no Longbridge symbol and
+    never will, so it is simulated forever — counting it as a claim on an
+    account that holds none of it is not drift detection, it is a false halt."""
+    b = _book(stock=FakeStock())
+    _buy(b, HKEX, 100.0, 10.0)                    # no lot table => simulated
+    assert b.get_positions()["stock:2331.HK"].qty == 100.0, "the book holds it"
+    assert b.working_positions() == {}, "but the ACCOUNT does not"
+    assert reconcile_claims({"investor": b.working_positions()}, {}) == []
+
+
+def test_simulated_ness_survives_a_restart():
+    """It is a fact about how the position was FILLED, not about its market
+    today. 2331.HK was simulated while Hong Kong was unreachable; the day it
+    became reachable, reconciliation halted the engine on 734 shares that were
+    never real."""
+    b = _book(stock=FakeStock())
+    _buy(b, HKEX, 100.0, 10.0)
+    b.settle({"2331.HK": 10.0})
+    saved = json.loads(json.dumps(b.ledger_state()))
+    assert saved["sim_keys"] == ["stock:2331.HK"]
+
+    b2 = BookBroker("investor", BookLedger.from_dict(saved["ledger"], base=100_000.0),
+                    stock_broker=FakeStock(), pending=saved["pending"],
+                    sim_keys=saved["sim_keys"])
+    assert b2.get_positions()["stock:2331.HK"].qty == 100.0
+    assert b2.working_positions() == {}
+
+
+def test_a_venue_fill_clears_the_simulated_flag():
+    """Same symbol, both ways round: simulated while unreachable, real once the
+    lot table arrives."""
+    from ai_investing.brokers.lots import LotBook
+    shared = FakeStock()
+    b = _book(stock=shared)
+    _buy(b, HKEX, 100.0, 10.0)
+    assert b.working_positions() == {}
+
+    b.lots = LotBook("/nonexistent", {"2331.HK": 100})   # now reachable
+    _buy(b, HKEX, 100.0, 10.0)
+    assert shared.sent, "the second order reached the venue"
+    assert "stock:2331.HK" in b.working_positions(), "and is claimed against it"
+
+
+def test_migration_marks_what_it_carried_as_simulated():
+    from ai_investing.brokers.shared import build_book_broker
+
+    class S:
+        shared_stock_account = True
+        base_currency = "USD"
+    state = {"broker": _paper(6_913.07, [
+        {"symbol": "PDD", "asset_class": "stock", "qty": 16.6, "avg_price": 90.16},
+        {"symbol": "2331.HK", "asset_class": "stock", "qty": 734.0, "avg_price": 1.875},
+    ])}
+    b, note = build_book_broker("investor", S(), state, 10_000.0)
+    assert b.sim_keys == {"stock:2331.HK"}
+    assert b.working_positions() == {}, "nothing carried over is a claim"
+
+
 # ---------------------------------------------------------------- migration --
 def _paper(cash, positions):
     return {"cash": cash, "positions": positions}
