@@ -90,8 +90,32 @@ class Runner:
         self.rls = rls or RLSLearner.initialize(
             self.model.weights, prior_confidence=lc.prior_confidence,
             mu=lc.forgetting_mu, trust_region=lc.trust_region)
-        self.tracker = OutcomeTracker()
+        # The open-claims ledger: which φ opened which position. Persisted
+        # because the engine restarts daily and this book holds for weeks — see
+        # the module docstring in learning/attribution.py for what a fresh
+        # tracker taught the model instead.
+        self._claims_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "open_claims.json")
+        try:
+            with open(self._claims_path) as fh:
+                self.tracker = OutcomeTracker.from_state(json.load(fh))
+        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+            self.tracker = OutcomeTracker()
         self.samples_seen = self.rls.updates
+        # SAY WHETHER THE FORMULA IS ACTUALLY LEARNING. "θv1 (learned from 0
+        # trades)" has been in every cycle header for sixteen days and reads as
+        # a version string, not as an alarm. Zero samples has two very different
+        # causes — nothing has closed yet, or closes are not being credited —
+        # and only the open claims distinguish them.
+        ages = self.tracker.pending_ages()
+        if self.samples_seen == 0:
+            oldest = f"{max(ages.values()):.1f}d" if ages else "none"
+            print(f"  LEARNING   the formula has NEVER updated (0 samples). "
+                  f"{len(ages)} position(s) awaiting a close, oldest {oldest} — "
+                  f"θ is still its hand-set priors")
+        else:
+            print(f"  LEARNING   {self.samples_seen} sample(s) so far, "
+                  f"{len(ages)} claim(s) open")
 
         # --- execution realism + safety ---
         c = settings.cost
@@ -724,6 +748,21 @@ class Runner:
                     print(f"  (not tradable in the live slice, decision recorded only: "
                           f"{', '.join(sorted({o.asset.symbol for o in blocked}))})")
                 entries = [o for o in entries if o.asset.key in universe]
+            # AN ORDER IN FLIGHT IS NOT A FREE SLOT. `size_orders` computes
+            # `delta = target - current_notional` from POSITIONS, and a queued
+            # order holds none — so while Longbridge sits on an order
+            # (`NotReported`, routine outside US market hours) this book would
+            # size the same entry again every cycle. That is what emptied the
+            # event sleeve's book on 2026-08-17; the trading book reaches it by a
+            # different route and the same door.
+            in_flight = (self.book.pending_symbols()
+                         if hasattr(self.book, "pending_symbols") else set())
+            if in_flight:
+                waiting = [o for o in entries if o.asset.symbol in in_flight]
+                if waiting:
+                    print(f"  (already working at the venue, not re-sent: "
+                          f"{', '.join(sorted({o.asset.symbol for o in waiting}))})")
+                entries = [o for o in entries if o.asset.symbol not in in_flight]
             if self.settings.trade_approval:
                 entries = self._gate_entries(entries, prices)
             for o in entries:
@@ -940,6 +979,16 @@ class Runner:
     def _learn(self, prices: dict[str, float], features_by_key: dict[str, dict]) -> None:
         lc = self.settings.learning
         samples = self.tracker.sync(self.book.get_positions(), features_by_key, prices)
+        # Written EVERY cycle, before the online-learning gate: the claims ledger
+        # records which φ opened which position, and that has to survive a
+        # restart whether or not the learner is switched on. Writing it after the
+        # `enable_online` return would leave it permanently empty for anyone
+        # running with LEARN_ONLINE=false, and silently break their learning the
+        # day they turned it on.
+        try:
+            atomic.write_json(self._claims_path, self.tracker.state())
+        except OSError:
+            pass
         if not lc.enable_online:
             return
         for s in samples:

@@ -207,6 +207,12 @@ class BookBroker(BrokerAdapter):
         return sum(float(p.get("qty", 0.0)) * float(p.get("price", 0.0))
                    for p in self.pending if p.get("side") == Side.BUY.value)
 
+    def pending_qty(self, key: str, side: Side) -> float:
+        """Shares of `key` already promised to unanswered orders on `side`."""
+        return sum(float(p.get("qty", 0.0)) - float(p.get("filled_qty", 0.0) or 0.0)
+                   for p in self.pending
+                   if p.get("key") == key and p.get("side") == side.value)
+
     def pending_symbols(self) -> set[str]:
         """Symbols with an order in flight.
 
@@ -287,9 +293,13 @@ class BookBroker(BrokerAdapter):
                 order.status = OrderStatus.REJECTED
                 order.reason = (order.reason + " | " + SHORTS_REFUSED).strip(" |")
                 return order
-            # Cap at the claim. A book that asks to sell more than it holds is
-            # reaching into another book's position, whether it means to or not.
-            capped = min(qty, math.floor(held_qty))
+            # Cap at the claim, LESS whatever is already promised to an
+            # unanswered sell. A queued sell does not reduce the claim, so an
+            # exit that re-fires while its first order sits `NotReported` would
+            # pass this check twice and sell the same ten shares twice — taking
+            # the account short, or straight through another book's position.
+            available = math.floor(held_qty) - self.pending_qty(key, Side.SELL)
+            capped = min(qty, max(0.0, available))
             if capped < qty:
                 self.notes.append(
                     f"{self.book_id}: {order.asset.symbol} sell capped at its own "
@@ -297,8 +307,8 @@ class BookBroker(BrokerAdapter):
             qty = capped
             if qty < 1:
                 order.status = OrderStatus.REJECTED
-                order.reason = (order.reason + f" | {self.book_id} claims no "
-                                               f"{key} to sell").strip(" |")
+                order.reason = (order.reason + f" | {self.book_id} has no "
+                                               f"unpromised {key} to sell").strip(" |")
                 return order
 
         order.qty = float(qty)

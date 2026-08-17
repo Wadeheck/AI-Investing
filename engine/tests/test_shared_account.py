@@ -478,6 +478,43 @@ def test_a_rejected_order_gives_its_committed_cash_back():
     assert b.get_cash() == 10_000.0, "a refused order must not hold cash hostage"
 
 
+def test_a_queued_sell_cannot_be_sent_twice_and_oversell_the_claim():
+    """The nastier half of the same bug. A queued SELL does not reduce the
+    claim, so an exit that re-fires while its first order sits `NotReported`
+    passes the "sell only what you claim" check a second time — ten shares sold
+    twice, taking the account short or straight through another book's
+    position."""
+    shared = FakeStock()
+    b = _book(stock=shared)
+    _buy(b, NVDA, 10.0, 100.0)
+    shared.mode = "pend"
+
+    first = _sell(b, NVDA, 10.0, 110.0)
+    assert first.status is OrderStatus.PENDING
+    second = _sell(b, NVDA, 10.0, 110.0)          # the exit re-fires next cycle
+    assert second.status is OrderStatus.REJECTED
+    assert "unpromised" in second.reason
+    assert len([s for s in shared.sent if s.side is Side.SELL]) == 1
+
+
+def test_a_dead_sell_order_frees_the_claim_to_be_exited_again():
+    """The cap must not become a trap: if the exit order dies, the position is
+    still held and still needs its exit."""
+    shared = FakeStock()
+    b = _book(stock=shared)
+    _buy(b, NVDA, 10.0, 100.0)
+    shared.mode = "pend"
+    _sell(b, NVDA, 10.0, 110.0)
+    assert _sell(b, NVDA, 10.0, 110.0).status is OrderStatus.REJECTED
+
+    shared.settle("ord2", 0.0, 0.0, status="Expired")
+    b.resolve_pending()
+    shared.mode = "fill"
+    again = _sell(b, NVDA, 10.0, 110.0)
+    assert again.status is OrderStatus.FILLED and again.filled_qty == 10.0
+    assert b.get_positions() == {}
+
+
 def test_pending_symbols_reports_what_is_in_flight():
     shared = FakeStock(mode="pend")
     b = _book(stock=shared)
