@@ -125,6 +125,53 @@ def test_no_books_means_no_opinion():
     assert "book cash commitment" not in out
 
 
+# ------------------------------------ a latched fault is announced ONCE -----
+def test_an_ongoing_data_fault_is_not_re_announced_after_a_restart():
+    """`688836.SS` is Unitree — a STAR Market listing that has not started
+    trading, so neither Yahoo nor Longbridge prices it. It has been flagged
+    1,094 times, and on 2026-08-17 it paged the user twice in one hour for the
+    sole reason that the engine restarted twice: `_flagged_symbols` was
+    in-memory, so every boot rediscovered every ongoing fault as new."""
+    import json as _json
+    from ai_investing.util import atomic
+
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "data_guard_flags.json")
+
+    def announce(bad, remembered):
+        """The runner's rule: alert only on what CHANGED."""
+        return sorted(set(bad) - set(remembered)), sorted(set(remembered) - set(bad))
+
+    bad = {"stock:688836.SS"}
+    remembered = set()
+    newly, cleared = announce(bad, remembered)
+    assert newly, "the first sighting must alert"
+    atomic.write_json(path, sorted(bad))
+
+    # the engine restarts, twice
+    for _ in range(2):
+        with open(path) as fh:
+            remembered = set(_json.load(fh))
+        newly, cleared = announce(bad, remembered)
+        assert not newly and not cleared, \
+            "a restart must not turn a latched condition back into an event"
+
+    # and a genuine recovery still speaks
+    with open(path) as fh:
+        remembered = set(_json.load(fh))
+    newly, cleared = announce(set(), remembered)
+    assert cleared == ["stock:688836.SS"]
+
+
+def test_the_stall_remedy_matches_the_engine_that_stalled():
+    """The alert said "restart with `make run`" whatever the mode. Under systemd
+    that starts a SECOND engine writing the same books — the reason the old
+    @reboot cron entry was removed. A remedy that is wrong gets followed."""
+    src = (ROOT / "scripts" / "daily_status.py").read_text()
+    assert "systemctl --user restart ai-investing" in src
+    assert '"engine cycling"' in src, "and it should not still be called paper"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

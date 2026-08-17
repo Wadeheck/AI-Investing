@@ -181,7 +181,24 @@ class Runner:
         # Symbols the data guard flagged on the previous cycle, so an ongoing fault
         # is announced once instead of every cycle. Shipping the USE of this without
         # the initialisation crash-looped the engine 18 times (see STATE §4.16).
-        self._flagged_symbols: set[str] = set()
+        #
+        # PERSISTED, because the fault outlives the process that announced it.
+        # This was in-memory, so every restart rediscovered every ongoing fault as
+        # "new" and re-announced it. `688836.SS` (Unitree — a STAR Market listing
+        # that has not started trading, so neither Yahoo nor Longbridge prices it)
+        # has been flagged 1,094 times, and on 2026-08-17 it paged the user twice
+        # in an hour for the sole reason that I restarted the engine twice.
+        #
+        # That is §4.16 one level up: the CONDITION survives a restart and the
+        # memory of having reported it does not, so a latched condition becomes
+        # an event again on every boot.
+        self._flags_path = os.path.join(
+            os.path.dirname(os.path.abspath(settings.state_path)), "data_guard_flags.json")
+        try:
+            with open(self._flags_path) as fh:
+                self._flagged_symbols: set[str] = set(json.load(fh) or [])
+        except (OSError, json.JSONDecodeError, TypeError):
+            self._flagged_symbols = set()
         # last news/context failure signature, so a persistent provider outage is
         # one alert rather than one per cycle (the 4th announce-the-state instance)
         self._last_news_error: str | None = None
@@ -535,7 +552,12 @@ class Runner:
             if cleared:
                 parts.append(f"✅ data recovered: {', '.join(sorted(cleared))}")
             self.notifier.send("\n".join(parts))
-        self._flagged_symbols = set(bad_data)
+        if set(bad_data) != self._flagged_symbols:
+            self._flagged_symbols = set(bad_data)
+            try:
+                atomic.write_json(self._flags_path, sorted(self._flagged_symbols))
+            except OSError:
+                pass
 
         # Prices the guard did NOT reject. Valuation must use these, not the raw
         # feed: equity is the number the circuit breaker judges, and judging it

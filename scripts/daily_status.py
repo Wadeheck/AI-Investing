@@ -478,9 +478,24 @@ def main() -> int:
     st = D("state.json")
     a = age_h(st)
     eng = a is not None and a < 1.0
-    ok &= row("paper engine", eng,
-              (f"cycle {a:.2f}h ago" if a else "never run") +
-              ("" if eng else "  <-- STALLED: restart with `make run`"))
+    # NAME THE ENGINE THAT IS ACTUALLY RUNNING, AND THE RIGHT WAY TO RESTART IT.
+    # This said "paper engine ... restart with `make run`" whatever the mode. On
+    # 2026-08-17 the LIVE engine stalled and the alert told the user to run the
+    # one command that would have started a SECOND engine alongside the systemd
+    # unit — two engines writing one set of books, which OPERATIONS.md calls out
+    # as the reason the old @reboot cron entry was removed. A remedy that is
+    # wrong is worse than no remedy: it gets followed.
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings as _S
+        _live = _S().live
+    except Exception:                                         # noqa: BLE001
+        _live = False
+    ok &= row("engine cycling", eng,
+              (f"cycle {a:.2f}h ago" if a else "never run")
+              + ("" if eng else
+                 "  <-- STALLED: `systemctl --user restart ai-investing`" if _live
+                 else "  <-- STALLED: restart with `make run`"))
     # WHICH BOOK IS ACTUALLY BEING TRADED. paper_state.json stopped being the
     # trading book the moment LIVE_TRADING was enabled — it is now a frozen
     # snapshot, and reporting it as "the book" is this project's oldest failure
