@@ -169,13 +169,54 @@ class BookBroker(BrokerAdapter):
         # as drift to a naive snapshot comparison — the runner uses this to
         # re-baseline exactly those keys and no others.
         self.resolved_keys: set[str] = set()
+        # Symbols whose in-flight order ended with NOTHING filled — refused,
+        # cancelled, or expired at the close. A strategy that recorded an intent
+        # when it submitted has to be told to forget it, or the symbol stays
+        # blocked by a trade that never happened.
+        self.dropped_symbols: set[str] = set()
 
     # -- the BrokerAdapter surface ------------------------------------------
     def get_positions(self) -> dict[str, Position]:
         return {k: p for k, p in self._working.items() if abs(p.qty) > 1e-9}
 
     def get_cash(self) -> float:
-        return self.ledger.book_portfolio(self.get_positions()).cash
+        """SPENDABLE cash — the ledger's, less what live orders have already
+        committed.
+
+        The distinction is the whole ballgame and its absence nearly cost the
+        event sleeve its book. Longbridge answers an order placed outside US
+        market hours with `NotReported`: queued, not filled, not rejected. That
+        is honestly PENDING, so no position is claimed and the ledger does not
+        move — and the ledger is what this used to return. So the book reported
+        its full cash again on the very next cycle, and again, and again, and
+        every one of those cycles was free to spend it a second time.
+
+        On 2026-08-17 the sleeve held $7,612 and had $33,946 of queued buy
+        orders against it — 4.46x a book whose docstring says LONG ONLY AND
+        UNLEVERED — waiting for the opening bell to all fill at once.
+
+        Cash committed to a live order is not cash. Equity therefore reads low
+        by the committed amount while orders are in flight; that is the
+        conservative direction, it is visible in `pending_commitment()`, and it
+        resolves the moment the venue answers.
+        """
+        return self.ledger.book_portfolio(self.get_positions()).cash - self.pending_commitment()
+
+    def pending_commitment(self) -> float:
+        """Cash promised to buy orders the venue has taken but not yet answered."""
+        return sum(float(p.get("qty", 0.0)) * float(p.get("price", 0.0))
+                   for p in self.pending if p.get("side") == Side.BUY.value)
+
+    def pending_symbols(self) -> set[str]:
+        """Symbols with an order in flight.
+
+        A strategy asking "do I already hold this?" is really asking "have I
+        already acted on this?", and between submitting and filling those differ.
+        Every re-entry guard in this engine was written against positions alone,
+        so while an order sat queued the same shock re-qualified the same symbol
+        every cycle: NVDA and AMD were each ordered twice within 45 minutes.
+        """
+        return {str(p.get("symbol")) for p in self.pending if p.get("symbol")}
 
     def working_positions(self) -> dict[str, Position]:
         """This book's claim on the shared account. Feed to `reconcile_claims`."""
@@ -376,17 +417,42 @@ class BookBroker(BrokerAdapter):
         positions — so a fill from three cycles ago is part of the book before
         anything decides what to do next.
         """
-        self.resolved_keys = set()
+        self.resolved_keys, self.dropped_symbols = set(), set()
         if not self.pending or self.stock_broker is None:
             return []
         still: list[dict] = []
         out: list[str] = []
         for rec in self.pending:
+            before = len(still)
             note = self._resolve_one(rec, still)
             if note:
                 out.append(note)
+            # The age warning lives HERE, not inside `_resolve_one`, because it
+            # applies to every record that SURVIVES — including the one that
+            # survived because the venue could not be reached, which is the case
+            # most worth hearing about and the one the old placement skipped.
+            if len(still) > before:
+                stuck = self._age_note(still[-1])
+                if stuck:
+                    out.append(stuck)
         self.pending = still
         return out
+
+    def _age_note(self, rec: dict) -> str | None:
+        """Say it ONCE. This fired on every poll past the threshold and wrote 209
+        journal lines about nine orders in a single evening — the same
+        alert-fatigue failure that buried the crash-loop diagnosis in STATE
+        §4.16. An order sitting queued is a STATE; announce it when it becomes
+        true, not for as long as it stays true."""
+        if rec.get("warned"):
+            return None
+        age = _age_seconds(rec.get("ts"))
+        if age is None or age <= PENDING_WARN_SECONDS:
+            return None
+        rec["warned"] = True
+        return (f"{self.book_id}: order {rec['id']} ({rec['symbol']} "
+                f"{rec['side']} {rec['qty']:g}) still unresolved after "
+                f"{age / 3600:.1f}h — its cash stays committed until it settles")
 
     def _resolve_one(self, rec: dict, still: list[dict]) -> str | None:
         rec["checks"] = int(rec.get("checks", 0)) + 1
@@ -429,16 +495,17 @@ class BookBroker(BrokerAdapter):
             return (f"{self.book_id}: late fill {rec['symbol']} {rec['side']} "
                     f"{cum:g} @ {px or rec['price']:.4f} (order {rec['id']})")
         if s in ("rejected", "canceled", "cancelled", "expired"):
-            if new > 1e-9:
+            if new > 1e-9 or cum > 1e-9:
                 return (f"{self.book_id}: {rec['symbol']} partially filled {cum:g} "
                         f"of {rec['qty']:g} then {s} (order {rec['id']})")
-            return None                      # a clean reject claims nothing
-        still.append(rec)
-        age = _age_seconds(rec.get("ts"))
-        if age is not None and age > PENDING_WARN_SECONDS:
-            return (f"{self.book_id}: order {rec['id']} ({rec['symbol']} "
-                    f"{rec['side']} {rec['qty']:g}) still unresolved after "
-                    f"{age / 3600:.1f}h — the claim is not booked until it settles")
+            # A clean reject claims nothing — and releases everything: the cash it
+            # had committed, and the strategy's record of having acted on this
+            # name. Without the second, a Day order that simply expired unfilled
+            # would bar its symbol from the book for good.
+            self.dropped_symbols.add(str(rec.get("symbol")))
+            return (f"{self.book_id}: {rec['symbol']} {rec['side']} {rec['qty']:g} "
+                    f"{s} unfilled — cash released (order {rec['id']})")
+        still.append(rec)          # still working; the age warning is in the caller
         return None
 
     # -- end of cycle --------------------------------------------------------

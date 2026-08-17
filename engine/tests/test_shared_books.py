@@ -25,6 +25,7 @@ class FakeStock(BrokerAdapter):
     def __init__(self, cash=1_000_000.0, mode="fill"):
         self.cash, self.mode = float(cash), mode
         self.positions, self.sent, self._n = {}, [], 0
+        self.details = {}          # order id -> (status, executed_qty, price)
 
     def get_cash(self):
         return self.cash
@@ -33,9 +34,9 @@ class FakeStock(BrokerAdapter):
         return dict(self.positions)
 
     def submit(self, order, price):
-        self.sent.append((order.asset.symbol, order.side.value, order.qty))
         self._n += 1
         order.id = f"ord{self._n}"
+        self.sent.append((order.asset.symbol, order.side.value, order.qty, order.id))
         if self.mode == "pend":
             order.status = OrderStatus.PENDING
             return order
@@ -53,7 +54,7 @@ class FakeStock(BrokerAdapter):
         return order
 
     def fetch_fill(self, order_id):
-        return None
+        return self.details.get(order_id)
 
 
 class Quiet:
@@ -88,7 +89,7 @@ def test_sleeve_sends_whole_shares_to_the_venue_and_records_the_claim():
         sl.cycle({"AAA": {"impact": 0.3, "node": "semis"}}, {"AAA": 137.0})
 
         assert len(venue.sent) == 1, "the entry must reach the shared account"
-        sym, side, qty = venue.sent[0]
+        sym, side, qty, _oid = venue.sent[0]
         assert (sym, side) == ("AAA", "buy")
         assert qty == float(int(qty)) and qty >= 1, f"fractional qty sent: {qty}"
 
@@ -180,6 +181,70 @@ def test_the_books_competing_for_cash_leaves_a_trace():
         assert notes and "shared-account cash" in notes[0]["note"]
 
 
+def test_a_persistent_shock_against_a_closed_market_cannot_run_away():
+    """THE 2026-08-17 INCIDENT, reproduced.
+
+    Longbridge answers anything submitted outside US market hours with
+    `NotReported` — queued, not filled. Nothing filled, so no position existed,
+    so every cycle found all three slots free and the full book of cash, and
+    fired again. Twenty cycles of one persistent shock produced ten live orders
+    worth $33,946 against a $7,612 book: 4.46x, on a sleeve whose docstring says
+    LONG ONLY AND UNLEVERED, all waiting to fill at once on the opening bell.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        st, venue = _settings(tmp), FakeStock(mode="pend")
+        shocks = {s: {"impact": 0.3} for s in ("AAA", "BBB", "CCC", "DDD", "EEE")}
+        prices = {s: 100.0 for s in shocks}
+        for _ in range(20):                       # the market stays shut all night
+            es.EventSleeve(st, venue).cycle(dict(shocks), dict(prices))
+
+        book = es.EventSleeve(st, venue).broker
+        committed = book.pending_commitment()
+        assert len(venue.sent) <= es.EVENT_N, \
+            f"{len(venue.sent)} live orders against a {es.EVENT_N}-position limit"
+        assert len(book.pending_symbols()) == len(book.pending), \
+            "the same symbol must never be ordered twice while one is in flight"
+        assert committed <= es.START_CASH + 1e-6, \
+            f"committed ${committed:,.0f} against a ${es.START_CASH:,.0f} book"
+        assert book.get_cash() >= -1e-6, "spendable cash must never go negative"
+
+
+def test_an_order_that_dies_unfilled_stops_barring_its_symbol():
+    """Recording the intent on submission is what stops duplicate orders — and
+    it creates the opposite hazard: a Day order that simply expired at the close
+    would bar its symbol from the book for good. The intent has to die with the
+    order."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, venue = _settings(tmp), FakeStock(mode="pend")
+        es.EventSleeve(st, venue).cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        assert _state(tmp, "event_state.json")["held"]["AAA"]["pending"] is True
+        assert len(venue.sent) == 1
+
+        # Same shock next cycle: the queued order must suppress a second order.
+        es.EventSleeve(st, venue).cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        assert len(venue.sent) == 1, "a queued order must not be re-sent"
+
+        venue.details[venue.sent[0][3]] = ("Expired", 0, 0)   # the close arrives
+        venue.mode = "fill"
+        es.EventSleeve(st, venue).cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        assert len(venue.sent) == 2, "once the order is dead the name is free again"
+        assert _state(tmp, "event_state.json")["broker"]["positions"], "and it filled"
+
+
+def test_a_queued_entry_is_journalled_as_submitted_not_rejected():
+    """Ten queued orders were journalled as rejections while $33,946 sat
+    committed to them. "The sleeve declined this shock" and "the sleeve has
+    money riding on this shock" are opposite readings of the same record."""
+    with tempfile.TemporaryDirectory() as tmp:
+        st, venue = _settings(tmp), FakeStock(mode="pend")
+        es.EventSleeve(st, venue).cycle({"AAA": {"impact": 0.3}}, {"AAA": 100.0})
+        rows = [json.loads(l) for l in open(os.path.join(tmp, "event_journal.jsonl"))]
+        kinds = {r["event"] for r in rows}
+        assert "submitted" in kinds and "rejected" not in kinds
+        sub = next(r for r in rows if r["event"] == "submitted")
+        assert sub["order_id"], "the venue's order id is the only way to trace it"
+
+
 def test_a_migration_is_journalled_once_and_only_once_persisted():
     """These books are constructed several times a cycle, and some paths return
     without saving — `daily_manage` bails early when the day is already managed.
@@ -230,7 +295,7 @@ def test_investor_buys_whole_shares_through_the_shared_account():
         inv = Investor(st, venue)
         inv.daily_manage({"AAA": 333.0}, _strategy(), Quiet(), {})
         assert len(venue.sent) == 1
-        _, side, qty = venue.sent[0]
+        _, side, qty, _oid = venue.sent[0]
         assert side == "buy" and qty == float(int(qty)) and qty >= 1
         assert _state(tmp, "invest_state.json")["stock_ledger"]["ledger"]["marks"]
 

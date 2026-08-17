@@ -459,8 +459,19 @@ class Investor:
         return True
 
     def _held(self, symbol: str) -> bool:
-        return any(p.asset.symbol == symbol and abs(p.qty) > 1e-9
-                   for p in self.broker.get_positions().values())
+        """Have we already acted on this symbol — position OR order in flight?
+
+        Positions alone is the wrong test once orders are real. Between
+        submitting and filling the two differ, and Longbridge leaves an order
+        submitted outside US market hours as `NotReported` for hours. Every
+        caller of this gates an entry on it, so a fill-only answer re-proposes
+        and re-buys the same name every day the order sits queued.
+        """
+        if any(p.asset.symbol == symbol and abs(p.qty) > 1e-9
+               for p in self.broker.get_positions().values()):
+            return True
+        pend = getattr(self.broker, "pending_symbols", None)
+        return bool(pend and symbol in pend())
 
     def _equity(self, prices_by_symbol: dict[str, float]) -> float:
         eq = self.broker.get_cash()

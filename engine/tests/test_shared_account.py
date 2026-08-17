@@ -431,6 +431,79 @@ def test_state_keeps_paper_brokers_shape_for_readers():
     assert abs(view["cash"] - b.get_cash()) < 1e-9
 
 
+# ------------------------------- orders in flight commit cash and occupy a name --
+def test_a_queued_order_commits_its_cash_immediately():
+    """THE 4.46x BUG (2026-08-17). Longbridge answers an order placed outside US
+    market hours with `NotReported` — queued, not filled. That is honestly
+    PENDING, so no position is claimed and the ledger does not move. `get_cash()`
+    returned the ledger, so the book reported its full cash again next cycle and
+    spent it a second time. The sleeve ended with $33,946 of queued buys against
+    a $7,612 book, all waiting to fill at the opening bell."""
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    o = _buy(b, NVDA, 30.0, 100.0)
+    assert o.status is OrderStatus.PENDING
+    assert b.pending_commitment() == 3_000.0
+    assert b.get_cash() == 7_000.0, "cash committed to a live order is not cash"
+
+
+def test_a_book_cannot_spend_the_same_cash_twice_while_orders_queue():
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    for _ in range(5):
+        _buy(b, NVDA, 40.0, 100.0)      # $4,000 each against a $10,000 book
+    committed = b.pending_commitment()
+    assert committed <= 10_000.0 + 1e-6, \
+        f"the book committed ${committed:,.0f} of a $10,000 pot"
+    assert b.get_cash() >= -1e-6, "spendable cash must never go negative"
+
+
+def test_a_filled_order_stops_committing_and_starts_costing():
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    _buy(b, NVDA, 30.0, 100.0)
+    shared.settle("ord1", 30.0, 100.0)
+    b.resolve_pending()
+    assert b.pending_commitment() == 0.0, "no longer in flight"
+    assert abs(b.get_cash() - (7_000.0 - b.ledger.fees)) < 1e-6, "now a real cost"
+
+
+def test_a_rejected_order_gives_its_committed_cash_back():
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    _buy(b, NVDA, 30.0, 100.0)
+    assert b.get_cash() == 7_000.0
+    shared.settle("ord1", 0.0, 0.0, status="Rejected")
+    b.resolve_pending()
+    assert b.get_cash() == 10_000.0, "a refused order must not hold cash hostage"
+
+
+def test_pending_symbols_reports_what_is_in_flight():
+    shared = FakeStock(mode="pend")
+    b = _book(stock=shared)
+    _buy(b, NVDA, 10.0, 100.0)
+    assert b.pending_symbols() == {"NVDA"}
+    shared.settle("ord1", 10.0, 100.0)
+    b.resolve_pending()
+    assert b.pending_symbols() == set(), "settled orders are no longer in flight"
+
+
+def test_the_stuck_order_warning_fires_once_not_every_cycle():
+    """209 journal lines about nine orders in one evening. The noise does not
+    merely annoy — it is the same alert-fatigue failure that buried the
+    crash-loop diagnosis in STATE 4.16."""
+    from datetime import datetime, timedelta, timezone
+    shared = FakeStock(mode="pend")
+    b = _book(stock=shared)
+    _buy(b, NVDA, 10.0, 100.0)
+    old = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
+    b.pending[0]["ts"] = old
+    notes = [n for _ in range(6) for n in b.resolve_pending()]
+    assert len(notes) == 1, f"expected one warning, got {len(notes)}"
+    assert "still unresolved" in notes[0]
+    assert len(b.pending) == 1, "and the order is still watched, just not re-announced"
+
+
 # --------------------------------------------- only USD listings go to Longbridge
 HKEX = Asset("2331.HK", AssetClass.STOCK)
 AMS = Asset("PRX.AS", AssetClass.STOCK)

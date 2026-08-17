@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.shared import build_book_broker
 from ai_investing.util import atomic
-from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
+from ai_investing.models import Asset, AssetClass, Order, OrderStatus, Side, mark_price
 
 EVENT_MIN = float(os.environ.get("EVENT_MIN", "0.05"))
 EVENT_N = int(os.environ.get("EVENT_N", "3"))
@@ -224,6 +224,23 @@ class EventSleeve:
             self._log("pending", note=note)
             print(f"  [event sleeve] {note}")
         held = self._state.setdefault("held", {})     # sym -> {entry, opened_iso, bars}
+        # WHAT THIS BOOK HAS ALREADY ACTED ON: filled positions plus orders still
+        # in flight. Computed once, here, because three separate decisions below
+        # need the same answer and the last time this book asked the question two
+        # different ways it bought USO twice.
+        in_flight = (self.broker.pending_symbols()
+                     if hasattr(self.broker, "pending_symbols") else set())
+        open_syms = ({p.asset.symbol for p in self.broker.get_positions().values()}
+                     | in_flight)
+        # `held` records an INTENT, and an intent can die. An entry marked
+        # pending whose order is neither filled nor still in flight was refused,
+        # cancelled or expired at the close — it must stop barring its symbol, or
+        # a trade that never happened bars the name for good. Written as an
+        # invariant rather than an event handler so it also heals an order
+        # cancelled by hand at the venue.
+        for sym in [s for s, m in list(held.items())
+                    if (m or {}).get("pending") and s not in open_syms]:
+            held.pop(sym, None)
         today = datetime.now(timezone.utc).date().isoformat()
         days = self._state.setdefault("seen_days", [])
         if today not in days:
@@ -284,8 +301,12 @@ class EventSleeve:
         # 2) entries — biggest fresh shocks above the floor. Long only by
         # default; negative shocks become shorts only when EVENT_SHORT is on
         # AND (winter, unless the winter gate is explicitly removed).
-        open_n = len(self.broker.get_positions())
-        room = max(0, EVENT_N - open_n)
+        # IN-FLIGHT ORDERS OCCUPY A SLOT. Counting only filled positions is what
+        # let the sleeve hold ten orders against a three-position limit on
+        # 2026-08-17: Longbridge answers `NotReported` to anything submitted
+        # outside US market hours, so nothing filled, so every cycle believed all
+        # three slots were free and spent the book again.
+        room = max(0, EVENT_N - len(open_syms))
         if room:
             eq = self._equity(prices_by_sym)
             # THE RE-ENTRY GUARD, AND IT NEVER WORKED (fixed 2026-08-04).
@@ -302,7 +323,10 @@ class EventSleeve:
             # Compare symbols to symbols. The exit path a few lines up got this
             # right — it uses `pos.asset.symbol` — which is why exits worked while
             # entries doubled up, and why nothing looked broken.
-            open_syms = {p.asset.symbol for p in self.broker.get_positions().values()}
+            # ...and `open_syms` (computed at the top of this method) now covers
+            # orders still in flight as well, for the same reason and with the
+            # same consequence: NVDA and AMD were each ordered twice within 45
+            # minutes on 2026-08-17 because a queued order is not a position.
             shorts_ok = EVENT_SHORT and (winter or not EVENT_SHORT_WINTER)
             cands = []
             for sym, row in (shock_assets or {}).items():
@@ -351,10 +375,27 @@ class EventSleeve:
                     # path was silent, so "why did the sleeve skip that shock" had
                     # no answer anywhere — investor.py has logged its refusals
                     # since it was written and this file never did.
-                    self._log("rejected", symbol=sym, price=round(px, 6),
+                    #
+                    # PENDING IS NOT REJECTED. The venue took the order and has
+                    # not answered yet; calling that a refusal in the record
+                    # reads as "the sleeve declined this shock" when in fact it
+                    # has money committed to it. Ten of these were journalled as
+                    # rejections on 2026-08-17 while $33,946 sat queued.
+                    submitted = o.status is OrderStatus.PENDING
+                    self._log("submitted" if submitted else "rejected",
+                              symbol=sym, price=round(px, 6),
                               requested_qty=round(qty, 6), shock=round(im, 4),
                               notional=round(notional, 2),
-                              reason=(o.reason or "no fill"))
+                              order_id=(o.id or None) if submitted else None,
+                              reason=(o.reason or ("awaiting the venue" if submitted
+                                                   else "no fill")))
+                    if submitted:
+                        # It occupies a slot and its cash from here on, so record
+                        # the intent now rather than when it fills — otherwise the
+                        # clock and the stop start from whenever the venue gets
+                        # round to it.
+                        held.setdefault(sym, {"entry": px, "opened_day": today,
+                                              "shock": round(im, 4), "pending": True})
                 if o.filled_qty:
                     notional = float(o.filled_qty) * float(o.filled_price or px)
                     held[sym] = {"entry": float(o.filled_price or px),
