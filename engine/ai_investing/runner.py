@@ -70,6 +70,12 @@ class Runner:
                 pass
         self.journal = Journal(settings.db_path)
         self.assets = self._build_watchlist()
+        # Board lots, cached on disk. Loaded before anything asks what the live
+        # universe is, because "do we know this symbol's quantity unit" is now
+        # part of that answer.
+        from ai_investing.brokers.lots import LotBook
+        self.lots = LotBook.load(os.path.dirname(os.path.abspath(settings.state_path)))
+        self._refresh_lot_sizes()
         self._first_cycle = True
         self._cycles = 0
         self._last_mark_day = None      # None = not yet seeded from the journal
@@ -129,7 +135,7 @@ class Runner:
         self.regime = RegimeGate(high_vol=rg.high_vol, ood_z=rg.ood_z, min_mult=rg.min_mult,
                                  feature_mean=self.model.feature_mean,
                                  feature_std=self.model.feature_std) if rg.enabled else None
-        self.risk = RiskManager(settings.risk, regime_gate=self.regime)
+        self.risk = RiskManager(settings.risk, regime_gate=self.regime, lots=self.lots)
 
         # --- alerts ---
         self.notifier = get_notifier(settings)
@@ -224,12 +230,49 @@ class Runner:
                 self.book = BookBroker("main", self._ledger,
                                        stock_broker=stock if getattr(stock, "live", False) else None,
                                        pending=saved.get("pending") or [],
-                                       base_currency=settings.base_currency)
+                                       base_currency=settings.base_currency,
+                                       lots=self.lots)
             print(f"  LIVE BOOK  ${settings.live_capital_base:,.0f} slice of the account, "
                   f"realised so far ${self._ledger.realized:,.2f} — "
                   f"{len(self._live_universe())} USD symbols tradable"
                   + ("  [SHARED ACCOUNT]" if settings.shared_stock_account else ""))
         self._check_shared_ceilings()
+
+    def _refresh_lot_sizes(self) -> None:
+        """Ask Longbridge for board lots once at start-up, and cache them.
+
+        Once, not per cycle: a listing's lot size changes about as often as its
+        ticker does, and a network call between deciding to trade and sizing the
+        trade is a call that can fail at the worst moment. A symbol whose lot is
+        unknown stays out of `_live_universe()` until a later start-up learns
+        it — untradable is recoverable, a wrong quantity unit is not.
+        """
+        if not (self.settings.live and self.settings.stock_broker == "longbridge"):
+            return
+        want = [a.symbol for a in self.assets if a.asset_class is AssetClass.STOCK]
+        missing = [x for x in want if self.lots.lot_size(x) is None]
+        if not missing:
+            return
+        try:
+            import os as _os
+            from longport.openapi import Config, QuoteContext  # type: ignore
+            from ai_investing.brokers.lots import fetch_lot_sizes
+            qc = QuoteContext(Config.from_apikey(
+                app_key=_os.environ["LONGPORT_APP_KEY"],
+                app_secret=_os.environ["LONGPORT_APP_SECRET"],
+                access_token=_os.environ["LONGPORT_ACCESS_TOKEN"]))
+            found = fetch_lot_sizes(missing, qc)
+        except Exception as exc:                                  # noqa: BLE001
+            print(f"  [lots] could not refresh board lots: "
+                  f"{type(exc).__name__}: {str(exc)[:90]}")
+            return
+        added = self.lots.update(found)
+        if added:
+            self.lots.save()
+        unknown = [x for x in missing if x not in found]
+        print(f"  LOTS       {len(self.lots.known())} board lots cached "
+              f"(+{added} this start); {len(unknown)} symbol(s) the venue does "
+              f"not carry, held out of the tradable universe")
 
     def _check_shared_ceilings(self) -> None:
         """Do the three books' ceilings actually fit inside the account?
@@ -303,22 +346,33 @@ class Runner:
         return PaperBroker(starting_cash, allow_short=self.settings.risk.allow_short)
 
     def _live_universe(self) -> set[str]:
-        """What the live-routed book may trade. USD-listed stocks only.
+        """What the live-routed book may trade: every stock the venue can reach
+        AND whose board lot we actually know.
 
-        Two live-adapter defects make anything else unsafe rather than merely
-        unsupported, and both are documented on the adapter itself:
-        `cost_price` arrives in the LISTING currency while every price here is
-        USD-normalised (so HK P&L would mix HKD with USD), and Longbridge's symbol
-        format only round-trips cleanly for `.US` names.
+        This was USD-listed stocks only, on two stated grounds that both turned
+        out to be wrong when probed (2026-08-17). `cost_price` currency was
+        already converted at the adapter boundary — the docstring saying
+        otherwise was stale. And the symbol format did not "only round-trip for
+        `.US`"; the watchlist simply speaks Yahoo (`D05.SI`, `600519.SS`) while
+        Longbridge speaks its own dialect (`D05.SG`, `600519.SH`) and answers an
+        unknown string with an empty list rather than an error. Translated, the
+        venue resolves 116 of the 126 non-USD names, and the account holds SGD
+        1,000,000 and HKD 1,000,000 to trade them with.
 
-        Crypto is excluded for a plainer reason: the segregated Gemini account is
-        empty, so those orders can only reject. The ₿ book trades them on paper
-        and is untouched by this.
+        So the gate is now the two things that are actually true: can the symbol
+        be expressed at the venue, and do we know the quantity unit it trades in.
+        A name whose board lot is unknown is excluded rather than guessed — see
+        brokers/lots.py on why there is no safe default.
+
+        Crypto stays out for a plainer reason that IS still true: the segregated
+        Gemini account holds $0, so those orders can only reject. The ₿ book
+        trades them on paper and is untouched by this.
         """
-        from ai_investing.data.fx import currency_of
+        from ai_investing.brokers.symbols import reachable
         return {a.key for a in self.assets
                 if a.asset_class is AssetClass.STOCK
-                and currency_of(a.symbol, "stock") == self.settings.base_currency}
+                and reachable(a.symbol)
+                and self.lots.lot_size(a.symbol)}
 
     def _tradable_universe(self) -> set[str]:
         """Keys this book has a mandate over — the gate on every exit path."""
@@ -427,8 +481,10 @@ class Runner:
         # constructor does not accept one.
         shared = self._shared_stock_broker()
         for name, cls, kw in (("crypto", CryptoBook, {}),
-                              ("event sleeve", EventSleeve, {"stock_broker": shared}),
-                              ("investor", Investor, {"stock_broker": shared})):
+                              ("event sleeve", EventSleeve,
+                               {"stock_broker": shared, "lots": self.lots}),
+                              ("investor", Investor,
+                               {"stock_broker": shared, "lots": self.lots})):
             try:
                 cls(self.settings, **kw).mark(px_by_sym)
             except Exception as exc:                    # noqa: BLE001
@@ -604,7 +660,8 @@ class Runner:
             try:
                 from ai_investing.brain.strategist import load_strategy, _labels
                 from ai_investing.strategy.investor import Investor
-                Investor(self.settings, self._shared_stock_broker()).daily_manage(
+                Investor(self.settings, self._shared_stock_broker(),
+                         lots=self.lots).daily_manage(
                     px_by_sym, load_strategy(self.settings), self.notifier,
                     _labels(self.settings))
             except Exception as exc:
@@ -803,7 +860,8 @@ class Runner:
                 if len(btc_bars) >= 100:
                     closes = [b.close for b in btc_bars[-100:]]
                     winter = btc_bars[-1].close < sum(closes) / len(closes)
-                ev_res = EventSleeve(self.settings, self._shared_stock_broker()).cycle(
+                ev_res = EventSleeve(self.settings, self._shared_stock_broker(),
+                                     lots=self.lots).cycle(
                     context["brain"]["shock_assets"], px_by_sym, self.notifier,
                     regime=regime_of(ra), risk=float(ra or 0.0), winter=winter)
                 if ev_res["opened"] or ev_res["closed"]:
@@ -956,7 +1014,8 @@ class Runner:
         except Exception as exc:                                  # noqa: BLE001
             print(f"  [reconcile] cannot read the shared account: {exc}")
             return True
-        drift = reconcile_claims(claims, real, base_currency=self.settings.base_currency)
+        drift = reconcile_claims(claims, real,
+                                 base_currency=self.settings.base_currency, lots=self.lots)
         if not drift:
             return True
         detail = "; ".join(drift)

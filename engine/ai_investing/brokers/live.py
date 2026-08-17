@@ -238,7 +238,27 @@ class LongbridgeBroker(BrokerAdapter):
                   f"account channel is {expected!r} — verify manually with --check-broker")
 
     def _symbol(self, asset: Asset) -> str:
-        return asset.symbol if "." in asset.symbol else f"{asset.symbol}.US"
+        """The venue's name for this asset. See brokers/symbols.py.
+
+        Used to be `symbol if "." in symbol else symbol + ".US"`, which passes
+        the watchlist's Yahoo suffix straight through. Longbridge does not know
+        `D05.SI` or `600519.SS` — it calls them `D05.SG` and `600519.SH` — and
+        answers with an empty list rather than an error, so the miss looked like
+        "the venue does not carry this".
+        """
+        from ai_investing.brokers.symbols import to_longbridge
+        return to_longbridge(asset.symbol) or asset.symbol
+
+    def _venue_price(self, price: float, asset: Asset) -> float:
+        """A price this engine holds (USD) expressed in the listing currency.
+
+        Bars are USD-normalised on the way in (data/fx.py), so every price sent
+        back out is in the wrong units for anything not listed in USD. Sending
+        a USD number as an HKD limit is not a missed fill: a SELL sits ~7.8x
+        below the market and fills instantly at the worst price on the book.
+        """
+        from ai_investing.data import fx
+        return fx.from_usd(price, asset.symbol, self.settings)
 
     def get_cash(self) -> float:
         """Cash in BASE_CURRENCY.
@@ -338,15 +358,15 @@ class LongbridgeBroker(BrokerAdapter):
         lookup does not care that a human can see they are the same — the position
         would be classed as foreign and left unmanaged forever (see
         runner.foreign_positions).
+
+        Now delegates to brokers/symbols.py, which owns the same table
+        `_symbol` maps FORWARD with. Two hand-kept tables that must agree is how
+        a symbol comes to convert one way and not the other — and that is worse
+        than never converting, because the order goes out fine and the fill
+        comes back under a name the engine does not recognise.
         """
-        s = (broker_symbol or "").strip()
-        if s.upper().endswith(".US"):
-            return s[:-3]
-        if s.upper().endswith(".HK"):
-            code, _, suffix = s.rpartition(".")
-            if code.isdigit():
-                return f"{int(code):04d}.{suffix.upper()}"
-        return s
+        from ai_investing.brokers.symbols import from_longbridge
+        return from_longbridge(broker_symbol)
 
     def submit(self, order: Order, price: float) -> Order:
         from decimal import Decimal
@@ -369,7 +389,8 @@ class LongbridgeBroker(BrokerAdapter):
                 # be zero — about one attempt in ten, which is exactly the record:
                 # eight rejects and one fill between 2026-08-05 and 08-10.
                 kwargs["submitted_price"] = _tick_decimal(
-                    order.limit_price, self._symbol(order.asset), order.side)
+                    self._venue_price(order.limit_price, order.asset),
+                    self._symbol(order.asset), order.side)
             else:
                 kwargs["order_type"] = OrderType.MO
             # Stamped BEFORE the call, so a rejection carries what was sent. The
@@ -446,7 +467,8 @@ class LongbridgeBroker(BrokerAdapter):
                 # position open with nothing under it. Snapping a protective sell
                 # stop rounds the trigger UP, i.e. a tick earlier, so the error is
                 # always on the side of more protection.
-                trigger_price=_tick_decimal(stop_price, self._symbol(asset), side),
+                trigger_price=_tick_decimal(self._venue_price(stop_price, asset),
+                                            self._symbol(asset), side),
                 time_in_force=TimeInForceType.GoodTilCanceled)
             o = Order(asset, side, float(q), reason="exchange-stop")
             o.id = str(getattr(resp, "order_id", ""))
@@ -477,7 +499,8 @@ class LongbridgeBroker(BrokerAdapter):
         q = int(qty)
         if q <= 0 or limit_price <= 0:
             return None
-        px = _tick_decimal(limit_price, self._symbol(asset), side)   # see place_stop
+        px = _tick_decimal(self._venue_price(limit_price, asset),
+                           self._symbol(asset), side)   # see place_stop
         try:
             resp = self.ctx.submit_order(
                 symbol=self._symbol(asset),

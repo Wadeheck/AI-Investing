@@ -115,6 +115,25 @@ def to_usd(amount: float, symbol: str, settings, asset_class: str = "stock") -> 
     return amount / rate
 
 
+def from_usd(amount: float, symbol: str, settings, asset_class: str = "stock") -> float:
+    """USD -> the currency the symbol actually trades in. The inverse of `to_usd`.
+
+    Needed because bars are USD-normalised on the way IN, so every price this
+    engine sends back OUT — a limit, a stop, a take-profit — is in the wrong
+    units for the venue. That is not a missed fill. A SELL limit priced in USD
+    against an HKD listing sits ~7.8x below the market and fills instantly at
+    the worst price on the book; a BUY limit sits 7.8x below and never fills at
+    all. One of those two directions loses real money silently.
+    """
+    ccy = currency_of(symbol, asset_class)
+    if ccy == "USD" or not amount:
+        return amount
+    rate = (rates(settings) or {}).get(ccy)
+    if not rate or rate <= 0:
+        return amount            # unknown rate: unchanged, never zero
+    return amount * rate
+
+
 def rate_for(symbol: str, settings, asset_class: str = "stock") -> Optional[float]:
     """The divisor used for this symbol, or None if it needs no conversion."""
     ccy = currency_of(symbol, asset_class)

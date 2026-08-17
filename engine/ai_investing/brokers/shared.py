@@ -99,32 +99,37 @@ SHORTS_REFUSED = ("shared account: stock shorts are disabled — a short is "
 PENDING_WARN_SECONDS = float(os.environ.get("SHARED_PENDING_WARN_SECONDS", "7200"))
 
 
-def routes_to_venue(asset, base_currency: str = "USD") -> bool:
+def routes_to_venue(asset, base_currency: str = "USD", lots=None) -> bool:
     """Can this asset actually be sent to the shared account?
 
-    USD-listed stocks only — the same rule, for the same two reasons, that
-    `Runner._live_universe()` already applies to the trading book: Longbridge's
-    symbol format only round-trips cleanly for `.US` names, and `cost_price`
-    arrives in the LISTING currency while every price in this engine is
-    USD-normalised, so an HK position would mix HKD into a USD book.
+    Two conditions, and they are the same two `Runner._live_universe()` applies:
+    the venue must have a symbol for it, and we must know the quantity unit it
+    trades in. Anything else stays SIMULATED locally, exactly as before —
+    refusing it outright would delete a book's ability to hold a European or
+    Japanese thesis, which is not a change this work is entitled to make.
 
-    This is NOT a detail that could be left out. The investing book holds
-    `PRX.AS` (Amsterdam), `2331.HK` and `2097.HK` (Hong Kong) right now. The
-    trading book has been fenced off from those since `_live_universe()` was
-    written; a book that reached the venue without the same fence would send
-    them, and the first symptom would be either a rejected order or — worse — a
-    filled one whose cost basis is in the wrong currency.
+    This used to read "USD listings only", on the grounds that Longbridge's
+    symbols "only round-trip cleanly for `.US`" and that `cost_price` arrived in
+    the wrong currency. Probed on 2026-08-17, neither held: the currency was
+    already converted at the adapter boundary, and the symbols round-trip fine
+    once the watchlist's Yahoo suffix is translated to Longbridge's own
+    (`brokers/symbols.py`). The investing book's `2331.HK` and `2097.HK` are
+    reachable; its `PRX.AS` genuinely is not.
 
-    Anything that does not route stays SIMULATED locally, exactly as today. The
-    alternative, refusing it, would silently delete this book's ability to hold a
-    European or Hong Kong thesis, which is not a change this work is entitled to
-    make.
+    `lots` is optional and its absence means "unknown", which excludes every
+    non-US listing — so a caller that does not supply one gets exactly the old
+    USD-only behaviour rather than a surprise.
     """
     if asset.asset_class is not AssetClass.STOCK:
         return False
     try:
-        from ai_investing.data.fx import currency_of
-        return currency_of(asset.symbol, "stock") == base_currency
+        from ai_investing.brokers.symbols import reachable
+        if not reachable(asset.symbol):
+            return False
+        if lots is None:
+            from ai_investing.brokers.symbols import market_of
+            return market_of(asset.symbol) == "US"
+        return bool(lots.lot_size(asset.symbol))
     except Exception:                                             # noqa: BLE001
         # Cannot tell => do not send it. A locally simulated position is a
         # reversible mistake; a real order in the wrong currency is not.
@@ -144,10 +149,11 @@ class BookBroker(BrokerAdapter):
     def __init__(self, book_id: str, ledger: BookLedger,
                  stock_broker: BrokerAdapter | None = None,
                  pending: list | None = None, allow_short: bool = False,
-                 base_currency: str = "USD"):
+                 base_currency: str = "USD", lots=None):
         self.book_id = book_id
         self.ledger = ledger
         self.base_currency = base_currency
+        self.lots = lots          # brokers/lots.LotBook, or None => whole shares
         # Applies to CRYPTO only. Stock shorts are refused unconditionally while
         # the account is shared — see SHORTS_REFUSED.
         self.allow_short = allow_short
@@ -207,6 +213,13 @@ class BookBroker(BrokerAdapter):
         return sum(float(p.get("qty", 0.0)) * float(p.get("price", 0.0))
                    for p in self.pending if p.get("side") == Side.BUY.value)
 
+    def _lot(self, symbol: str) -> int:
+        """Shares per board lot. 1 when no lot book is attached, which is every
+        US listing and every test — the whole-share behaviour, unchanged."""
+        if self.lots is None:
+            return 1
+        return int(self.lots.lot_size(symbol) or 0)
+
     def pending_qty(self, key: str, side: Side) -> float:
         """Shares of `key` already promised to unanswered orders on `side`."""
         return sum(float(p.get("qty", 0.0)) - float(p.get("filled_qty", 0.0) or 0.0)
@@ -234,7 +247,7 @@ class BookBroker(BrokerAdapter):
             order.reason = (order.reason + " | invalid price/qty").strip(" |")
             return order
         if (self.stock_broker is None
-                or not routes_to_venue(order.asset, self.base_currency)):
+                or not routes_to_venue(order.asset, self.base_currency, self.lots)):
             return self._simulate(order, price)
         return self._submit_stock(order, price)
 
@@ -244,15 +257,23 @@ class BookBroker(BrokerAdapter):
         held = self._working.get(key)
         held_qty = float(held.qty) if held else 0.0
 
-        # Whole shares, floored. Floored and not rounded: rounding UP invents
-        # shares the cash ceilings below were never checked against, and the
-        # venue truncates anyway (`live.py`: `qty = int(order.qty)`), so anything
-        # this layer does not floor gets floored silently one layer down where
-        # nobody can see it.
-        qty = math.floor(order.qty)
-        if qty < 1:
+        # Whole BOARD LOTS, floored. Floored and not rounded: rounding UP invents
+        # shares the cash ceilings below were never checked against, and on a
+        # 500-lot stock that is up to 499 extra shares, not a rounding error. The
+        # venue truncates to whole shares anyway (`live.py`: `qty =
+        # int(order.qty)`), so anything this layer does not floor gets floored
+        # silently one layer down where nobody can see it.
+        lot = self._lot(order.asset.symbol)
+        if lot < 1:
             order.status = OrderStatus.REJECTED
-            order.reason = (order.reason + f" | floors to 0 whole shares "
+            order.reason = (order.reason + " | board lot unknown — refusing to "
+                                           "guess the quantity unit").strip(" |")
+            return order
+        qty = math.floor(order.qty / lot) * lot
+        if qty < lot:
+            unit = "whole shares" if lot == 1 else f"lots of {lot}"
+            order.status = OrderStatus.REJECTED
+            order.reason = (order.reason + f" | floors to 0 {unit} "
                                            f"(wanted {order.qty:.4f})").strip(" |")
             return order
 
@@ -261,8 +282,8 @@ class BookBroker(BrokerAdapter):
             # account's money rather than its own allocation.
             own = self.get_cash()
             if price * qty > own:
-                qty = math.floor(max(0.0, own) / price)
-            if qty < 1:
+                qty = math.floor(max(0.0, own) / price / lot) * lot
+            if qty < lot:
                 order.status = OrderStatus.REJECTED
                 order.reason = (order.reason + f" | insufficient {self.book_id} "
                                                f"cash (${own:,.2f})").strip(" |")
@@ -279,11 +300,11 @@ class BookBroker(BrokerAdapter):
                                                f"cash: {exc}").strip(" |")
                 return order
             if price * qty > real:
-                qty = math.floor(max(0.0, real) / price)
+                qty = math.floor(max(0.0, real) / price / lot) * lot
                 self.notes.append(
                     f"{self.book_id}: {order.asset.symbol} buy trimmed to {qty} "
                     f"share(s) by shared-account cash (${real:,.2f})")
-            if qty < 1:
+            if qty < lot:
                 order.status = OrderStatus.REJECTED
                 order.reason = (order.reason + f" | shared account cash exhausted "
                                                f"(${real:,.2f})").strip(" |")
@@ -298,14 +319,14 @@ class BookBroker(BrokerAdapter):
             # exit that re-fires while its first order sits `NotReported` would
             # pass this check twice and sell the same ten shares twice — taking
             # the account short, or straight through another book's position.
-            available = math.floor(held_qty) - self.pending_qty(key, Side.SELL)
-            capped = min(qty, max(0.0, available))
+            available = held_qty - self.pending_qty(key, Side.SELL)
+            capped = min(qty, math.floor(max(0.0, available) / lot) * lot)
             if capped < qty:
                 self.notes.append(
                     f"{self.book_id}: {order.asset.symbol} sell capped at its own "
-                    f"claim of {capped} share(s), asked {qty}")
+                    f"claim of {capped:g} share(s), asked {qty:g}")
             qty = capped
-            if qty < 1:
+            if qty < lot:
                 order.status = OrderStatus.REJECTED
                 order.reason = (order.reason + f" | {self.book_id} has no "
                                                f"unpromised {key} to sell").strip(" |")
@@ -639,7 +660,8 @@ def migrate_paper_state(paper: dict | None, base: float,
 
 def build_book_broker(book_id: str, settings, state: dict, base_cash: float,
                       allow_short: bool = False,
-                      stock_broker: BrokerAdapter | None = None):
+                      stock_broker: BrokerAdapter | None = None,
+                      lots=None):
     """The one place a book decides what kind of broker it has.
 
     Returns `(broker, migration_note_or_None)`. With `SHARED_STOCK_ACCOUNT` off
@@ -670,13 +692,15 @@ def build_book_broker(book_id: str, settings, state: dict, base_cash: float,
         ledger = BookLedger(base=float(base_cash))
     return BookBroker(book_id, ledger, stock_broker=stock_broker,
                       pending=pending, allow_short=allow_short,
-                      base_currency=getattr(settings, "base_currency", "USD")), note
+                      base_currency=getattr(settings, "base_currency", "USD"),
+                      lots=lots), note
 
 
 # -- aggregate reconciliation ------------------------------------------------
 def reconcile_claims(claims_by_book: dict[str, dict[str, Position]],
                      real_positions: dict[str, Position],
-                     tol: float = 1e-3, base_currency: str = "USD") -> list[str]:
+                     tol: float = 1e-3, base_currency: str = "USD",
+                     lots=None) -> list[str]:
     """Do the books' claims add up to what the account actually holds?
 
     The per-book rules keep each book honest about ITSELF. This is the only check
@@ -694,7 +718,7 @@ def reconcile_claims(claims_by_book: dict[str, dict[str, Position]],
     """
     def _stock(d):
         return {k: p for k, p in (d or {}).items()
-                if str(k).startswith("stock:") and routes_to_venue(p.asset, base_currency)}
+                if str(k).startswith("stock:") and routes_to_venue(p.asset, base_currency, lots)}
 
     real = _stock(real_positions)
     claims = {b: _stock(c) for b, c in (claims_by_book or {}).items()}

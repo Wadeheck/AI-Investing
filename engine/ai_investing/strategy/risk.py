@@ -28,9 +28,13 @@ def _avg(xs: list[float]) -> float:
 
 
 class RiskManager:
-    def __init__(self, cfg: RiskConfig, regime_gate=None):
+    def __init__(self, cfg: RiskConfig, regime_gate=None, lots=None):
         self.cfg = cfg
         self.regime = regime_gate
+        # Board lots (brokers/lots.LotBook), or None for the whole-share
+        # behaviour this sizer has always had. Optional so the backtest, the
+        # shadow book and every test keep working untouched.
+        self.lots = lots
         self.day_start_equity: Optional[float] = None
         self.peak_equity: Optional[float] = None
         self.halted = False
@@ -244,9 +248,17 @@ class RiskManager:
         already integral, so flooring an exit is a no-op, and protection must
         never be gated on affordability.
 
-        KNOWN GAP: HK board lots (700.HK trades in 100s) are not modelled; this
-        rounds to 1 share everywhere. That is strictly better than the previous
-        behaviour but still wrong for HK, and is tracked separately.
+        BOARD LOTS, not just whole shares (2026-08-17). This carried "KNOWN GAP:
+        HK board lots are not modelled" from the day it was written, which was
+        harmless while the live book could only reach US listings. It stops being
+        harmless the moment it can reach Hong Kong, Singapore and the mainland:
+        Tencent trades in hundreds and China Mobile in five-hundreds, so an order
+        for 37 shares is not a small order, it is a rejected one — the very
+        failure this method exists to prevent, one level up.
+
+        The unit comes from `self.lots` when it is present and is 1 otherwise, so
+        the backtest, the shadow book and every existing test keep the exact
+        whole-share behaviour they had.
         """
         out = []
         for o in orders:
@@ -254,20 +266,33 @@ class RiskManager:
                 out.append(o)                      # crypto is genuinely fractional
                 continue
             px = prices.get(o.asset.key, 0.0)
-            q = math.floor(o.qty + 1e-9)
-            if q >= 1:
+            lot = self.lots.lot_size(o.asset.symbol) if self.lots else 1
+            if not lot or lot < 1:
+                # Unknown unit. Dropping a BUY is conservative; dropping a SELL
+                # would strand a position, so a US-style single share is used to
+                # let protection out. (`_live_universe` already excludes these
+                # from entry, so in practice only an exit reaches here.)
+                if o.side is Side.SELL:
+                    lot = 1
+                else:
+                    continue
+            q = math.floor(o.qty / lot + 1e-9) * lot
+            if q >= lot:
                 o.qty = float(q)
                 out.append(o)
                 continue
             if o.side is Side.SELL:
                 continue                           # nothing left to sell after flooring
-            # A buy that rounds to nothing: take one share only if a single
-            # share is a position this book would have been allowed to hold.
-            if px > 0 and px <= self.cfg.max_position_weight * equity:
-                o.qty = 1.0
-                o.reason = ("[1-share min] " + (o.reason or ""))[:140]
+            # A buy that rounds to nothing: take ONE LOT only if a single lot is
+            # a position this book would have been allowed to hold. On a $10k
+            # book that admits 0020.HK (a $199 lot) and correctly refuses
+            # 0700.HK (a $5,715 one).
+            if px > 0 and px * lot <= self.cfg.max_position_weight * equity:
+                o.qty = float(lot)
+                tag = "1-share min" if lot == 1 else f"{lot}-share lot min"
+                o.reason = (f"[{tag}] " + (o.reason or ""))[:140]
                 out.append(o)
-            # else: one share breaches the position cap — drop it. Silently
+            # else: one lot breaches the position cap — drop it. Silently
             # retrying an unaffordable name is what the old path did.
         return out
 

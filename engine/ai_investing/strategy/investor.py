@@ -47,7 +47,7 @@ def _asset(symbol: str, crypto_exchange: str = "") -> Asset:
 
 
 class Investor:
-    def __init__(self, settings, stock_broker=None):
+    def __init__(self, settings, stock_broker=None, lots=None):
         """`stock_broker` is the ONE shared live stock adapter, or None — see
         `EventSleeve.__init__` for why None is the normal case."""
         self.settings = settings
@@ -66,7 +66,7 @@ class Investor:
         self.broker, self._migration = build_book_broker(
             "investor", settings, self._state,
             float(getattr(settings, "invest_starting_cash", 100000.0)),
-            allow_short=True, stock_broker=stock_broker)
+            allow_short=True, stock_broker=stock_broker, lots=lots)
         # Journalled by `_save()`, once actually PERSISTED. `daily_manage()`
         # returns early when the day is already managed — before any save — so
         # logging here records a migration that was computed and discarded, and
@@ -418,13 +418,17 @@ class Investor:
         # a sub-share order is a reject that repeats daily, not a small position.
         requested = qty
         if asset.asset_class is AssetClass.STOCK:
-            qty = float(math.floor(qty))
-            if qty < 1:
+            # Board lots where the market has them; 1 for US and for any book
+            # with no lot table. See brokers/lots.py.
+            lot = self.broker._lot(sym) if hasattr(self.broker, "_lot") else 1
+            qty = float(math.floor(qty / lot) * lot) if lot >= 1 else 0.0
+            if qty < max(1, lot):
                 self._log("rejected", symbol=sym, price=round(px, 6),
-                          requested_qty=round(requested, 6),
+                          requested_qty=round(requested, 6), lot=lot,
                           side=("buy" if s is Side.BUY else "sell"),
-                          reason=f"floors to 0 whole shares — one share costs "
-                                 f"${px:,.2f}",
+                          reason=(f"floors to 0 {'whole shares' if lot == 1 else f'lots of {lot}'} — "
+                                  f"one {'share' if lot == 1 else 'lot'} costs "
+                                  f"${px * max(1, lot):,.2f}"),
                           thesis=str(thesis.get("title", ""))[:120])
                 return False
         o = self.broker.submit(Order(asset, s, qty,

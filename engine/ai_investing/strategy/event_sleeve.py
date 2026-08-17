@@ -57,7 +57,7 @@ def _asset(sym: str, exchange: str) -> Asset:
 
 
 class EventSleeve:
-    def __init__(self, settings, stock_broker=None):
+    def __init__(self, settings, stock_broker=None, lots=None):
         """`stock_broker` is the ONE shared live stock adapter, or None.
 
         None is the normal case and covers three of them: SHARED_STOCK_ACCOUNT
@@ -72,7 +72,8 @@ class EventSleeve:
         self.journal = os.path.join(data_dir, "event_journal.jsonl")
         self._state = self._load()
         self.broker, migration = build_book_broker(
-            "event", settings, self._state, START_CASH, stock_broker=stock_broker)
+            "event", settings, self._state, START_CASH,
+            stock_broker=stock_broker, lots=lots)
         # Journalled by `_save()`, once the migration has actually been
         # PERSISTED — not here. These books are constructed several times a
         # cycle and some paths return without saving (`Investor.daily_manage`
@@ -359,13 +360,20 @@ class EventSleeve:
                     # every cycle the shock persists. Floor here, where the
                     # refusal can be explained, rather than at the adapter where
                     # it can only be counted.
-                    qty = float(math.floor(qty))
-                    if qty < 1:
+                    # Board lots where the market has them (HK trades in 100s
+                    # and 500s), whole shares where it does not. `_lot` is 1 for
+                    # US listings and for any book with no lot table attached.
+                    lot = (self.broker._lot(sym)
+                           if hasattr(self.broker, "_lot") else 1)
+                    qty = float(math.floor(qty / lot) * lot) if lot >= 1 else 0.0
+                    if qty < max(1, lot):
                         self._log("rejected", symbol=sym, price=round(px, 6),
                                   requested_qty=round(notional / px, 6),
                                   notional=round(notional, 2), shock=round(im, 4),
-                                  reason="floors to 0 whole shares — one share "
-                                         f"costs ${px:,.2f}, slice is ${notional:,.0f}")
+                                  lot=lot,
+                                  reason=(f"floors to 0 {'whole shares' if lot == 1 else f'lots of {lot}'} — one "
+                                          f"{'share' if lot == 1 else 'lot'} costs "
+                                          f"${px * max(1, lot):,.2f}, slice is ${notional:,.0f}"))
                         continue
                 o = self.broker.submit(
                     Order(asset, Side.BUY if im > 0 else Side.SELL, qty,
