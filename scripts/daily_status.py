@@ -60,6 +60,7 @@ def row(name, ok, detail):
 
 
 RECENT_H = 4.0                  # window used to measure the CURRENT burn rate
+LEARN_WINDOW_D = 7              # closes older than this predate the claims ledger
 
 
 def _free_token_cap() -> int:
@@ -153,6 +154,190 @@ def _project_eod(usage: dict, cap: int) -> tuple[float, str]:
             projected = total * 24.0 / max(hour_now, 0.5)
         worst = max(worst, 100.0 * projected / cap)
     return worst, basis
+
+
+BOOK_FILES = (("main", "live_book.json", None),
+              ("event", "event_state.json", "stock_ledger"),
+              ("investor", "invest_state.json", "stock_ledger"))
+
+
+def _book_ledgers():
+    """(name, ledger dict, node dict) for every book that has one. Empty when
+    SHARED_STOCK_ACCOUNT is off, which makes every check below a no-op."""
+    out = []
+    for name, fname, key in BOOK_FILES:
+        try:
+            blob = json.load(open(D(fname)))
+        except (OSError, json.JSONDecodeError):
+            continue
+        node = blob if key is None else (blob.get(key) or {})
+        led = node.get("ledger")
+        if isinstance(led, dict) and "marks" in led:
+            out.append((name, led, node, blob))
+    return out
+
+
+def check_shared_account() -> bool:
+    """Invariants for the shared Longbridge account.
+
+    Every one of these is a bug that actually happened on 2026-08-17, found by
+    hand, hours after it started. Hand-inspection does not scale to four books
+    across four market sessions a day, so each is stated once here and the
+    15-minute watchdog carries it from now on.
+    """
+    ok = True
+    books = _book_ledgers()
+    if not books:
+        return ok                      # flag off, or books not yet migrated
+
+    # 1) A COST BASIS THE WRONG SIZE. 100 shares of 3690.HK filled at HKD 8,870
+    # and went into a USD ledger at 8,870 — seven times what it cost. Equity
+    # read $2,256 against a true $10,000 and every downstream number inherited
+    # it. `_stamp_marks` writes a USD mark beside every position, so the ratio
+    # between basis and mark is checkable without a network call.
+    scale = []
+    for name, _led, _node, blob in books:
+        for pos in ((blob.get("broker") or {}).get("positions") or []):
+            avg = float(pos.get("avg_price", 0) or 0)
+            px = float(pos.get("price", 0) or 0)
+            if avg > 0 and px > 0 and not (0.2 < avg / px < 5.0):
+                scale.append(f"{name}/{pos.get('symbol')} basis {avg:,.2f} vs mark "
+                             f"{px:,.2f} ({avg / px:.1f}x — FX scale?)")
+    ok &= row("book cost basis scale", not scale,
+              "; ".join(scale) if scale else f"{len(books)} book(s) plausible")
+
+    # 2) CASH COMMITTED TWICE. A queued order reserves no cash until it fills,
+    # so the sleeve spent its book once per cycle and ended with $33,946 of live
+    # orders against $7,612 — 4.46x, waiting to fill together at the open.
+    over = []
+    for name, led, node, _blob in books:
+        cost = sum(m.get("qty", 0) * m.get("avg", 0) for m in led["marks"].values())
+        cash = (led.get("base", 0) + led.get("realized", 0) + led.get("adjust", 0)
+                - led.get("fees", 0) - cost)
+        com = sum(p.get("qty", 0) * p.get("price", 0)
+                  for p in (node.get("pending") or []) if p.get("side") == "buy")
+        if com > max(cash, 0) + 1e-6:
+            over.append(f"{name} committed ${com:,.0f} against ${cash:,.0f} "
+                        f"({com / cash if cash > 0 else float('inf'):.2f}x)")
+    ok &= row("book cash commitment", not over,
+              "; ".join(over) if over else "no book is over-committed")
+
+    # 3) THE SAME NAME ORDERED TWICE. A pending order is not a position, so the
+    # re-entry guards did not see it: NVDA and AMD were each ordered twice
+    # within 45 minutes.
+    dups = []
+    for name, _led, node, _blob in books:
+        seen = {}
+        for p in (node.get("pending") or []):
+            seen[p.get("symbol")] = seen.get(p.get("symbol"), 0) + 1
+        dups += [f"{name}/{sym} x{n}" for sym, n in seen.items() if n > 1]
+    ok &= row("duplicate venue orders", not dups,
+              "; ".join(dups) if dups else "one live order per name at most")
+
+    # 4) AN ORDER NOBODY IS WAITING FOR. Its cash stays committed until it
+    # settles, so a stuck order silently shrinks the book that placed it.
+    stale = []
+    for name, _led, node, _blob in books:
+        for p in (node.get("pending") or []):
+            try:
+                t = datetime.fromisoformat(str(p.get("ts")))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            hrs = (NOW - t).total_seconds() / 3600.0
+            if hrs > 36:
+                stale.append(f"{name}/{p.get('symbol')} {hrs:.0f}h")
+    ok &= row("stale venue orders", not stale,
+              "; ".join(stale) if stale else "nothing stuck at the venue")
+
+    # 5) THE BOOKS AND THE ACCOUNT DISAGREE. The engine checks this itself each
+    # cycle, but only while it is RUNNING and only in live mode; this is the
+    # out-of-band read, and it is the one that catches a trade placed by hand.
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings
+        cfg = Settings()
+        if cfg.shared_stock_account and cfg.live:
+            from ai_investing.brokers import _make_stock_broker
+            from ai_investing.brokers.lots import LotBook
+            from ai_investing.brokers.shared import reconcile_claims
+            from ai_investing.execution.capital import BookLedger
+            claims = {}
+            for name, led, node, _blob in books:
+                pos = BookLedger.from_dict(led, 0.0).positions()
+                sim = set(node.get("sim_keys") or [])
+                claims[name] = {k: v for k, v in pos.items() if k not in sim}
+            real = _make_stock_broker(cfg).get_positions()
+            drift = reconcile_claims(claims, real,
+                                     base_currency=cfg.base_currency,
+                                     lots=LotBook.load(D()))
+            ok &= row("book claims vs account", not drift,
+                      "; ".join(drift) if drift else
+                      f"{len(real)} account position(s) fully claimed")
+    except Exception as exc:                                  # noqa: BLE001
+        row("book claims vs account", True,
+            f"not checked ({type(exc).__name__}) — engine's own check still runs")
+
+    # 6) THE DAILY NOTIONAL COUNTER. It is a safety cap, and it was consumed by
+    # a trade recorded at 7x its real size — leaving the book $1,130 of headroom
+    # it should not have spent. A cap measuring the wrong thing is not a cap.
+    try:
+        b = json.load(open(D("breaker.json")))
+        cap = float(Settings().safety.max_notional_per_day or 0)
+        used = float(b.get("notional_today", 0) or 0)
+        ok &= row("daily notional counter", cap <= 0 or used <= cap,
+                  f"${used:,.0f} of ${cap:,.0f} used today"
+                  + (" — OVER CAP" if cap > 0 and used > cap else ""))
+    except Exception:                                         # noqa: BLE001
+        pass
+
+    return ok
+
+
+def check_learning() -> bool:
+    """Is the formula actually learning, or only claiming a version number?
+
+    `theta v1 (learned from 0 trades)` sat in every cycle header for sixteen
+    days and read as a version string. Zero samples has two very different
+    causes — nothing has closed, or closes are not being credited — and only the
+    open claims tell them apart.
+    """
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "engine"))
+        from ai_investing.config import Settings
+        from ai_investing.learning import ParamStore
+        _model, rls = ParamStore(Settings().params_path).load()
+        n = rls.updates if rls else 0
+    except Exception:                                         # noqa: BLE001
+        return True
+    try:
+        claims = len((json.load(open(D("open_claims.json"))) or {}).get("open") or {})
+    except (OSError, json.JSONDecodeError):
+        claims = 0
+    # Not an alarm on its own: a book that has not closed anything cannot have
+    # learned. It IS an alarm once trades have closed and nothing was credited.
+    #
+    # Counted over a WINDOW, not all history. The claims ledger only started
+    # persisting on 2026-08-17, so every close before that could never have been
+    # credited and never will be — measuring against them would nag forever
+    # about a fixed defect, which is the §4.16 failure this file already carries
+    # scars from. A window ages the old ones out and still surfaces a genuine
+    # regression within a week.
+    since = (NOW - timedelta(days=LEARN_WINDOW_D)).isoformat()
+    try:
+        import sqlite3
+        con = sqlite3.connect(D("journal.db"))
+        sells = list(con.execute(
+            "select count(*) from orders where side='sell' and status='filled' "
+            "and ts >= ?", (since,)))[0][0]
+        con.close()
+    except Exception:                                         # noqa: BLE001
+        sells = 0
+    return row("formula learning", n > 0 or sells == 0,
+               f"{n} sample(s) all-time, {sells} close(s) in {LEARN_WINDOW_D}d, "
+               f"{claims} claim(s) open"
+               + (" — closes are not being credited" if n == 0 and sells else ""))
 
 
 def main() -> int:
@@ -305,9 +490,16 @@ def main() -> int:
     live_book = D("live_book.json")
     if os.path.exists(live_book):
         lb = json.load(open(live_book))
-        base = float(lb.get("base") or 0.0)
-        realized = float(lb.get("realized") or 0.0)
-        marks = lb.get("marks") or {}
+        # TWO SHAPES. This file was a flat {base, realized, marks} until
+        # 2026-08-17, when the shared account added {ledger, pending, sim_keys}
+        # around it. Reading only the old shape does not fail — it silently
+        # reports a $0 book holding nothing, on the one line a person actually
+        # glances at to check the bot, which is the exact failure the comment
+        # above describes. Handle both.
+        led = lb.get("ledger") if isinstance(lb.get("ledger"), dict) else lb
+        base = float(led.get("base") or 0.0)
+        realized = float(led.get("realized") or 0.0)
+        marks = led.get("marks") or {}
         row("LIVE book (traded)", True,
             f"${base:,.0f} slice, realised ${realized:+,.2f}, "
             f"{len(marks)} position(s) — orders go to a real broker")
@@ -389,6 +581,9 @@ def main() -> int:
             f"{len(pend)} GDELT days undigested (auto-wave at 20)")
     except (OSError, json.JSONDecodeError):
         pass
+
+    ok &= check_shared_account()
+    ok &= check_learning()
 
     print("\n" + ("all channels current" if ok else "ACTION NEEDED — see STALE rows above"))
     return 0 if ok else 1
