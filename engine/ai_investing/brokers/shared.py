@@ -277,8 +277,22 @@ class BookBroker(BrokerAdapter):
             order.status = OrderStatus.REJECTED
             order.reason = (order.reason + " | invalid price/qty").strip(" |")
             return order
+        # A SELL closing a position this book filled locally must close
+        # locally too, even if the symbol is reachable today. `routes_to_venue`
+        # answers "can an order for this SYMBOL reach the account right now",
+        # not "did the account ever receive the shares this order is closing" —
+        # the investing book's 2331.HK/2097.HK were filled while Hong Kong was
+        # unreachable and stay `sim_keys` until a fill actually lands at the
+        # venue. Routing their exit there anyway asks Longbridge to sell shares
+        # it was never given: rejected at best, a silent short at worst, and
+        # either way a position this book can never actually close. A BUY on an
+        # already-reachable symbol still goes to the venue — that is a genuinely
+        # new claim, not a closure of the old fiction (see
+        # `test_a_venue_fill_clears_the_simulated_flag`).
+        closing_simulated = order.side is Side.SELL and order.asset.key in self.sim_keys
         if (self.stock_broker is None
-                or not routes_to_venue(order.asset, self.base_currency, self.lots)):
+                or not routes_to_venue(order.asset, self.base_currency, self.lots)
+                or closing_simulated):
             return self._simulate(order, price)
         return self._submit_stock(order, price)
 

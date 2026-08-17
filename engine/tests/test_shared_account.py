@@ -664,6 +664,41 @@ def test_a_venue_fill_clears_the_simulated_flag():
     assert "stock:2331.HK" in b.working_positions(), "and is claimed against it"
 
 
+def test_closing_a_simulated_position_never_reaches_the_venue():
+    """`routes_to_venue` answers "can an order for this SYMBOL reach the
+    account today", not "did the account ever receive the shares this order
+    is closing". 2331.HK was simulated while Hong Kong was unreachable; the
+    day it became reachable, a dead-thesis exit routed through `_submit_stock`
+    would ask Longbridge to sell 100 shares it was never given — rejected at
+    best, a silent short at worst, and either way a position that can never
+    actually close. The exit must close locally, exactly like the entry did,
+    however reachable the symbol is by the time it exits."""
+    from ai_investing.brokers.lots import LotBook
+    shared = FakeStock()
+    b = _book(stock=shared)
+    _buy(b, HKEX, 100.0, 10.0)                            # sim: HK unreachable yet
+    assert b.sim_keys == {"stock:2331.HK"}
+
+    b.lots = LotBook("/nonexistent", {"2331.HK": 100})    # now reachable
+    o = _sell(b, HKEX, 100.0, 12.0)                        # the thesis-dropped exit
+    assert o.status is OrderStatus.FILLED
+    assert shared.sent == [], "must close locally, never touch the venue"
+    assert b.get_positions() == {}, "the simulated position is actually gone"
+
+
+def test_a_fresh_buy_still_reaches_a_now_reachable_venue():
+    """The fix must not swallow the case it is not for: a BUY opening a new
+    claim on an already-reachable symbol is not closing anything simulated,
+    so it still goes real — unchanged from `test_a_venue_fill_clears_the_simulated_flag`."""
+    from ai_investing.brokers.lots import LotBook
+    shared = FakeStock()
+    b = _book(stock=shared)
+    b.lots = LotBook("/nonexistent", {"2331.HK": 100})
+    o = _buy(b, HKEX, 100.0, 10.0)
+    assert o.status is OrderStatus.FILLED
+    assert shared.sent, "a BUY with nothing simulated to close still reaches the venue"
+
+
 def test_migration_marks_what_it_carried_as_simulated():
     from ai_investing.brokers.shared import build_book_broker
 

@@ -1511,6 +1511,28 @@ market is today. It is now recorded as one and persisted (`sim_keys`). A book ca
 legitimately hold both kinds at once and always could — `PRX.AS` has no
 Longbridge symbol and never will, so the investing book simulates it forever.
 
+### 4.32 §4.31 fixed the check; the order path had the same gap *(2026-08-17)*
+
+`reconcile_claims` learned to exclude `sim_keys` in §4.31, which stopped the
+false halt. It did not touch `BookBroker.submit()`, which still decided where
+to route an order purely from "is this symbol reachable **today**" — the same
+question, asked in the one place where getting it wrong is not a false alarm
+but a real order. The investing book's `2331.HK` (734.67 sh) and `2097.HK`
+(52.07 sh) are still live long theses, both still `sim_keys`, both now on a
+reachable symbol: the day either thesis is dropped or trips its 10% stop,
+`daily_manage()`'s automatic exit would have submitted a SELL for shares
+Longbridge was never given — rejected at best, an unaccounted-for short at
+worst, and either way a position that could never actually close, since the
+same exit condition re-fires every day it stays open.
+
+Found on review, not by the failure happening — both theses are currently
+in-the-money on their stop, so this had not fired yet. `submit()` now checks
+`sim_keys` itself: a SELL closing a position filled locally closes locally,
+whatever the venue says about the symbol today. A BUY opening a genuinely new
+claim is unaffected. See `docs/design/SHARED_ACCOUNT.md` → "The exit-routing
+gap" for the fix and its two regression tests. No position was touched — Mixue
+and Li Ning are held exactly as they were before this entry.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer

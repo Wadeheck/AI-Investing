@@ -190,6 +190,42 @@ matched the account exactly, so reconciliation was clean from the first cycle.
 - Fees appearing in `event_journal.jsonl` / `invest_journal.jsonl`. Zero fees
   after the books have traded would mean the fee model is not wired.
 
+### The exit-routing gap (2026-08-17, fixed same day)
+
+`routes_to_venue` answers "can an order for this SYMBOL reach the account
+**today**" — it says nothing about whether the shares an order is closing were
+ever actually there. Hong Kong became reachable the same day this design went
+live, and the investing book's `2331.HK`/`2097.HK` (still `sim_keys` from the
+cutover, both live "long" theses — see `docs/status/STATE_OF_THE_SYSTEM.md`)
+sat exactly in that gap: reachable today, but their existing 734/52 shares were
+never bought at the venue.
+
+`Runner._reconcile_shared()` already knew to exclude `sim_keys` from the drift
+check — that is what stopped the false-halt below from recurring. What it did
+not cover is `BookBroker.submit()` itself: nothing stopped a future exit (thesis
+dropped, or the 10% stop trips) from routing the SELL for those shares straight
+to Longbridge, which was never given them. Rejected at best; a silent short at
+worst; either way a position `daily_manage()` could never actually close — the
+same exit condition re-firing forever with nothing to show for it.
+
+Fixed in `brokers/shared.py`: `submit()` now checks whether the order is a SELL
+against a key still in `sim_keys`, and if so routes it through `_simulate()`
+regardless of whether the symbol is reachable today. A BUY opening a genuinely
+new claim on a reachable symbol is unaffected — that is not closing the old
+fiction, it is a fresh real fill (`test_a_venue_fill_clears_the_simulated_flag`).
+Covered by `test_closing_a_simulated_position_never_reaches_the_venue` and
+`test_a_fresh_buy_still_reaches_a_now_reachable_venue` in
+`tests/test_shared_account.py`. No position was touched to fix this — Mixue and
+Li Ning are live theses, not stale ones, and stay exactly as held.
+
+**The 05:34–09:22 SGT halt this explains:** `SHARED ACCOUNT DRIFT` fired
+repeatedly on `2097.HK`/`2331.HK` — books claiming 52.07/734.67 shares against
+an account holding zero — and correctly halted live trading for ~3.3h until the
+09:22 self-heal restart picked up the reconciliation-side `sim_keys` fix already
+in `runner.py`. That was the false-halt half of this gap; the exit-routing half
+above is the half that was still open when this was reviewed a session later
+and has been closed the same way.
+
 ### Known cosmetic artefact
 
 `invest_journal.jsonl` carries **two** `migrated_to_shared_account` lines for the
