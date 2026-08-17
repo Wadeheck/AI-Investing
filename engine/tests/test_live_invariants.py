@@ -70,6 +70,27 @@ def test_an_ordinary_loss_is_not_mistaken_for_an_fx_error():
     assert _run({"live_book.json": ok})["book cost basis scale"]["ok"]
 
 
+# ----------------------------------------------- what the user is told ------
+def test_equity_that_does_not_reconcile_to_its_ledger_is_caught():
+    """Telegram reported the event sleeve at $4,362 when it held $11,102,
+    because cash committed to unfilled orders was subtracted from the reader's
+    cash while no position existed for it yet — so it appeared nowhere."""
+    bad = _book(marks={"stock:AAA": {"qty": 10, "avg": 100.0}},
+                positions=[{"symbol": "AAA", "qty": 10, "price": 100.0,
+                            "avg_price": 100.0}])
+    bad["equity"] = 4_362.0                      # what the reader was shown
+    r = _run({"live_book.json": bad})["reported equity vs ledger"]
+    assert not r["ok"] and "unaccounted" in r["detail"]
+
+
+def test_a_book_that_reconciles_is_quiet():
+    ok = _book(marks={"stock:AAA": {"qty": 10, "avg": 100.0}},
+               positions=[{"symbol": "AAA", "qty": 10, "price": 100.0,
+                           "avg_price": 100.0}])
+    ok["equity"] = 10_000.0                      # 9,000 cash + 1,000 of stock
+    assert _run({"live_book.json": ok})["reported equity vs ledger"]["ok"]
+
+
 # ------------------------------------------------------------ commitment ----
 def test_a_book_committing_more_than_it_holds_is_caught():
     """The 4.46x runaway: $33,946 of live orders against a $7,612 book."""

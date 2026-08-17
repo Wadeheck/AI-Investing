@@ -416,6 +416,40 @@ def test_reconcile_ignores_crypto():
 
 
 # --------------------------------------------------- the reader-facing shape --
+def test_the_reader_view_shows_money_committed_to_unfilled_orders():
+    """It vanished. `get_cash()` reports SPENDABLE cash so a book cannot spend
+    the same money twice; handing that to a reader subtracts the commitment
+    while no position exists for it yet, so the money appears nowhere.
+
+    On 2026-08-17 Telegram reported the event sleeve at $4,362 when it held
+    $11,102, and the four books "down $7,226 since the $40,000 start" when they
+    were up $955."""
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    _buy(b, NVDA, 30.0, 100.0)                      # $3,000 queued, unfilled
+
+    assert b.get_cash() == 7_000.0, "spendable is still net of the commitment"
+    view = b.state()
+    assert view["cash"] == 10_000.0, \
+        f"a reader must see the whole book, got ${view['cash']:,.2f}"
+    assert view["committed"] == 3_000.0, "and be told how much is spoken for"
+    assert view["positions"] == [], "an unfilled order is not a position"
+
+
+def test_the_reader_view_and_the_ledger_agree_once_filled():
+    shared = FakeStock(mode="pend")
+    b = _book(cash=10_000.0, stock=shared)
+    _buy(b, NVDA, 30.0, 100.0)
+    shared.settle("ord1", 30.0, 100.0)
+    b.resolve_pending()
+    view = b.state()
+    assert view["committed"] == 0.0
+    assert abs(view["cash"] - (7_000.0 - b.ledger.fees)) < 1e-6
+    assert view["positions"][0]["qty"] == 30.0
+    # equity is unchanged by the fill: cash became stock, less the fee
+    assert abs(view["cash"] + 30.0 * 100.0 - (10_000.0 - b.ledger.fees)) < 1e-6
+
+
 def test_state_keeps_paper_brokers_shape_for_readers():
     """The Telegram portfolio, the dashboard and each book's `_stamp_marks` all
     read `state["broker"]["positions"]`. Changing that shape would make every one
@@ -424,7 +458,7 @@ def test_state_keeps_paper_brokers_shape_for_readers():
     b = _book(stock=FakeStock())
     _buy(b, NVDA, 10.0, 100.0)
     view = b.state()
-    assert set(view) == {"cash", "positions"}
+    assert set(view) == {"cash", "committed", "positions"}
     row = view["positions"][0]
     assert set(row) == {"symbol", "asset_class", "exchange", "quote", "qty", "avg_price"}
     assert row["symbol"] == "NVDA" and row["qty"] == 10.0

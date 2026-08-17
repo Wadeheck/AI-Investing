@@ -222,6 +222,31 @@ def check_shared_account() -> bool:
     ok &= row("book cash commitment", not over,
               "; ".join(over) if over else "no book is over-committed")
 
+    # 2b) WHAT THE READER IS TOLD vs WHAT THE BOOK HOLDS. `get_cash()` reports
+    # SPENDABLE cash so a book cannot spend the same money twice; handing that
+    # figure to a reader subtracts the commitment while no position exists for
+    # it yet, so the money appears NOWHERE. On 2026-08-17 Telegram reported the
+    # event sleeve at $4,362 when it held $11,102, and the four books "down
+    # $7,226 since the $40,000 start" when they were up $955. A number the user
+    # acts on has to reconcile to the ledger it came from.
+    mismatch = []
+    for name, led, _node, blob in books:
+        eq = blob.get("equity")
+        if eq is None:
+            continue
+        cost = sum(m.get("qty", 0) * m.get("avg", 0) for m in led["marks"].values())
+        cash = (led.get("base", 0) + led.get("realized", 0) + led.get("adjust", 0)
+                - led.get("fees", 0) - cost)
+        mv = sum(p.get("qty", 0) * (p.get("price") or p.get("avg_price", 0))
+                 for p in ((blob.get("broker") or {}).get("positions") or []))
+        true_eq = cash + mv
+        if abs(true_eq - float(eq)) > max(1.0, 0.005 * abs(true_eq)):
+            mismatch.append(f"{name} reports ${float(eq):,.0f} but the ledger says "
+                            f"${true_eq:,.0f} (${true_eq - float(eq):,.0f} unaccounted)")
+    ok &= row("reported equity vs ledger", not mismatch,
+              "; ".join(mismatch) if mismatch else
+              f"{len(books)} book(s) reconcile to their ledger")
+
     # 3) THE SAME NAME ORDERED TWICE. A pending order is not a position, so the
     # re-entry guards did not see it: NVDA and AMD were each ordered twice
     # within 45 minutes.

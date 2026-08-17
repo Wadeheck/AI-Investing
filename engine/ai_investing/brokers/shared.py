@@ -614,9 +614,22 @@ class BookBroker(BrokerAdapter):
         dangerous possible way to be wrong. So the reader-facing shape is kept
         exactly, and the real record lives beside it under `stock_ledger`.
 
+        Reports the LEDGER's cash, not `get_cash()`'s spendable figure. The two
+        differ by whatever unfilled orders have committed, and handing a reader
+        the spendable one makes that money VANISH: it is subtracted from cash
+        and no position exists for it yet, so it appears nowhere at all.
+
+        On 2026-08-17 that told the user the event sleeve held $4,362 when it
+        held $11,102, and put the four books $8,181 down on the day — "down
+        $7,226 since the $40,000 start" when they were in fact up $955. Cash
+        promised to a queued order is earmarked, not spent, and a reader asking
+        what this book is worth is owed the whole of it.
+
         Never load from this. `ledger_state()` is the one that round-trips.
         """
-        return {"cash": self.get_cash(), "positions": [
+        return {"cash": self.ledger.book_portfolio(self.get_positions()).cash,
+                "committed": round(self.pending_commitment(), 2),
+                "positions": [
             {"symbol": p.asset.symbol, "asset_class": p.asset.asset_class.value,
              "exchange": p.asset.exchange, "quote": p.asset.quote,
              "qty": p.qty, "avg_price": p.avg_price}
