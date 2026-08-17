@@ -294,11 +294,14 @@ class LongbridgeBroker(BrokerAdapter):
         Kept for US symbols only, where `AAPL.US` -> `AAPL` is what the watchlist
         actually uses. Anything else keeps its suffix.
 
-        STILL WRONG for non-USD listings: `cost_price` is quoted in the listing
-        currency while every price in this engine is USD-normalised, so a HK
-        position's P&L would mix HKD against USD. That is why the live book is
-        restricted to USD listings for now (see runner._live_universe) instead of
-        being papered over here.
+        The currency hazard below IS handled: `cost_price` arrives in the listing
+        currency and is converted at this boundary, like every other price. This
+        docstring used to say it was "STILL WRONG for non-USD listings" and cite
+        that as the reason `runner._live_universe()` restricts the book to USD —
+        three lines above the `fx.to_usd` call that fixes it. A stale warning is
+        worse than no warning: on 2026-08-17 it was read as a live constraint and
+        repeated as fact, and the actual reasons non-USD names are not traded
+        (no suffix map, no board-lot support) went unexamined for a fortnight.
         """
         from ai_investing.data import fx
 
