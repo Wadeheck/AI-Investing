@@ -1446,6 +1446,71 @@ Now persisted to `data/open_claims.json`, written every cycle *before* the
 `LEARN_ONLINE` gate, so switching online learning on later does not start from
 an empty ledger.
 
+### 4.29 A stale docstring cost the book half its universe *(2026-08-17)*
+
+`_live_universe()` restricted the live book to USD listings, so **78% of the
+engine's strongest convictions pointed at names it had decided were
+unreachable** and the trading book sat on two positions and 4% deployment. Two
+reasons were given, in a docstring on `LongbridgeBroker.get_positions`, and both
+were false when probed against the account:
+
+- *"`cost_price` arrives in the LISTING currency"* — it did, and it was already
+  converted, by the `fx.to_usd` call **three lines below the warning**. Somebody
+  fixed the code and left the comment.
+- *"Longbridge's symbol format only round-trips cleanly for `.US`"* — it
+  round-trips fine. The **watchlist** speaks Yahoo (`D05.SI`, `600519.SS`) and
+  Longbridge speaks its own dialect (`D05.SG`, `600519.SH`). An unknown string
+  comes back as an **empty list**, not an error, so every "can we trade this?"
+  answered no and the no was recorded as a fact about the venue.
+
+Translated, the venue resolves **116 of the 126** non-USD names, and the account
+holds SGD 1,000,000 and HKD 1,000,000 to trade them with. Ten have no Longbridge
+symbol in any spelling and are genuinely out of reach.
+
+**A stale warning is worse than no warning, because no warning gets
+investigated.** This one supplied a plausible answer to a question nobody then
+asked for a fortnight — and I repeated it as fact before testing it.
+
+What was actually missing: the suffix map (`brokers/symbols.py`, defined once and
+inverted so the two directions cannot drift), board lots (`brokers/lots.py` —
+`risk._quantize_whole_shares` had carried *"KNOWN GAP: HK board lots are not
+modelled"* since it was written), and converting prices back out of USD. Ticks
+needed nothing: the HKEX spread table and SGX bid sizes were already there,
+waiting for a caller. Universe went 132 → **248** symbols.
+
+### 4.30 The first Hong Kong fill was booked at seven times its price *(2026-08-17)*
+
+Within minutes of widening the reach, 100 shares of `3690.HK` filled at
+HKD 8,870 — about **USD 1,129** — and went into a USD ledger at a cost basis of
+**8,870**. The book's cash fell by seven times what it had spent, equity read
+**$2,256 against a true $10,000**, and the daily notional cap, the drawdown
+breaker and the learning spine's realised return all inherited it.
+
+`executed_price` arrives in the listing currency. In the same session I had
+converted every price going **out** — limits, stops, take-profits — and missed
+the one coming **back in**. Now converted in `fetch_fill`, which is the only
+place it can be: both fill paths run through it (`confirm_or_pend` for a
+synchronous fill, `resolve_pending` for a late one), so either caller doing it
+would leave the other wrong. Same rule as `cost_price`: **money crossing this
+adapter is converted at the crossing, never after.**
+
+The live ledger was repaired by re-booking the mark, using what the account
+actually holds as ground truth rather than inferring which bases were corrupt —
+the first repair script I wrote would have double-converted the investing book's
+simulated HK theses and destroyed their cost basis.
+
+### 4.31 Simulated holdings were reconciled against the account *(2026-08-17)*
+
+The investing book's `2331.HK` and `2097.HK` were filled by the local simulator
+back when Hong Kong was unreachable. The moment it became reachable,
+`reconcile_claims` compared 734 simulated shares against an account holding
+none, called it drift, and **halted live trading**.
+
+Simulated-ness is a fact about how a position was **filled**, not about what its
+market is today. It is now recorded as one and persisted (`sim_keys`). A book can
+legitimately hold both kinds at once and always could — `PRX.AS` has no
+Longbridge symbol and never will, so the investing book simulates it forever.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1528,35 +1593,26 @@ as "needs more data":
 
 **Ranked by how much I would worry.**
 
-0. **78% of the engine's strongest convictions are in things it cannot trade**
-   *(measured 2026-08-17)*. Of the last 20,000 decisions, 4,799 were strong long
-   calls (`|score| ≥ 0.10`); **3,731 of them — 78% — were unreachable** by the
-   live book. The most-conviction names were `INJ/USD`, `AAVE/USD`, `UNI/USD`,
-   `BCH/USD`, `U14.SI`, `U11.SI`. The stock watchlist is 258 names of which
-   **126 (49%) are non-USD**, plus 17 crypto; the live slice can only trade the
-   132 USD listings, for the documented reasons in `_live_universe()`.
+0. **The trading book's reach was doubled on 2026-08-17 — and the widened half
+   is unproven.** It was 132 USD symbols; it is now **248**, after §4.29 found
+   that the restriction rested on a stale docstring rather than on the venue.
+   Hong Kong, Singapore, Shanghai and Shenzhen are now tradable, on an account
+   holding SGD 1,000,000 and HKD 1,000,000 for exactly that.
 
-   This is the answer to "why is the trading book flat". It holds two positions
-   (AAPL 1, USO 1), has ~4% of its capital deployed, and its equity has not moved
-   off $10,000.43 in a week. Nothing is broken — the brain is spending its
-   analysis on names the account structurally cannot act on, and the live book
-   gets the 22% that is left.
+   What is proven: one HK order placed, lot-sized to 100 shares, filled. What is
+   not: SG, SH and SZ have never had an order sent; board lots come from a cache
+   fetched once at start-up and nothing re-validates them; and the two defects
+   that surfaced within minutes of the first HK fill (§4.30, §4.31) are the kind
+   that only appear on contact. **Watch the first order into each new market
+   individually.**
 
-   It also **invalidates the shadow A/B**, which is the one instrument meant to
-   answer "is the model any good". `state.json` currently reports
-   `input_value: −$105.11`, framed as the cost of the user's input; but the
-   shadow trades all 275 names while the real book trades 132, and the shadow's
-   open positions are `0291.HK`, `2020.HK`, `3690.HK` — names the real book was
-   never allowed. That number is measuring the venue restriction, not the input.
-   Until the two books share a universe, the comparison should not be quoted.
-
-   Three ways out, none of them free: trade the reachable half and shrink the
-   watchlist to match (honest, loses the analysis); get a venue that reaches HK
-   and SG (Longbridge does list them — the blocker is `cost_price` arriving in
-   the listing currency and the symbol round-trip, both fixable); or accept the
-   book as a USD sleeve and stop measuring it against a global shadow. This is a
-   decision about what the system is *for*, so it is recorded here rather than
-   chosen.
+   The shadow A/B is still not a controlled comparison — the formula-only book
+   trades all 275 names while the real one trades 248 — so `input_value` in
+   `state.json` (currently −$105.11, framed as the cost of the user's input)
+   still partly measures the venue restriction. Ten names are genuinely
+   unreachable (Korea, Tokyo, Taiwan, Frankfurt, Paris, Amsterdam) and 17 crypto
+   are blocked on an unfunded exchange account, so the gap can be closed but not
+   to zero.
 
 1. **No live-money validation, ever.** Broker adapters have never touched a
    funded account. Slippage, partial fills, rejects, borrow availability for
