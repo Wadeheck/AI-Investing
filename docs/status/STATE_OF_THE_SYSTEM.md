@@ -1381,6 +1381,71 @@ whether every individual node inside that universe was actually reachable.
   wrong on a specific box; checking the box directly is what caught it, not
   re-deriving the fallback more carefully.
 
+### 4.27 The sleeve spent its book once per cycle while orders queued *(2026-08-17)*
+
+The night after the shared-account cutover, the ⚡ sleeve accumulated **ten live
+buy orders worth $33,946 against a $7,612 book** — 4.46x, on a sleeve whose
+docstring says LONG ONLY AND UNLEVERED, against a three-position limit,
+including exact duplicates (NVDA ×2, AMD ×2), all queued to fill together at the
+opening bell. A reproduction of twenty cycles against a closed market produces
+**sixty** orders. They were cancelled at the venue before the market opened.
+
+**Cause.** Longbridge answers anything submitted outside US market hours with
+`NotReported` — queued, not filled, not rejected. That is honestly PENDING, and
+everything downstream was written against fills: `get_cash()` returned the
+ledger (which does not move until a fill), the slot count read positions, and
+both re-entry guards were fill-gated. So every cycle saw a full book, three free
+slots, and a symbol it had not "acted on".
+
+**The general shape, and the reason it is worth a register entry.** *Submitted*
+and *filled* are different states, and every guard in this engine had been
+written when they could not be. The simulator filled instantly for the whole of
+the project's life, so "do I hold this?" and "have I acted on this?" were the
+same question — and the day a real venue could say "not yet", every guard that
+conflated them failed at once, in the same direction, silently. The fix is not
+one check but a rule: **cash committed to a live order is not cash, and a symbol
+with an order in flight has been acted on.** The trading book reached the same
+door by a different route (`size_orders` computes `delta = target − current
+notional` from positions), and its exit path was worse — a re-fired exit while
+the first sat queued would have sold the same shares twice, taking the account
+short or straight through another book's position.
+
+Three smaller ones from the same night: a queued order was journalled as
+`rejected`, which reads as "the sleeve declined this shock" when it had money
+riding on it; the stuck-order warning fired on every poll rather than once,
+writing **209 journal lines about nine orders in one evening** (§4.16 again —
+the noise hides the diagnosis); and recording the intent at submission created
+the mirror hazard, so a Day order that simply expired would have barred its
+symbol for good, now released as an invariant rather than an event handler.
+
+### 4.28 The formula has never learned anything *(2026-08-17)*
+
+`outcomes` held **zero rows after sixteen days live and thirty-one filled
+orders**. RLS updates: 0. θ is still the hand-set priors it shipped with. Every
+cycle header has said `θv1 (learned from 0 trades)` the whole time, and it reads
+as a version string rather than as an alarm.
+
+Two causes, and only one is a defect.
+
+**The book has closed almost nothing**, which is a strategy fact — see §5's entry
+on reach. Driven through a full open/close by hand, the loop emits a sample
+correctly, so nothing is broken in it.
+
+**`OutcomeTracker._open` was memory-only.** The map from an open position back to
+the feature vector that opened it was rebuilt empty in every `Runner`
+constructor and written nowhere. The ProDesk powers off 05:00–07:30 SGT nightly
+and the trading book holds for days to weeks, so a position was re-registered
+each morning with *that morning's* φ. When it finally closed, the learner would
+have been handed **(today's φ, a two-week return)**.
+
+That is not a lost sample, which is merely slow. It is a wrong one — it teaches
+the model that this morning's features caused a move decided on a fortnight ago,
+and the RLS has no way to tell. The only reason no damage was done is that
+nothing has closed yet: the defect and the starvation were hiding each other.
+Now persisted to `data/open_claims.json`, written every cycle *before* the
+`LEARN_ONLINE` gate, so switching online learning on later does not start from
+an empty ledger.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1462,6 +1527,36 @@ as "needs more data":
 ## 5. What is unverified or uncertain
 
 **Ranked by how much I would worry.**
+
+0. **78% of the engine's strongest convictions are in things it cannot trade**
+   *(measured 2026-08-17)*. Of the last 20,000 decisions, 4,799 were strong long
+   calls (`|score| ≥ 0.10`); **3,731 of them — 78% — were unreachable** by the
+   live book. The most-conviction names were `INJ/USD`, `AAVE/USD`, `UNI/USD`,
+   `BCH/USD`, `U14.SI`, `U11.SI`. The stock watchlist is 258 names of which
+   **126 (49%) are non-USD**, plus 17 crypto; the live slice can only trade the
+   132 USD listings, for the documented reasons in `_live_universe()`.
+
+   This is the answer to "why is the trading book flat". It holds two positions
+   (AAPL 1, USO 1), has ~4% of its capital deployed, and its equity has not moved
+   off $10,000.43 in a week. Nothing is broken — the brain is spending its
+   analysis on names the account structurally cannot act on, and the live book
+   gets the 22% that is left.
+
+   It also **invalidates the shadow A/B**, which is the one instrument meant to
+   answer "is the model any good". `state.json` currently reports
+   `input_value: −$105.11`, framed as the cost of the user's input; but the
+   shadow trades all 275 names while the real book trades 132, and the shadow's
+   open positions are `0291.HK`, `2020.HK`, `3690.HK` — names the real book was
+   never allowed. That number is measuring the venue restriction, not the input.
+   Until the two books share a universe, the comparison should not be quoted.
+
+   Three ways out, none of them free: trade the reachable half and shrink the
+   watchlist to match (honest, loses the analysis); get a venue that reaches HK
+   and SG (Longbridge does list them — the blocker is `cost_price` arriving in
+   the listing currency and the symbol round-trip, both fixable); or accept the
+   book as a USD sleeve and stop measuring it against a global shadow. This is a
+   decision about what the system is *for*, so it is recorded here rather than
+   chosen.
 
 1. **No live-money validation, ever.** Broker adapters have never touched a
    funded account. Slippage, partial fills, rejects, borrow availability for
