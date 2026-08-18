@@ -85,6 +85,11 @@ SOURCE_TRUST = {
     "rbi.org.in": 0.95,                   # Reserve Bank of India — central bank tier
     "gov.cn": 0.9,                        # PRC State Council publishing its own decisions:
                                           # a primary source, NOT the 0.45 state-media tier
+    # credit-rating agencies publishing their own actions: primary source, same
+    # class as an SEC 8-K (§2.2 of the digest brief) — added 2026-08-18 after a
+    # backfilled S&P action (Oracle downgrade) silently defaulted to 0.5 and
+    # fell under the noise threshold despite being the rating agency's own release
+    "spglobal.com": 0.95, "moodys.com": 0.95, "fitchratings.com": 0.95,
     "cgtn": 0.45,                         # state media — same tier as globaltimes
     # -----------------------------------------------------------------------
     # replacements wired in 2026-08-16 for feeds that were dead on arrival (see
