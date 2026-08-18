@@ -19,15 +19,16 @@ FEATURE_NAMES = [
     "trend_zscore",    # EMA/stdev z-score trend filter × confidence (candidate, unweighted by default)
     "consensus",       # mean of the directional signal features
     "mom_lowvol",      # momentum × low-volatility regime (interaction term)
+    "regime_persistence",  # days-sustained ramp on the origin node × confidence (candidate, unweighted by default)
 ]
 
 _SIGNAL_FEATURES = ["momentum", "mean_reversion", "sentiment", "political_hype",
                     "macro_linkage"]
-# trend_zscore is deliberately excluded from _SIGNAL_FEATURES/consensus: it's an
-# unvalidated candidate (walk-forward rejected it, see chat log 2026-08-15) and
-# folding it into "consensus" would let it influence conviction through the back
-# door even while its own weight sits at 0. It only matters once it earns its own
-# nonzero theta.
+# trend_zscore and regime_persistence are deliberately excluded from
+# _SIGNAL_FEATURES/consensus: both are unvalidated candidates (see
+# docs/design/FORMULA.md #7) and folding either into "consensus" would let it
+# influence conviction through the back door even while its own weight sits at
+# 0. Each only matters once it earns its own nonzero theta.
 
 
 class FeatureExtractor:
@@ -49,6 +50,11 @@ class FeatureExtractor:
 
         vol = self._vol_regime(bars)
         f["mom_lowvol"] = f["momentum"] * (1.0 / (1.0 + vol))
+
+        # computed but kept OUT of consensus (see note above) -- same treatment
+        # as trend_zscore, populated so the walk-forward optimizer can score it
+        rp = by.get("regime_persistence")
+        f["regime_persistence"] = (rp.score * rp.confidence) if rp else 0.0
         return f
 
     @staticmethod

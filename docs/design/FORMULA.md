@@ -19,8 +19,9 @@ predicted return:
 | `political_hype` | hype-fade score × confidence (negative on detected pumps) |
 | `macro_linkage` | brain: graph-propagated macro impact × confidence |
 | `trend_zscore` | EMA/stdev z-score trend filter × confidence — **candidate, see §7** |
-| `consensus` | mean of the five signal features *above `trend_zscore`* (bias/mom_lowvol excluded; `trend_zscore` deliberately excluded too, see §7) |
+| `consensus` | mean of the five signal features *above `trend_zscore`* (bias/mom_lowvol excluded; `trend_zscore`/`regime_persistence` deliberately excluded too, see §7/§8) |
 | `mom_lowvol` | `momentum × 1/(1+vol_regime)` — regime interaction |
+| `regime_persistence` | days-sustained ramp on the origin node × confidence — **candidate, see §8** |
 
 ## 2. The formula (`learning/formula.py`)
 
@@ -148,3 +149,42 @@ timer mirroring that pattern if continuous re-checking is wanted.
 running in production has never evaluated this feature. Once committed and deployed it
 starts computing, logging, and (via Path A) quietly earning trust or not; it stays
 inert to every actual decision until it does.
+
+## 8. `regime_persistence` — the same lifecycle, for duration instead of level
+
+`regime_persistence` (`signals/regime_persistence.py`, added 2026-08-18) is the second
+candidate feature, added the same "dormant" way `trend_zscore` was, and for a concrete
+reason found while investigating a live conversation, not a backtest: `macro_linkage`
+reads `asset_impacts[...]["impact"]`, which is the graph's *current* activation level for
+an asset's origin node — and that level is hard-clamped to `[-1, 1]` (`field.py`,
+`absorb()`/`macro_linkage.py`). A node freshly crossing 0.9 and a node that has sat at
+0.9 for six weeks (the live case: `bond_stress`/`us_gov_debt` pinned near their ceiling
+for the entire 30-year-Treasury-yield structural repricing) are numerically
+indistinguishable to `macro_linkage` — both just read "near max," and a maxed node has
+no room left to register "and it's still getting worse." Only *duration* can still say
+anything once level has saturated.
+
+`brain/persistence.py:persistence_days()` answers the duration question from the real
+node-activation time series already recorded every cycle in `brain.db`
+(`BrainStore.node_trend`, previously used only for the dashboard's node-trend charts) —
+consecutive days (same sign, above a 0.85 saturation threshold) the ORIGIN node has held
+its level. `brain/core.py` attaches this to each `asset_impacts` entry right after it's
+built; the signal itself ramps from 0 at 7 days (not enough to call it a regime yet) to
+full confidence at 45 days (a season, not a headline cycle).
+
+**Mechanically dormant, not administratively excluded** — identical treatment to
+`trend_zscore`: runs every cycle, reaches `φ`, excluded from `consensus`, starts at
+`θ_regime_persistence = 0`. See `tests/test_regime_persistence.py` for the same three
+proofs `test_trend_zscore.py` established (feature reaches `φ` but not `consensus`; an
+old saved formula migrates it in at weight 0; RLS can move its weight away from 0 given
+genuinely predictive data), plus direct unit coverage of `persistence_days()` itself
+(saturation-gated, sign-broken streaks, day-bucketing).
+
+Graduates through the exact same two paths as §7 — online RLS from realized P&L (Path
+A), or offline walk-forward re-curation (Path B) — no special-casing. Whether a
+sustained macro regime actually *predicts* returns better than the current level does is
+an empirical question this feature now lets the existing gauntlet answer; it is not
+assumed here.
+
+**Status as of 2026-08-18:** deployed at weight 0, computing and logging on every cycle,
+inert to every actual decision until Path A or B gives it a nonzero θ.

@@ -28,6 +28,7 @@ _DEFAULT_WEIGHTS = {
     "trend_zscore": 0.0,   # unweighted until the walk-forward gauntlet earns it a nonzero θ
     "consensus": 0.010,
     "mom_lowvol": 0.008,
+    "regime_persistence": 0.0,   # unweighted until the walk-forward gauntlet earns it a nonzero θ
 }
 
 

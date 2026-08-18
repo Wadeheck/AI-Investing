@@ -6,6 +6,7 @@ from ai_investing.signals.sentiment import SentimentSignal
 from ai_investing.signals.political_hype import PoliticalHypeSignal
 from ai_investing.signals.macro_linkage import MacroLinkageSignal
 from ai_investing.signals.trend_zscore import TrendZScoreSignal
+from ai_investing.signals.regime_persistence import RegimePersistenceSignal
 
 __all__ = [
     "Signal",
@@ -15,6 +16,7 @@ __all__ = [
     "PoliticalHypeSignal",
     "MacroLinkageSignal",
     "TrendZScoreSignal",
+    "RegimePersistenceSignal",
     "default_signals",
 ]
 
@@ -28,4 +30,5 @@ def default_signals() -> list[Signal]:
         PoliticalHypeSignal(),
         MacroLinkageSignal(),
         TrendZScoreSignal(),
+        RegimePersistenceSignal(),
     ]
