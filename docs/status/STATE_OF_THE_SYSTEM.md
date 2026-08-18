@@ -1533,6 +1533,88 @@ claim is unaffected. See `docs/design/SHARED_ACCOUNT.md` → "The exit-routing
 gap" for the fix and its two regression tests. No position was touched — Mixue
 and Li Ning are held exactly as they were before this entry.
 
+### 4.33 A saturated node has no room left to say "still getting worse" *(2026-08-18)*
+
+Not a defect in running code — found while digesting a routine news item (a
+30-year Treasury yield hitting a 19-year high) and asking why the read felt
+undersized. `macro_linkage` (`signals/macro_linkage.py`) reads a node's
+*current* activation level, which `field.py` hard-clamps to `[-1, 1]`.
+`bond_stress` and `us_gov_debt` were both sitting at 0.97–0.99 — against the
+ceiling. A node that crossed that level yesterday and one that has sat there
+for weeks are numerically identical to a level-only reader: both just read
+"near max," and a maxed node has no headroom left to register the story
+getting worse. Only *duration* can still say anything once level has
+saturated, and nothing measured duration.
+
+Added `regime_persistence` (`signals/regime_persistence.py`,
+`brain/persistence.py`) as a new candidate feature, following the exact
+dormant-candidate lifecycle `trend_zscore` established (`docs/design/FORMULA.md`
+§7): computed every cycle, reaches the feature vector, excluded from
+`consensus`, ships at `θ=0` — inert to every live decision until it earns a
+weight through the same RLS/walk-forward gauntlet everything else does. It
+answers the duration question from the real per-node activation history
+`BrainStore.node_trend` already recorded every cycle (previously used only for
+dashboard charts): consecutive same-sign days above a 0.85 threshold.
+
+**Checked against live data immediately after deploying it, and it missed its
+own motivating case.** TLT's only direct graph predecessor turned out to be
+`us_10y_yield` (edge weight 0.9), whose own streak was just 2 days — the
+actual multi-week story sat a second hop further back, through an edge the
+first version didn't traverse. Widened the same day: a new
+`KnowledgeGraph.predecessors()` (the inverse of the existing `_adjacency()`)
+lets `driver_persistence_days()` walk up to 2 hops upstream, non-asset nodes
+only, compounding edge weights and discounting every hop beyond the first by
+the SAME per-hop decay constant (`settings.brain.decay`) `graph.propagate()`
+already uses for the real ripple — so a 2-hop borrow is honestly discounted,
+never treated as equally certain as a direct edge. Re-checked against live
+data again after the widen: the arithmetic traced out correctly (verified
+node-by-node against `brain.json` and the real graph edges), but it also
+corrected an assumption made along the way — `bond_stress`'s own streak had
+in fact reset to 2 days by the time of the second check, not the multi-week
+run it looked like from casually reading its level. The feature is now doing
+exactly what it was built to do: giving an honest number instead of a
+plausible-sounding one.
+
+Explicitly declined a request in the same session to hand-set a nonzero
+weight for this feature "to save time." `brain/adviser_gate.py`'s own
+docstring documents the reason: a prior hand-set `BLEND_WEIGHT` was killed
+after backtesting showed its P&L-optimal value was 0.00. The two legitimate
+paths (online RLS from closed trades; `backtest.main --optimize --save` on
+demand) remain the only way this — or anything else in the formula — earns
+influence over real capital. See `docs/design/FORMULA.md` §8 for the full
+mechanism writeup and `tests/test_regime_persistence.py` for the 20 tests
+covering both the base feature and the 2-hop widen.
+
+### 4.34 The digester's own node reference had drifted 12 nodes behind the graph it describes *(2026-08-18)*
+
+Found while writing up §4.33 above, not by a tagging failure being observed:
+`docs/data-pipeline/SONNET_DIGEST_BRIEF.md` — the injected system prompt for
+every digestion cycle — last had its node table updated at v1.5 (2026-08-02).
+The graph kept growing underneath it. A direct diff (every live non-asset
+node id against the brief's text) found **12 taggable nodes with zero
+instructions**: six "monetary plumbing" factors (`cbdc_rollout`,
+`em_dollarization`, `fx_intervention`, `monetary_fragmentation`,
+`payment_rail_access`, `stablecoin_supply` — seeded 2026-08-12, v26, ten days
+before the brief was last touched) and six regional themes
+(`china_healthcare`, `china_property_stocks`, `macau_gaming`,
+`sg_consumer_leisure`, `sg_industrials`, `sg_property`). The digester cannot
+tag what it has never been told exists — a story squarely about, say, a
+digital-ruble mandate or a Macau GGR print had no correct node to land on,
+silently, with no error anywhere to notice.
+
+Fixed by transcription, not authorship: each new row's definition is copied
+from that node's own `equilibrium` field in `knowledge_graph.json` — the
+same text a human already wrote when the node was seeded — not freshly
+invented judgment calls about sign or scope. Header counts corrected
+throughout (128→140 taggable nodes, 683→1,094 edges, 179→443 assets); see
+the brief's own v1.6 changelog entry for the full list.
+
+**Not yet done**: the brief's own rule (line 7–8) requires its 50-headline
+golden-set audit (§15) to be re-run whenever this document changes, before
+any output from it is fully trusted. That has not happened for v1.6. Low risk
+individually (transcribed text, not new judgment), but the rule is unconditional
+and applies regardless of how safe a given change looks.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1557,7 +1639,8 @@ and the register had drifted **13 commits** behind reality.
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
 | **Crypto coverage is 6, not 10** | 7 of 13 coins score under `MIN_SCORE` and are reported in `no_view` rather than given a manufactured direction. Base changed under this figure at §4.26 (13 → 17 watched coins); not yet re-measured post-deploy, so this 6/13 split is stale until the next `daily_status.py`-style check. | Fewer learning data points than requested. |
-| **Two new dormant candidates added 2026-08-15, neither influencing a live decision yet** | (1) `signals/trend_zscore.py` — an EMA/stdev z-score trend filter, added to the formula's feature vector at weight 0 after its own r/algotrading-inspired backtest and a real walk-forward run both failed to clear the Deflated Sharpe bar (0.001 vs 0.60 needed). See `docs/design/FORMULA.md` §7. (2) `research/crypto_signals.py`'s `positioning_crowding_z` — Binance long/short account-ratio crowding, covering all 17 watchlist coins (funding rate only ever covered 3). Computed and cached every cycle so it starts accumulating real days now, but gated out of brain resting levels by `CRYPTO_POSITIONING_ENABLED` (default false) — Binance retains only 30 days server-side, so there is no deep history to backtest this one against yet. | None today — both are inert by construction (weight 0 / flag off). Risk is only in *when* to flip them on without repeating the "trust an unvalidated backtest" mistake both were built to avoid. |
+| **Three new dormant candidates, none influencing a live decision yet** | (1) `signals/trend_zscore.py`, added 2026-08-15 — an EMA/stdev z-score trend filter, added to the formula's feature vector at weight 0 after its own r/algotrading-inspired backtest and a real walk-forward run both failed to clear the Deflated Sharpe bar (0.001 vs 0.60 needed). See `docs/design/FORMULA.md` §7. (2) `research/crypto_signals.py`'s `positioning_crowding_z`, added 2026-08-15 — Binance long/short account-ratio crowding, covering all 17 watchlist coins (funding rate only ever covered 3). Computed and cached every cycle so it starts accumulating real days now, but gated out of brain resting levels by `CRYPTO_POSITIONING_ENABLED` (default false) — Binance retains only 30 days server-side, so there is no deep history to backtest this one against yet. (3) `signals/regime_persistence.py`, added 2026-08-18 (§4.33) — days-sustained-saturation on an asset's origin node, with a 2-hop graph look-through. Explicitly declined to hand-set its weight when asked to, same reasoning as `trend_zscore`'s own history. See `docs/design/FORMULA.md` §8. | None today — all three are inert by construction (weight 0 / flag off). Risk is only in *when* to flip them on without repeating the "trust an unvalidated backtest" mistake all three were built to avoid. |
+| **`SONNET_DIGEST_BRIEF.md`'s golden-set audit has not been re-run since v1.6** (§4.34) | The brief's own rule requires re-running its 50-headline golden-set audit (§15) whenever the document changes, before its output is fully trusted. v1.6 (2026-08-18) added 12 node definitions — transcribed from `knowledge_graph.json`, not freshly authored, so individually low-risk — but the rule was not followed before this entry was written. | Low — transcribed text, not new judgment calls — but unquantified until the audit actually runs. |
 | **New-company discovery still has a manual step** (§4.24) | The `lists_on` digester path and `graph_gap_scan.py` cover the two automatable layers, but the news archives are too thin/generic right now for the gap-scan's frequency heuristic to catch China/HK-specific names on its own — CXMT was the one real hit out of ~180 candidates at loose thresholds, and Hengrui/Haitian/Sanhua/JCET were found by neither tool, only by directly searching "biggest HK/CN IPOs" and checking each result against the graph. **Recommendation: keep doing that sweep periodically by hand** (monthly, or whenever a market-moving China/HK/SG headline seems suspiciously absent from the graph) until the archives have enough volume for the gap-scan to plausibly take over — re-run `graph_gap_scan.py` first each time to check whether it's started catching real names on its own, since that's the signal the manual step is no longer needed. | Until archive volume grows, coverage gaps in fast-moving sectors (semiconductors, robotics, anything with a hot IPO pipeline) will keep recurring silently between sweeps. |
 | **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. Still climbing as of §4.26's deploy: 50.4% a few hours into that day, before the +4 crypto symbols added any further load — worth actually checking whether it settles or keeps trending, not just noting it again. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
@@ -1588,6 +1671,8 @@ automatically, since several of these are judgement calls, not bugs.
 | Crypto coverage 6/13 is stale | This isn't a "more data" wait — it's just stale arithmetic since §4.26 widened the watchlist 13→17. Re-run the same `no_view` count against the current 17 the next time anyone checks. | `advice()`'s `no_view` list, filtered to `/` symbols. |
 | `trend_zscore` dormant candidate | Re-run `python3 -m ai_investing.backtest.main --optimize --save` periodically (no timer wired for this one, see `docs/design/FORMULA.md` §7 Path B) as real crypto history accumulates past the ~1yr Gemini/ccxt window this was first tested on; flip to trusted only if a future run's Deflated Sharpe clears `settings.learning.min_dsr` (0.60). Path A (online RLS) needs no action — it graduates the weight on its own if the feature turns out predictive. | `data/formula.json` weights, `trend_zscore` entry; `docs/design/FORMULA.md` §7. |
 | `positioning_crowding_z` dormant candidate | Data-gated, not judgement-gated: revisit once `research/crypto_signals.py`'s cached `positioning` series has **≥30 real accumulated days per symbol** (started 2026-08-15, so **~2026-09-14**) — enough for the z-score itself to mean something beyond noise. At that point, run the same walk-forward comparison `trend_zscore` got before flipping `CRYPTO_POSITIONING_ENABLED=true`. | `data/crypto_signals.json` → `positioning.<SYM>` day count. |
+| `regime_persistence` dormant candidate | Same two paths as `trend_zscore`. Path A (online RLS) needs no action — it graduates the weight on its own once trades close and `outcomes` starts filling (0 rows as of §4.28, still the last measurement). Path B: re-run `python3 -m ai_investing.backtest.main --optimize --save` on demand for an immediate evidenced answer instead of waiting on live P&L; flip to trusted only if Deflated Sharpe clears `settings.learning.min_dsr` (0.60). | `data/formula.json` weights, `regime_persistence` entry; `docs/design/FORMULA.md` §8. |
+| `SONNET_DIGEST_BRIEF.md` golden-set audit not re-run since v1.6 | Not data-gated — a deliberate action, before the next material change to the brief compounds on top of an unverified one. Run the §15 golden-set audit (50 hand-tagged examples) against v1.6, including the 12 newly-added nodes specifically. | `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` §15; the brief's own v1.6 changelog entry names what changed. |
 | New-company discovery's manual step | **Monthly**, next due **~2026-09-14** (one month after the §4.26 sweep), or immediately if a market-moving China/HK/SG headline seems suspiciously absent from the graph. Re-run `graph_gap_scan.py` first each time — if it starts catching real names on its own, the manual step can retire. | `scripts/graph_gap_scan.py`, then manual "biggest HK/CN IPOs" search as a cross-check. |
 | LLM endpoint nearing its free daily cap | If `vgxfw` closes **3 consecutive days above 90%** of its projected daily use, that's the trigger to either trim per-cycle scoring frequency or add a second paid endpoint to the chain. | `daily_status.py` → "LLM free allowance" line, checked daily. |
 | `shadow.json` NaN cash | Currently retired, so dormant — but the missing arithmetic test must be written **before** the A/B shadow baseline is reactivated, not after. | Add coverage to whatever test file exercises the shadow book, before flipping it back on. |
