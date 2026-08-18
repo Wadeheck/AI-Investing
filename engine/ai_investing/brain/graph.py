@@ -371,6 +371,21 @@ class KnowledgeGraph:
         self._adj = adj
         return adj
 
+    def predecessors(self, node_id: str, k: Optional[int] = None) -> list[tuple[str, float]]:
+        """Nodes whose activation reaches `node_id` directly (one hop), by
+        |weight| descending -- the inverse of `_adjacency()`, which lists
+        who a node reaches, not who reaches it. Used to find what's actually
+        DRIVING a node (e.g. brain/persistence.py's look-through for an asset
+        whose own landed activation hasn't itself sustained saturation)."""
+        adj = self._adjacency()
+        out: list[tuple[str, float]] = []
+        for src, neighbors in adj.items():
+            for dst, _sign, w, _e in neighbors:
+                if dst == node_id and w > 0:
+                    out.append((src, w))
+        out.sort(key=lambda t: -t[1])
+        return out[:k] if k else out
+
     def alias_index(self) -> dict[str, str]:
         """lowercase alias/label/symbol -> node id (for text matching + symbol lookup)."""
         if self._alias_index is not None:

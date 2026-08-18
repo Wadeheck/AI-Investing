@@ -128,15 +128,16 @@ class Brain:
         # persistent field: today's ripple lands on top of what's still ringing
         self.field.absorb(impacts)
         asset_impacts = self.graph.asset_impacts(self.field.activations)
-        # regime persistence: how long has THIS node held near its ceiling, not
-        # just how high is it right now (feeds signals/regime_persistence.py)
+        # regime persistence: how long has THIS node held near its ceiling (or,
+        # failing that, how long has what's actually DRIVING it), not just how
+        # high is it right now (feeds signals/regime_persistence.py)
         try:
-            from ai_investing.brain.persistence import persistence_days
+            from ai_investing.brain.persistence import driver_persistence_days
             for entry in asset_impacts.values():
                 nid = entry.get("node")
                 if nid:
-                    entry["persistence_days"] = persistence_days(
-                        self.store, nid, self.field.activations.get(nid, 0.0), now)
+                    entry["persistence_days"] = driver_persistence_days(
+                        self.graph, self.store, self.field.activations, nid, now)
         except Exception:
             pass
         # sense of scale + what's already priced: impacts become expected moves

@@ -180,6 +180,34 @@ old saved formula migrates it in at weight 0; RLS can move its weight away from 
 genuinely predictive data), plus direct unit coverage of `persistence_days()` itself
 (saturation-gated, sign-broken streaks, day-bucketing).
 
+**One-hop driver look-through (`driver_persistence_days()`, added same day, in the same
+conversation, before deploy).** The first version above measured only an asset's own
+landed activation — which turned out to miss its own motivating case. Checked against
+live data right after deploying: `TLT`'s own node sat at −0.76, never crossing the 0.85
+threshold, while `bond_stress`/`us_gov_debt` — the actual cause — had been pinned near
+their ceiling for weeks. This is the graph's own design working as intended, not a bug:
+assets decay 4× faster than factors (24h vs. 96h half-life) and every edge hop costs
+weight, so a landed value is *supposed* to sit below its origin's. But it means reading
+only the asset's own streak systematically misses the "sustained upstream cause, freshly
+damped downstream effect" case — exactly a 30-year-Treasury-selloff pressuring a bond
+ETF.
+
+`driver_persistence_days()` (`brain/persistence.py`) adds a bounded look-through: find
+the asset's strongest direct predecessors via a new `KnowledgeGraph.predecessors()`
+(the inverse of the existing `_adjacency()`), restricted to non-asset origin nodes
+(factor/theme/sector/commodity/actor — never asset↔asset, which would let two tickers
+inflate each other's streaks), and take `max(own streak, driver's streak × edge weight)`.
+Additive, not a replacement: a name whose own price action *is* the sustained story
+(a single-name grind lower under its own steam) keeps full, unscaled credit; a weakly
+linked driver (thin edge weight) can't hand a node a streak it barely earns. Wrapped in
+`try/except` exactly like the rest of `core.py`'s enrichment block — a graph-traversal
+failure degrades to the plain per-node read, never takes a cycle down.
+
+Still weight 0, still the same two graduation paths. See `tests/test_regime_persistence.py`
+for `predecessors()` ranking/truncation and four `driver_persistence_days()` cases: the
+TLT-shaped borrow, an asset with its own sustained streak keeping full credit, asset-type
+predecessors correctly excluded, and graceful degradation on a broken graph.
+
 Graduates through the exact same two paths as §7 — online RLS from realized P&L (Path
 A), or offline walk-forward re-curation (Path B) — no special-casing. Whether a
 sustained macro regime actually *predicts* returns better than the current level does is
