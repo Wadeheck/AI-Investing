@@ -137,7 +137,8 @@ class Brain:
                 nid = entry.get("node")
                 if nid:
                     entry["persistence_days"] = driver_persistence_days(
-                        self.graph, self.store, self.field.activations, nid, now)
+                        self.graph, self.store, self.field.activations, nid, now,
+                        hop_decay=cfg.decay)
         except Exception:
             pass
         # sense of scale + what's already priced: impacts become expected moves

@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ai_investing.brain.graph import KnowledgeGraph, Node, Edge
-from ai_investing.brain.persistence import persistence_days, driver_persistence_days
+from ai_investing.brain.persistence import (
+    persistence_days, driver_persistence_days, DEFAULT_HOP_DECAY)
 from ai_investing.learning.features import FeatureExtractor
 from ai_investing.learning.formula import FormulaModel
 from ai_investing.learning.online import RLSLearner
@@ -152,6 +153,73 @@ def test_driver_persistence_excludes_asset_type_predecessors():
     }, now=now)
     activations = {"tlt": -0.1, "gld": 0.99}
     assert driver_persistence_days(g, store, activations, "tlt", now=now) == 0.0
+
+
+def _two_hop_graph():
+    """Mirrors the real live topology found 2026-08-18: bond_stress reaches
+    tlt only two hops away, through us_10y_yield -- TLT's actual strongest
+    DIRECT predecessor, but a much fresher streak than bond_stress's."""
+    nodes = [
+        Node("bond_stress", "factor", "Bond Market Stress"),
+        Node("us_10y_yield", "factor", "US 10Y Yield"),
+        Node("tlt", "asset", "20Y+ Treasury ETF", symbol="TLT", market="US"),
+    ]
+    edges = [
+        Edge("bond_stress", "us_10y_yield", "influences", sign=1, weight=0.9),
+        Edge("us_10y_yield", "tlt", "influences", sign=-1, weight=0.9),
+    ]
+    return KnowledgeGraph(nodes, edges)
+
+
+def test_driver_persistence_reaches_two_hops_with_compounded_decayed_weight():
+    """bond_stress: 20-day streak, reached via two 0.9 edges + one hop_decay
+    -> 20 * 0.9 * 0.9 * DEFAULT_HOP_DECAY. us_10y_yield: fresher 2-day streak,
+    one direct 0.9 edge, undiscounted -> 2 * 0.9. The two-hop path wins here
+    (a long-sustained but distant cause outweighs a fresh, closer one), and
+    must equal the exact compounded/decayed arithmetic, not just "some value"."""
+    g = _two_hop_graph()
+    now = datetime.now(timezone.utc)
+    store = _MultiFakeStore({
+        "tlt": {d: -0.5 for d in range(30)},              # never saturated itself
+        "us_10y_yield": {d: -0.90 for d in range(2)},      # only just crossed
+        "bond_stress": {d: -0.98 for d in range(20)},      # sustained for weeks
+    }, now=now)
+    activations = {"tlt": -0.5, "us_10y_yield": -0.90, "bond_stress": -0.98}
+
+    via_direct = 2.0 * 0.9
+    via_two_hop = 20.0 * 0.9 * 0.9 * DEFAULT_HOP_DECAY
+    assert via_two_hop > via_direct   # sanity: the case worth testing
+
+    blended = driver_persistence_days(g, store, activations, "tlt", now=now)
+    assert blended == via_two_hop
+
+
+def test_driver_persistence_direct_hop_is_undiscounted():
+    """A direct (one-hop) driver must NOT eat the extra hop_decay -- only
+    hops beyond the first do. Regression guard for the off-by-one this would
+    be easy to introduce when generalizing from one hop to N."""
+    g = _tlt_graph()
+    now = datetime.now(timezone.utc)
+    store = _MultiFakeStore({
+        "tlt": {d: -0.1 for d in range(10)},
+        "bond_stress": {d: -0.98 for d in range(10)},
+    }, now=now)
+    activations = {"tlt": -0.1, "bond_stress": -0.98}
+    assert driver_persistence_days(g, store, activations, "tlt", now=now) == 10.0 * 0.8
+
+
+def test_driver_persistence_max_hops_bounds_the_walk():
+    """max_hops=1 must NOT see bond_stress two hops away -- proves the bound
+    is real, not just decayed toward irrelevance."""
+    g = _two_hop_graph()
+    now = datetime.now(timezone.utc)
+    store = _MultiFakeStore({
+        "tlt": {d: -0.1 for d in range(5)},
+        "us_10y_yield": {d: -0.1 for d in range(5)},      # not saturated either
+        "bond_stress": {d: -0.98 for d in range(30)},
+    }, now=now)
+    activations = {"tlt": -0.1, "us_10y_yield": -0.1, "bond_stress": -0.98}
+    assert driver_persistence_days(g, store, activations, "tlt", now=now, max_hops=1) == 0.0
 
 
 def test_driver_persistence_graph_error_degrades_to_own():

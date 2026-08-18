@@ -193,20 +193,35 @@ damped downstream effect" case — exactly a 30-year-Treasury-selloff pressuring
 ETF.
 
 `driver_persistence_days()` (`brain/persistence.py`) adds a bounded look-through: find
-the asset's strongest direct predecessors via a new `KnowledgeGraph.predecessors()`
-(the inverse of the existing `_adjacency()`), restricted to non-asset origin nodes
-(factor/theme/sector/commodity/actor — never asset↔asset, which would let two tickers
-inflate each other's streaks), and take `max(own streak, driver's streak × edge weight)`.
-Additive, not a replacement: a name whose own price action *is* the sustained story
-(a single-name grind lower under its own steam) keeps full, unscaled credit; a weakly
-linked driver (thin edge weight) can't hand a node a streak it barely earns. Wrapped in
-`try/except` exactly like the rest of `core.py`'s enrichment block — a graph-traversal
-failure degrades to the plain per-node read, never takes a cycle down.
+the asset's strongest predecessors via a new `KnowledgeGraph.predecessors()` (the inverse
+of the existing `_adjacency()`), restricted to non-asset origin nodes (factor/theme/
+sector/commodity/actor — never asset↔asset, which would let two tickers inflate each
+other's streaks), and take `max(own streak, driver's streak × path weight)`. Additive,
+not a replacement: a name whose own price action *is* the sustained story (a single-name
+grind lower under its own steam) keeps full, unscaled credit; a weakly linked or distant
+driver can't hand a node a streak it barely earns. Wrapped in `try/except` exactly like
+the rest of `core.py`'s enrichment block — a graph-traversal failure degrades to the
+plain per-node read, never takes a cycle down.
+
+**Widened to 2 hops the same day, after checking the first version against live data.**
+TLT's only DIRECT predecessor turned out to be `us_10y_yield` (edge weight 0.9), whose
+own streak was just 2 days — the real multi-week story, `bond_stress`/`us_gov_debt`, sits
+a second hop further back. A 1-hop-only look-through caught the fresh acceleration but
+missed the sustained regime it was actually built to find. `_upstream_origins()` now
+walks up to `max_hops=2` (bounded BFS, visited-set guarded against the graph's cycles —
+`correlates_with` is bidirectional — with at most `top_k=6` branches per hop), compounding
+edge weights along the path and applying `hop_decay` (defaults to `settings.brain.decay`,
+the SAME per-hop constant `graph.propagate()` uses for the real ripple, passed through
+from `core.py`) to every hop beyond the first — so a 2-hop borrow is honestly discounted
+for the extra inference, never treated as equally certain as a direct edge.
 
 Still weight 0, still the same two graduation paths. See `tests/test_regime_persistence.py`
-for `predecessors()` ranking/truncation and four `driver_persistence_days()` cases: the
-TLT-shaped borrow, an asset with its own sustained streak keeping full credit, asset-type
-predecessors correctly excluded, and graceful degradation on a broken graph.
+for `predecessors()` ranking/truncation and eight `driver_persistence_days()` cases: the
+original 1-hop TLT-shaped borrow, an asset with its own sustained streak keeping full
+credit, asset-type predecessors excluded, graceful degradation on a broken graph, the
+real 2-hop bond_stress→us_10y_yield→tlt topology with exact compounded/decayed-weight
+arithmetic, a regression guard that a direct hop is never discounted, and proof
+`max_hops=1` genuinely can't see two hops away.
 
 Graduates through the exact same two paths as §7 — online RLS from realized P&L (Path
 A), or offline walk-forward re-curation (Path B) — no special-casing. Whether a
