@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "summary": "S&P cuts Oracle to BBB- (one notch above junk) on OpenAI's ~50% share of its $638bn RPO and a forecast $42bn FY27 cash deficit.",
+      "headline": "S&P Downgrades Oracle to BBB-, One Notch Above Junk, Citing OpenAI Concentration Risk",
+      "source": "mlq.ai",
+      "type": "market_flow",
+      "nodes": ["ai_circularity"],
+      "polarity": 0.6,
+      "magnitude": 0.5,
+      "confidence": 0.85,
+      "manipulation_likelihood": 0.1,
+      "emotion": "fear",
+      "emotion_intensity": 0.4,
+      "novelty": 1.0,
+      "event_key": "sp-oracle-downgrade-2026-07",
+      "ts": "2026-07-09T12:00:00Z"
+    }
+  ],
+  "amendments": []
+}

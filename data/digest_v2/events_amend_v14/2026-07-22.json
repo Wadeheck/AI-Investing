@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "summary": "Alphabet posts first-ever negative FCF (-$5.9bn) as AI capex doubles to $44.9bn YoY; FY26 capex guidance raised to $195-205bn.",
+      "headline": "Alphabet Posts First Negative Free Cash Flow on Record $44.9 Billion Quarterly Capex, Lifts Full-Year Outlook to $205 Billion",
+      "source": "finance.biggo.com",
+      "type": "earnings",
+      "nodes": ["ai_capex_cycle"],
+      "polarity": 0.8,
+      "magnitude": 0.5,
+      "confidence": 0.85,
+      "manipulation_likelihood": 0.05,
+      "emotion": "fear",
+      "emotion_intensity": 0.35,
+      "novelty": 1.0,
+      "event_key": "alphabet-2026-q2-negative-fcf",
+      "ts": "2026-07-22T12:00:00Z"
+    }
+  ],
+  "amendments": []
+}
