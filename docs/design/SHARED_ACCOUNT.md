@@ -226,6 +226,62 @@ in `runner.py`. That was the false-halt half of this gap; the exit-routing half
 above is the half that was still open when this was reviewed a session later
 and has been closed the same way.
 
+### The USO late-fill halt (2026-08-19)
+
+`shared_claim_drift` fired again, exactly the thing "What to watch" above says
+should never appear — but this time on an ordinary late fill, not a
+`sim_keys` gap, and it exposed a second way this check can false-halt.
+
+**Timeline (all UTC).** A USO buy sat `NotReported` at Longbridge from
+08:26:58; still-unresolved log lines fired at 10:30 ("2.1h", cash held
+committed). At 13:36:50 `_reconcile_shared()` ran, saw the venue had already
+filled it (account holds 2) while the book's local ledger — built from
+`self.book.working_positions()`, current only as of the START of that same
+cycle — still said 1, and latched `_shared_drift`. The very next cycle's
+`resolve_pending()` (which runs before the halt check, at the top of
+`run_cycle`) picked up the fill six minutes later, at 13:42:20
+(`late_fill: main: late fill USO buy 1 @ 131.0300`), and the book's in-memory
+position was correct from that moment on. `_shared_drift` is never
+re-evaluated once set — cleared only by a fresh `Runner.__init__`, i.e. a
+restart — so the engine kept refusing to trade for another ~40 minutes after
+the disagreement it detected no longer existed. Per `_reconcile()`
+documented a few sections up, THAT check already re-baselines out a late fill
+(`resolved_keys`) precisely so an asynchronous fill the design expects does
+not read as a fault. `_reconcile_shared()` has no equivalent: its own
+docstring says the disagreement "does not resolve itself," which is the
+right default for a genuine cross-book conflict and the wrong one for a
+same-session pending-order race — this was the latter.
+
+**A confounding artefact, not itself the bug.** While halted, `run_cycle`
+returns before the book's own state file gets saved, so `data/live_book.json`
+stayed frozen at its pre-fill snapshot (qty 1, the stale pending order still
+listed) for the entire halt, even though `data/state.json` — refreshed every
+cycle regardless of halt, via `_snapshot()` — correctly showed qty 2 the
+whole time. File-based checks (`daily_status.py`, `watchdog.py`) read the
+former, so they kept reporting the same stale drift line long after the
+live process had already reconciled — which made the incident look
+unresolved for longer than it actually was.
+
+**Verification before acting.** Before touching anything: read the live
+Longbridge account directly (`_make_stock_broker(cfg).get_positions()`) and
+confirmed USO at 2 shares, matching the book's in-memory state exactly; then
+ran a full fresh `reconcile_claims()` across every symbol in all three
+books' frozen files against that live read — USO was the only line, and it
+was already substantively resolved. EWY/GLD/TLT, flagged by an earlier
+`watchdog.py` snapshot at 13:32 (a different, out-of-band check that also
+caught mid-settlement timing, never touched `_shared_drift`), had cleared on
+their own well before this.
+
+**Fix applied: an operator restart** (`systemctl --user restart
+ai-investing`, 14:16 UTC) — the documented remedy. Confirmed the fresh
+process initialised `_shared_drift = None`, completed its first cycle at
+14:20 with `halted: False`, and `daily_status.py`'s "book claims vs account"
+row returned to `OK, 8 account position(s) fully claimed`. **No code was
+changed.** The design gap — `_reconcile_shared()` can latch on a fill that
+resolves itself within the same running process, with no equivalent to
+`_reconcile()`'s late-fill re-baselining — is still open; see §4A in
+`docs/status/STATE_OF_THE_SYSTEM.md`.
+
 ### Known cosmetic artefact
 
 `invest_journal.jsonl` carries **two** `migrated_to_shared_account` lines for the

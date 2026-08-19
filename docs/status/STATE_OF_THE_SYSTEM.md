@@ -1615,6 +1615,29 @@ any output from it is fully trusted. That has not happened for v1.6. Low risk
 individually (transcribed text, not new judgment), but the rule is unconditional
 and applies regardless of how safe a given change looks.
 
+### 4.35 A late fill halted all four books for 40 minutes after it had already resolved *(2026-08-19)*
+
+Reported by the user pasting two Telegram alerts. `_reconcile_shared()`
+caught a USO buy order mid-settlement — filled at the venue, not yet
+reflected in the book's local ledger — and latched `_shared_drift`, which
+halts every book (stocks *and* crypto, since the check runs before any book
+acts) until an operator clears it by restarting. The very next cycle's
+`resolve_pending()` picked up the fill six minutes later and the position
+was correct from then on, but the latch is never re-evaluated once set, so
+the engine kept refusing to trade for another ~40 minutes after the
+disagreement it detected no longer existed. `Runner._reconcile()` already
+re-baselines out exactly this class of late fill; `_reconcile_shared()` has
+no equivalent, by design — reasonable for a genuine cross-book conflict,
+wrong for a same-session pending-order race.
+
+Verified directly against the live Longbridge account (not just the book's
+own files) before doing anything, confirmed nothing was actually wrong, then
+restarted `ai-investing.service` — the documented operator remedy — and
+confirmed the fresh process resumed cleanly. No code changed. Full
+timeline, the file-staleness artefact that made the halt look unresolved
+longer than it was, and the still-open design gap:
+`docs/design/SHARED_ACCOUNT.md` → "The USO late-fill halt (2026-08-19)".
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1646,6 +1669,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
+| **`_reconcile_shared()` can latch on a fill that resolves itself** (§4.35) | `_shared_drift` is set once and cleared only by a restart — no equivalent to `_reconcile()`'s late-fill re-baselining. A pending order caught mid-settlement halts all four books until an operator restarts, even if `resolve_pending()` fixes the underlying claim within the same or the very next cycle. Separately, the halted book's own state file (e.g. `live_book.json`) stops getting saved while halted, so file-based checks (`daily_status.py`, `watchdog.py`) keep reporting the stale claim long after the live process's in-memory state (and `state.json`) has already reconciled. | Every occurrence costs a full-engine trading outage (~40min on 2026-08-19) until someone notices and restarts — for a condition that may already be fixed by the time it's noticed. |
 
 ## 4B. Cues — when each open item in §4A is actually ready to act on
 
