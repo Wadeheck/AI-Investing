@@ -11,7 +11,7 @@ import math
 import os
 
 from ai_investing.brokers.base import BrokerAdapter
-from ai_investing.models import Asset, AssetClass, Order, OrderStatus, Position, Side
+from ai_investing.models import Asset, AssetClass, Order, OrderStatus, OrderType, Position, Side
 
 # HKEX spread table: (price is below this) -> minimum tick. Ends open-ended.
 _HK_SPREADS = ((0.25, 0.001), (0.50, 0.005), (10.0, 0.010), (20.0, 0.020),
@@ -178,6 +178,185 @@ class CcxtBroker(BrokerAdapter):
 
     def validate(self) -> dict:
         return {"broker": f"ccxt:{self.settings.crypto_exchange}",
+                "cash": self.get_cash(), "positions": len(self.get_positions())}
+
+
+class BinanceFuturesBroker(BrokerAdapter):
+    """Crypto sleeve execution via ccxt's `binanceusdm` (USDⓈ-M perpetuals).
+
+    Separate from CcxtBroker above because futures accounting is not spot
+    accounting: CcxtBroker reads `fetch_balance()` and treats every non-base
+    currency held as a "position", which is right for a spot wallet and wrong
+    for futures — a short position holds no coin balance at all, and margin,
+    leverage and entry price only exist on `fetch_positions()`.
+
+    Long-only by default, matching the original crypto sleeve's mandate
+    (R8/R21/R37 — shorts rejected six times): every SELL is sent
+    `reduceOnly=True`, so a sizing bug can close a long early but can never
+    open a short. Pass `long_only=False` for a strategy that is meant to
+    short (e.g. the fast-execution event sleeve) — `reduceOnly` is then only
+    sent on orders that are actually closing an existing position, and a
+    SELL with no open long is left free to open a short, same as Binance's
+    default one-way position mode already handles.
+
+    Testnet-only for now. Refuses to construct unless CRYPTO_SANDBOX=true —
+    this adapter has only ever been run against testnet.binancefuture.com;
+    production Binance API keys do not even work against that endpoint (it is
+    separate infrastructure with its own key pairs), so there is no
+    accidental path from here to a funded account. Going live for real would
+    mean deliberately relaxing this guard, funding a Binance account despite
+    SECURITY.md's note that Binance is unregulated for Singapore, and testing
+    the untested (fetch_positions long/short sign, margin-mode calls) against
+    real money first.
+
+    Env: BINANCE_FUTURES_TESTNET_API_KEY / BINANCE_FUTURES_TESTNET_API_SECRET —
+    deliberately its own name, not CRYPTO_SANDBOX_API_KEY/SECRET, which
+    CcxtBroker above already uses for a DIFFERENT exchange's sandbox
+    (CRYPTO_EXCHANGE, e.g. gemini). Sharing the name would mean setting this
+    up silently repoints whatever else reads those two variables at a
+    different exchange's testnet.
+    """
+
+    name = "binance_futures"
+    live = True
+
+    def __init__(self, settings, leverage: int | None = None, long_only: bool = True,
+                 api_key: str | None = None, api_secret: str | None = None):
+        import ccxt  # type: ignore
+        if not getattr(settings, "crypto_sandbox", False):
+            raise RuntimeError(
+                "BinanceFuturesBroker refuses to start with CRYPTO_SANDBOX=false — "
+                "it has only ever been run against the testnet.")
+        self.settings = settings
+        self.long_only = long_only
+        self.leverage = leverage or int(os.environ.get("CRYPTO_FUTURES_LEVERAGE", "1"))
+        self.client = ccxt.binanceusdm({
+            "apiKey": api_key or os.environ.get("BINANCE_FUTURES_TESTNET_API_KEY", ""),
+            "secret": api_secret or os.environ.get("BINANCE_FUTURES_TESTNET_API_SECRET", ""),
+            "enableRateLimit": True,
+            # ccxt (>=4.5) hard-refuses set_sandbox_mode(True) for binanceusdm —
+            # it now raises NotSupported, pointing at Binance's newer "demo
+            # trading" feature. That is a different product from the
+            # testnet.binancefuture.com keys this broker takes; the classic
+            # futures testnet is still live, ccxt just stopped wiring it up
+            # automatically. fetchCurrencies must also be off: binance.py's
+            # load_markets() calls a spot-only `sapi` endpoint for currency
+            # metadata that doesn't exist on the futures testnet host, and a
+            # testnet key against production `sapi` fails auth outright.
+            "options": {"fetchCurrencies": False},
+        })
+        for _api, _url in self.client.urls["test"].items():
+            self.client.urls["api"][_api] = _url
+        self._prepared: set[str] = set()
+
+    @staticmethod
+    def _market_symbol(symbol: str) -> str:
+        """Watchlist form ("BTC/USD") -> ccxt's unified USDT-margined swap form."""
+        return f"{symbol.split('/')[0]}/USDT:USDT"
+
+    @staticmethod
+    def _watchlist_symbol(market_symbol: str) -> str:
+        return f"{market_symbol.split('/')[0]}/USD"
+
+    def _prepare(self, market_symbol: str) -> None:
+        """Isolated margin + fixed leverage, set once per symbol per process.
+
+        Isolated (not cross) so a blown position can only lose what was margined
+        to it — the same bound the book's own 10% hard stop assumes. Leverage
+        defaults to 1x: this adapter has no margin-call handling of its own, so
+        anything above 1x lets the exchange liquidate a position before the
+        book's hard stop ever gets a cycle to fire.
+        """
+        if market_symbol in self._prepared:
+            return
+        try:
+            self.client.set_margin_mode("isolated", market_symbol)
+        except Exception:
+            pass          # already isolated, or exchange rejects a no-op change
+        try:
+            self.client.set_leverage(self.leverage, market_symbol)
+        except Exception as exc:
+            print(f"  !! binance futures: could not set {self.leverage}x leverage "
+                  f"for {market_symbol}: {exc}")
+        self._prepared.add(market_symbol)
+
+    def get_cash(self) -> float:
+        bal = self.client.fetch_balance()
+        usdt = bal.get("USDT") or {}
+        return float(usdt.get("free", 0.0) or 0.0)
+
+    def get_positions(self) -> dict[str, Position]:
+        out: dict[str, Position] = {}
+        try:
+            positions = self.client.fetch_positions()
+        except Exception:
+            return out
+        for p in positions:
+            contracts = float(p.get("contracts") or 0.0)
+            if abs(contracts) < 1e-9:
+                continue
+            sym = self._watchlist_symbol(p.get("symbol") or "")
+            side = (p.get("side") or "").lower()
+            qty = -contracts if side == "short" else contracts
+            asset = Asset(sym, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
+            out[asset.key] = Position(asset, qty, float(p.get("entryPrice") or 0.0))
+        return out
+
+    def submit(self, order: Order, price: float) -> Order:
+        market_symbol = self._market_symbol(order.asset.symbol)
+        self._prepare(market_symbol)
+        side = "buy" if order.side is Side.BUY else "sell"
+        if self.long_only:
+            # Long-only mandate, enforced at the venue: a SELL can only ever
+            # reduce/close the long this book opened, never open a short.
+            params = {"reduceOnly": True} if order.side is Side.SELL else {}
+        else:
+            # Short-capable: only force reduceOnly when this order is actually
+            # closing the existing position (a SELL against an open long, or a
+            # BUY against an open short) — otherwise Binance's one-way netting
+            # already does the right thing (BUY opens/adds long, SELL
+            # opens/adds short) and reduceOnly would incorrectly reject it.
+            cur = self.get_positions().get(f"crypto:{order.asset.symbol}")
+            cur_qty = cur.qty if cur else 0.0
+            closing = (order.side is Side.SELL and cur_qty > 0) or \
+                      (order.side is Side.BUY and cur_qty < 0)
+            params = {"reduceOnly": True} if closing else {}
+        is_limit = order.order_type is OrderType.LIMIT and order.limit_price
+        try:
+            if is_limit:
+                res = self.client.create_order(market_symbol, "limit", side, order.qty,
+                                               order.limit_price, params)
+            else:
+                res = self.client.create_order(market_symbol, "market", side, order.qty,
+                                               None, params)
+            order.id = str(res.get("id"))
+            # Same rule as CcxtBroker.submit above: trust a fill only when the
+            # venue actually reports one, never fabricate it (§4.15).
+            filled = res.get("filled")
+            avg = res.get("average") or res.get("price")
+            if filled is not None and float(filled) > 0 and avg and float(avg) > 0:
+                order.filled_qty = float(filled)
+                order.filled_price = float(avg)
+                order.status = OrderStatus.FILLED
+            else:
+                self._symbol_for_fetch = market_symbol
+                self.confirm_or_pend(order)
+        except Exception as exc:  # pragma: no cover - network path
+            order.status = OrderStatus.REJECTED
+            order.reason = f"binance_futures: {exc}"
+        return order
+
+    def fetch_fill(self, order_id: str):
+        sym = getattr(self, "_symbol_for_fetch", None)
+        try:
+            o = self.client.fetch_order(order_id, sym) if sym else self.client.fetch_order(order_id)
+        except Exception:
+            return None
+        return (o.get("status"), o.get("filled") or 0.0,
+                o.get("average") or o.get("price") or 0.0)
+
+    def validate(self) -> dict:
+        return {"broker": "binance_futures (testnet)", "leverage": self.leverage,
                 "cash": self.get_cash(), "positions": len(self.get_positions())}
 
 

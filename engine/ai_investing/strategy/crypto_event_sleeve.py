@@ -144,13 +144,20 @@ class CryptoEventSleeve:
         self.journal = os.path.join(data_dir, "crypto_event_journal.jsonl")
         self._state = self._load()
         b = self._state.get("broker")
-        # allow_short=True unconditionally: the ENTRY logic below is what
-        # actually decides whether a short ever gets submitted
-        # (CRYPTO_EVENT_SHORT, off by default) — the broker just needs to be
-        # able to fill one if asked. Safe to leave permissive: this is a
-        # local PaperBroker, not a real venue (see module docstring).
-        self.broker = (PaperBroker.from_state(b, allow_short=True) if b
-                       else PaperBroker(START_CASH, allow_short=True))
+        if getattr(settings, "crypto_event_live", False):
+            from ai_investing.brokers.live import BinanceFuturesBroker
+            self.broker = BinanceFuturesBroker(
+                settings, long_only=False,
+                api_key=settings.crypto_event_binance_api_key,
+                api_secret=settings.crypto_event_binance_api_secret)
+        else:
+            # allow_short=True unconditionally: the ENTRY logic below is what
+            # actually decides whether a short ever gets submitted
+            # (CRYPTO_EVENT_SHORT, off by default) — the broker just needs to be
+            # able to fill one if asked. Safe to leave permissive: this is a
+            # local PaperBroker, not a real venue (see module docstring).
+            self.broker = (PaperBroker.from_state(b, allow_short=True) if b
+                           else PaperBroker(START_CASH, allow_short=True))
         try:                       # the expectation ledger: claim -> outcome -> learn
             from ai_investing.learning.spine import LearningSpine
             self.ledger = LearningSpine(settings)
@@ -188,7 +195,14 @@ class CryptoEventSleeve:
         self._save()
 
     def _save(self) -> None:
-        self._state["broker"] = self.broker.state()
+        # A live broker's positions live at the exchange, not here (see
+        # CryptoBook._save for the same reasoning) — snapshot() reads fresh
+        # from the venue purely so _stamp_marks below sees real numbers; it
+        # is never fed back into from_state() on restart.
+        if hasattr(self.broker, "state"):
+            self._state["broker"] = self.broker.state()
+        else:
+            self._state["broker"] = self.broker.snapshot()
         if getattr(self, "_mark_prices", None):
             self._stamp_marks(self._mark_prices)
         self._state["ts"] = datetime.now(timezone.utc).isoformat()

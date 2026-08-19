@@ -334,6 +334,33 @@ class Settings:
     data_provider: str = field(default_factory=lambda: _get("DATA_PROVIDER", "synthetic"))
     crypto_exchange: str = field(default_factory=lambda: _get("CRYPTO_EXCHANGE", "coinbase"))
     crypto_sandbox: bool = field(default_factory=lambda: _get_bool("CRYPTO_SANDBOX", False))
+    # The ₿ crypto sleeve (strategy/crypto_book.py) always traded against an
+    # in-memory PaperBroker, independent of LIVE_TRADING -- a deliberate
+    # separation, not an oversight (its mandate calls itself "the live
+    # implementation of ... what was tested", but "live" there meant live
+    # DECISIONS, not a live order path). This is the one flag that puts a real
+    # venue behind it: BinanceFuturesBroker, and only against the testnet
+    # (it refuses to construct unless CRYPTO_SANDBOX=true). Off by default;
+    # every existing deployment (incl. the ProDesk) keeps the old behaviour
+    # until this is set AND BINANCE_FUTURES_TESTNET_API_KEY/SECRET are set —
+    # a name deliberately distinct from CRYPTO_SANDBOX_API_KEY/SECRET above,
+    # which CcxtBroker already uses for a different exchange's sandbox.
+    crypto_book_live: bool = field(default_factory=lambda: _get_bool("CRYPTO_BOOK_LIVE", False))
+    # Same idea, for the fast-execution/shock-reaction crypto strategy
+    # (strategy/crypto_event_sleeve.py) — it stays on a local PaperBroker
+    # until this is set. Uses its own BinanceFuturesBroker instance with
+    # long_only=False, since this strategy can short (CRYPTO_EVENT_SHORT,
+    # still off by default — this flag only arms the venue, not the trade).
+    # Must point at a SEPARATE testnet account/key from CRYPTO_BOOK_LIVE's
+    # BINANCE_FUTURES_TESTNET_API_KEY/SECRET (below) — one shared account
+    # would let the two strategies' positions in the same coin net together
+    # on the exchange, corrupting both books' own P&L tracking, which each
+    # assumes it fully owns whatever position exists for a symbol it holds.
+    crypto_event_live: bool = field(default_factory=lambda: _get_bool("CRYPTO_EVENT_LIVE", False))
+    crypto_event_binance_api_key: str = field(
+        default_factory=lambda: _get("CRYPTO_EVENT_BINANCE_TESTNET_API_KEY", ""))
+    crypto_event_binance_api_secret: str = field(
+        default_factory=lambda: _get("CRYPTO_EVENT_BINANCE_TESTNET_API_SECRET", ""))
     data_timeframe: str = field(default_factory=lambda: _get("DATA_TIMEFRAME", "1d"))  # 1d | 1h | 15m | 5m ...
     stock_broker: str = field(default_factory=lambda: _get("STOCK_BROKER", "paper"))
     poll_seconds: int = field(default_factory=lambda: _get_int("POLL_SECONDS", 300))

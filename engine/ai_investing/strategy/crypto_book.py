@@ -88,8 +88,12 @@ class CryptoBook:
         self.path = os.path.join(d, "crypto_state.json")
         self.journal = os.path.join(d, "crypto_journal.jsonl")
         self._state = self._load()
-        b = self._state.get("broker")
-        self.broker = PaperBroker.from_state(b) if b else PaperBroker(START_CASH)
+        if getattr(settings, "crypto_book_live", False):
+            from ai_investing.brokers.live import BinanceFuturesBroker
+            self.broker = BinanceFuturesBroker(settings)
+        else:
+            b = self._state.get("broker")
+            self.broker = PaperBroker.from_state(b) if b else PaperBroker(START_CASH)
         try:                       # expectation ledger: claim -> outcome -> learn
             from ai_investing.learning.spine import LearningSpine
             self.ledger = LearningSpine(settings)
@@ -148,7 +152,17 @@ class CryptoBook:
         self._save()
 
     def _save(self) -> None:
-        self._state["broker"] = self.broker.state()
+        # A live broker's positions live at the exchange, not here — nothing to
+        # persist for restart, and re-hydrating them from a stale local
+        # snapshot on the next restart would fight the venue's own view of the
+        # account. `snapshot()` is used instead of `state()`: read fresh from
+        # the venue every save, purely so `_stamp_marks` below (dashboards,
+        # equity marks) sees real numbers rather than an empty positions list
+        # — it is never fed back into `from_state()`.
+        if hasattr(self.broker, "state"):
+            self._state["broker"] = self.broker.state()
+        else:
+            self._state["broker"] = self.broker.snapshot()
         # AFTER the refresh: broker.state() rebuilds the positions list, so
         # marks written before this line are silently discarded.
         if getattr(self, "_mark_prices", None):

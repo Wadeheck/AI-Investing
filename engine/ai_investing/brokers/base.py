@@ -111,6 +111,20 @@ class BrokerAdapter(ABC):
     def portfolio(self) -> Portfolio:
         return Portfolio(self.get_cash(), self.get_positions())
 
+    def snapshot(self) -> dict:
+        """Read-only view of cash/positions, same shape as PaperBroker.state().
+
+        For live adapters that have no `.state()` of their own (positions live
+        at the venue, not here — see crypto_book.py/crypto_event_sleeve.py's
+        `_save`). Built fresh from the venue every call, never persisted back
+        via `from_state`, so it exists purely so callers that only have a
+        saved-state dict (dashboards, equity-marking) still see real numbers
+        instead of an empty positions list.
+        """
+        return {"cash": self.get_cash(), "positions": [
+            {"symbol": p.asset.symbol, "qty": p.qty, "avg_price": p.avg_price}
+            for p in self.get_positions().values()]}
+
     def place_stop(self, asset, side, qty: float, stop_price: float):
         """Place a resting protective stop AT THE VENUE, so it survives a crash/hang and
         triggers on an intraday gap between cycles. Default: unsupported (returns None)."""
