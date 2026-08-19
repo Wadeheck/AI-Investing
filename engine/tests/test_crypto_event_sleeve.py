@@ -107,11 +107,75 @@ def test_vol_targeted_sizing_shrinks_the_wilder_name():
             "the higher-realized-vol name must be sized down relative to the calmer one"
 
 
-def test_never_shorts_a_negative_shock():
+def test_never_shorts_a_negative_shock_by_default():
+    """CRYPTO_EVENT_SHORT defaults off — R37/R39 are both tested, rejected
+    shapes (twice each, most recently 2026-08-17). See module docstring."""
     with tempfile.TemporaryDirectory() as tmp:
         sl = ces.CryptoEventSleeve(_settings(tmp))
         r = sl.cycle({"BTC/USD": {"impact": -0.9, "node": "crypto_flow"}}, {"BTC/USD": 60000.0})
-        assert not r["opened"], "long only, v1 — no shorts"
+        assert not r["opened"], "shorts are opt-in (CRYPTO_EVENT_SHORT), off by default"
+
+
+def test_short_opt_in_only_fires_in_winter_by_default():
+    """CRYPTO_EVENT_SHORT_WINTER=1 is the default shape once shorts are
+    enabled at all — a bad-news shock only gets a short on a confirmed
+    downtrend, mirroring R39 (not R37's rejected all-weather variant)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        old = ces.CRYPTO_EVENT_SHORT
+        ces.CRYPTO_EVENT_SHORT = True
+        try:
+            sl = ces.CryptoEventSleeve(_settings(tmp))
+            shock = {"BTC/USD": {"impact": -0.3, "node": "crypto_flow"}}
+            r = sl.cycle(shock, {"BTC/USD": 60000.0}, winter=False)
+            assert not r["opened"], "outside winter, a short must not fire by default"
+
+            sl2 = ces.CryptoEventSleeve(_settings(tmp))
+            r2 = sl2.cycle(shock, {"BTC/USD": 60000.0}, winter=True)
+            assert [o[0] for o in r2["opened"]] == ["BTC/USD"], \
+                "inside winter, with shorts enabled, the same shock must open a short"
+            pos = next(iter(sl2.broker.get_positions().values()))
+            assert pos.qty < 0, "a short position must carry negative qty"
+        finally:
+            ces.CRYPTO_EVENT_SHORT = old
+
+
+def test_short_can_be_made_all_weather():
+    with tempfile.TemporaryDirectory() as tmp:
+        old_s, old_w = ces.CRYPTO_EVENT_SHORT, ces.CRYPTO_EVENT_SHORT_WINTER
+        ces.CRYPTO_EVENT_SHORT, ces.CRYPTO_EVENT_SHORT_WINTER = True, False
+        try:
+            sl = ces.CryptoEventSleeve(_settings(tmp))
+            r = sl.cycle({"BTC/USD": {"impact": -0.3, "node": "crypto_flow"}},
+                        {"BTC/USD": 60000.0}, winter=False)
+            assert [o[0] for o in r["opened"]] == ["BTC/USD"], \
+                "CRYPTO_EVENT_SHORT_WINTER=0 must remove the winter requirement"
+        finally:
+            ces.CRYPTO_EVENT_SHORT, ces.CRYPTO_EVENT_SHORT_WINTER = old_s, old_w
+
+
+def test_short_hard_stop_and_take_profit_math():
+    """A short profits when price FALLS — the P&L sign must flip vs. a long,
+    not just re-run the long formula on a negative qty."""
+    with tempfile.TemporaryDirectory() as tmp:
+        old = ces.CRYPTO_EVENT_SHORT
+        ces.CRYPTO_EVENT_SHORT = True
+        try:
+            st = _settings(tmp)
+            sl = ces.CryptoEventSleeve(st)
+            cash_before = sl.broker.get_cash()
+            sl.cycle({"BTC/USD": {"impact": -0.3, "node": "crypto_flow"}},
+                     {"BTC/USD": 60000.0}, winter=True)
+            assert sl.broker.get_cash() > cash_before, \
+                "opening a short must credit sale proceeds to cash"
+
+            # price RISES against the short -> hard stop must fire (a loss)
+            sl2 = ces.CryptoEventSleeve(st)
+            r = sl2.cycle({}, {"BTC/USD": 60000.0 * (1 + ces.HARD_STOP + 0.01)}, winter=True)
+            assert r["closed"], "a short must stop out when price rises >10%"
+            _, _, move = r["closed"][0]
+            assert move < 0, "a short caught by its hard stop must record a loss"
+        finally:
+            ces.CRYPTO_EVENT_SHORT = old
 
 
 def test_respects_max_concurrent_positions():

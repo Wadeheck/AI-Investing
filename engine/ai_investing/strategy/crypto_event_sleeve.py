@@ -63,17 +63,52 @@ Same fresh-shock shape as the stock sleeve otherwise:
   - enter when |fresh shock| >= CRYPTO_EVENT_MIN, at most CRYPTO_EVENT_N
     concurrent positions
   - exit after CRYPTO_EVENT_HOLD_DAYS, or on the user's 10% hard stop
-  - LONG ONLY. No leverage, no shorts — v1.
+  - no leverage, ever.
   - runs on EVERY engine cycle, 24/7, same reasoning as `crypto_book.py`.
   - it "decides if it wants to trade": the threshold (and now the winter
     gate) IS the decision. A quiet cycle, or a cycle in a downtrend, holds
     cash and does nothing.
 
+SHORTS: mechanically supported (CRYPTO_EVENT_SHORT=1 opens a short on a
+sufficiently negative fresh shock, gated to crypto winter only unless
+CRYPTO_EVENT_SHORT_WINTER=0), OFF BY DEFAULT — and this default is not a
+placeholder, it is the evidence:
+
+  - The identical shape (react to a bad-news shock in both directions) was
+    gauntlet-tested as R37 (all-weather) and rejected. Retried narrower as
+    R39 (shorts only inside crypto winter, on the theory that a bad-news
+    shock has a tailwind there) — also rejected, TWICE: the original run
+    (2026-08-02) and the monthly re-audit (`research_retest.log.1`,
+    2026-08-17: "R39 winter-gated event shorts ... no candidate beat
+    incumbent — feature NOT adopted"). Both verdicts are recent, not stale
+    priors from early in the project.
+  - Separately, `docs/research/SHORT_STRATEGY.md`'s dedicated bear-profit
+    short sleeve (200d regime lock + bear-rally-fade entry + squeeze stop —
+    a genuinely different, price-only signal, not shock-driven) IS real
+    evidence of a working short, but its own untouched final-window test
+    underperforms long-only (confirmed by re-running
+    `research/replay_crypto_short.py` against current data on 2026-08-19:
+    final CAGR -4.7% combined vs -1.2% long-only) — it trims 2018/2022
+    winter drawdowns at a net cost on the most recent honest evaluation.
+    It is not this sleeve's shape anyway (it is not shock-driven), so it
+    was not ported here; see that doc if a dedicated bear sleeve is ever
+    wanted on `crypto_book.py`.
+
+So: the capability is real and tested end-to-end (see `test_crypto_event_sleeve.py`),
+not a stub — but nothing in the evidence says flip it on. It stays available
+for the same reason `event_sleeve.py` keeps EVENT_LEV/EVENT_SHORT wired:
+the corpus keeps growing, and `scripts/research_retest.py` re-hears rejected
+rounds monthly. Flip CRYPTO_EVENT_SHORT only after a re-run actually adopts
+the matching round.
+
 No shared venue here — crypto never routes to Longbridge in this codebase,
 so this book uses a local, non-venue `PaperBroker` exactly like
 `crypto_book.py`, none of the shared-account plumbing `event_sleeve.py`
 needs for its real stock fills (pending-order resolution, lot flooring,
-migration).
+migration). Shorting here is a pure paper-P&L simulation for the same
+reason the whole crypto side of the engine is paper today (see
+`crypto_book.py` — "pretend money" until a live venue leg is wired up), so
+enabling it costs nothing but simulated equity, not real margin exposure.
 """
 from __future__ import annotations
 
@@ -94,6 +129,11 @@ START_CASH = float(os.environ.get("CRYPTO_EVENT_START_CASH", "100000"))
 # event_sleeve.py's EVENT_* and crypto_book.py's VOL_TARGET/BEAR_K.
 CRYPTO_EVENT_VOL_TARGET = float(os.environ.get("CRYPTO_EVENT_VOL_TARGET", "0.04"))
 CRYPTO_EVENT_WINTER_GATE = os.environ.get("CRYPTO_EVENT_WINTER_GATE", "1").lower() in ("1", "true", "yes")
+# Mechanically supported, OFF by default — R37 (all-weather) and R39
+# (winter-gated) are both tested and REJECTED shapes, twice each as of
+# 2026-08-17. See module docstring "SHORTS" section before flipping either.
+CRYPTO_EVENT_SHORT = os.environ.get("CRYPTO_EVENT_SHORT", "0").lower() in ("1", "true", "yes")
+CRYPTO_EVENT_SHORT_WINTER = os.environ.get("CRYPTO_EVENT_SHORT_WINTER", "1").lower() in ("1", "true", "yes")
 
 
 class CryptoEventSleeve:
@@ -104,7 +144,13 @@ class CryptoEventSleeve:
         self.journal = os.path.join(data_dir, "crypto_event_journal.jsonl")
         self._state = self._load()
         b = self._state.get("broker")
-        self.broker = PaperBroker.from_state(b) if b else PaperBroker(START_CASH)
+        # allow_short=True unconditionally: the ENTRY logic below is what
+        # actually decides whether a short ever gets submitted
+        # (CRYPTO_EVENT_SHORT, off by default) — the broker just needs to be
+        # able to fill one if asked. Safe to leave permissive: this is a
+        # local PaperBroker, not a real venue (see module docstring).
+        self.broker = (PaperBroker.from_state(b, allow_short=True) if b
+                       else PaperBroker(START_CASH, allow_short=True))
         try:                       # the expectation ledger: claim -> outcome -> learn
             from ai_investing.learning.spine import LearningSpine
             self.ledger = LearningSpine(settings)
@@ -191,7 +237,8 @@ class CryptoEventSleeve:
             meta = held.get(pos.asset.symbol, {})
             if px <= 0 or pos.qty == 0:
                 continue
-            move = (px - pos.avg_price) / pos.avg_price
+            short = pos.qty < 0
+            move = ((pos.avg_price - px) if short else (px - pos.avg_price)) / pos.avg_price
             age = len([d for d in days if d >= meta.get("opened_day", today)]) - 1
             reason = None
             if move <= -HARD_STOP:
@@ -200,7 +247,8 @@ class CryptoEventSleeve:
                 reason = f"clock {age}d {move*100:+.1f}%"
             if reason:
                 entry = pos.avg_price
-                o = self.broker.submit(Order(pos.asset, Side.SELL, abs(pos.qty),
+                o = self.broker.submit(Order(pos.asset, Side.BUY if short else Side.SELL,
+                                             abs(pos.qty),
                                              reason=f"crypto event sleeve: {reason}"), px)
                 filled = float(o.filled_qty or 0.0)
                 if filled <= 0:
@@ -208,7 +256,7 @@ class CryptoEventSleeve:
                               requested_qty=round(abs(pos.qty), 6), reason=reason,
                               detail=(o.reason or "no fill"))
                     continue
-                pnl = (px - entry) * filled
+                pnl = (px - entry) * (filled if not short else -filled)
                 settled = (self.ledger.settle("crypto_event", pos.asset.symbol, move,
                                               held_days=age, exit_reason=reason)
                            if self.ledger else None)
@@ -226,21 +274,24 @@ class CryptoEventSleeve:
                                   f"{labels.get(pos.asset.symbol, pos.asset.symbol)}*"
                                   f" ({pos.asset.symbol}): {reason} (pretend money).")
 
-        # 2) entries — biggest fresh crypto shocks above the floor. Long only.
-        # WINTER GATE: a downtrending BTC doesn't stop this book from EXITING
-        # (the loop above never checks it) — only from adding new risk. Room
-        # collapses to 0 rather than skipping the block outright so the log
-        # line below still fires and a quiet cycle in a downtrend is visible
-        # as "gated", not silently indistinguishable from "no shocks today".
-        gated = winter and CRYPTO_EVENT_WINTER_GATE
-        room = 0 if gated else max(0, CRYPTO_EVENT_N - len(open_syms))
-        if gated and shock_assets:
-            crypto_shocks = {s: r for s, r in shock_assets.items()
-                             if "/" in s and float(r.get("impact", 0.0)) >= CRYPTO_EVENT_MIN}
-            if crypto_shocks:
+        # 2) entries — biggest fresh crypto shocks above the floor.
+        # LONG WINTER GATE: a downtrending BTC doesn't stop this book from
+        # EXITING (the loop above never checks it) — only from adding new
+        # LONG risk. This must NOT also block shorts: CRYPTO_EVENT_SHORT_WINTER
+        # (see module docstring) exists precisely to open shorts DURING
+        # winter, so zeroing `room` outright here would make that gate
+        # unsatisfiable by construction. Each candidate is filtered by
+        # direction below instead.
+        long_gated = winter and CRYPTO_EVENT_WINTER_GATE
+        shorts_ok = CRYPTO_EVENT_SHORT and (winter or not CRYPTO_EVENT_SHORT_WINTER)
+        room = max(0, CRYPTO_EVENT_N - len(open_syms))
+        if long_gated and shock_assets:
+            blocked = {s: r for s, r in shock_assets.items()
+                      if "/" in s and float(r.get("impact", 0.0)) >= CRYPTO_EVENT_MIN}
+            if blocked:
                 self._log("gated", reason="winter (BTC < 100d)",
                           shocks={s: round(float(r.get("impact", 0.0)), 4)
-                                  for s, r in crypto_shocks.items()})
+                                  for s, r in blocked.items()})
         if room:
             eq = self._equity(prices_by_sym)
             cands = []
@@ -253,7 +304,10 @@ class CryptoEventSleeve:
                 px = prices_by_sym.get(sym, 0.0)
                 if px <= 0 or sym in open_syms or sym in held:
                     continue
-                if im < CRYPTO_EVENT_MIN:
+                if im >= CRYPTO_EVENT_MIN:
+                    if long_gated:
+                        continue
+                elif not (shorts_ok and im <= -CRYPTO_EVENT_MIN):
                     continue
                 cands.append((abs(im), im, sym, row))
             cands.sort(reverse=True)
@@ -282,9 +336,10 @@ class CryptoEventSleeve:
                     continue
                 px = prices_by_sym[sym]
                 asset = Asset(sym, AssetClass.CRYPTO, exchange=self.settings.crypto_exchange)
+                short = im < 0
                 qty = notional / px
                 o = self.broker.submit(
-                    Order(asset, Side.BUY, qty,
+                    Order(asset, Side.SELL if short else Side.BUY, qty,
                           reason=f"crypto event sleeve: fresh shock {im:+.3f}"), px)
                 if not o.filled_qty:
                     self._log("rejected", symbol=sym, price=round(px, 6),
@@ -296,16 +351,18 @@ class CryptoEventSleeve:
                 held[sym] = {"entry": float(o.filled_price or px),
                              "opened_day": today, "shock": round(im, 4)}
                 opened.append((sym, im, notional))
-                self._log("buy", symbol=sym, price=px, notional=round(notional, 2),
-                          shock=round(im, 4), node=row.get("node", ""),
-                          size_mult=round(trust, 3), rv_daily=round(rv_daily, 4))
+                self._log("short" if short else "buy", symbol=sym, price=px,
+                          notional=round(notional, 2), shock=round(im, 4),
+                          node=row.get("node", ""), size_mult=round(trust, 3),
+                          rv_daily=round(rv_daily, 4))
                 if self.ledger:
                     self.ledger.record("crypto_event", sym, 1, im, rv_daily,
                                        CRYPTO_EVENT_HOLD_DAYS, regime=regime,
                                        driver=row.get("node", ""), notional=notional)
                 if notifier:
+                    verb = "shorted" if short else "bought"
                     notifier.send(
-                        f"⚡️₿ *Crypto event sleeve — bought {labels.get(sym, sym)}* ({sym}), "
+                        f"⚡️₿ *Crypto event sleeve — {verb} {labels.get(sym, sym)}* ({sym}), "
                         f"~${notional:,.0f} on a fresh news shock of {im:+.2f} "
                         f"via {row.get('node','the web')}. Out in {CRYPTO_EVENT_HOLD_DAYS} days "
                         f"or on a 10% stop — whichever comes first (pretend money).")
