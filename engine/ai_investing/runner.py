@@ -893,6 +893,18 @@ class Runner:
         except Exception as exc:
             print(f"  [crypto book] skipped: {type(exc).__name__}: {exc}")
 
+        # BTC vs its 100d average — shared by both event sleeves below. The
+        # stock sleeve only wires it in as an off-by-default conditional
+        # (R38/R39); the crypto sleeve gates new entries on it by default
+        # (see crypto_event_sleeve.py's WINTER GATE). Computed once, here,
+        # from bars the engine already pulled this cycle.
+        btc_bars = next((bars_by_key.get(a.key) or [] for a in self.assets
+                         if a.symbol == "BTC/USD"), [])
+        winter = False
+        if len(btc_bars) >= 100:
+            closes = [b.close for b in btc_bars[-100:]]
+            winter = btc_bars[-1].close < sum(closes) / len(closes)
+
         # 4b) The ⚡ event sleeve (third policy): trade TODAY's fresh news shock,
         # time-boxed, own capital. Exits never wait; entries are its own book.
         if context.get("brain") and context["brain"].get("shock_assets"):
@@ -901,14 +913,6 @@ class Runner:
                 px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
                 from ai_investing.learning.spine import regime_of
                 ra = ((context.get("brain") or {}).get("regime") or {}).get("risk_appetite")
-                # R38/R39 gate inputs, from data the engine already pulls every
-                # cycle/day: the live risk field, and BTC vs its 100d average.
-                winter = False
-                btc_bars = next((bars_by_key.get(a.key) or [] for a in self.assets
-                                 if a.symbol == "BTC/USD"), [])
-                if len(btc_bars) >= 100:
-                    closes = [b.close for b in btc_bars[-100:]]
-                    winter = btc_bars[-1].close < sum(closes) / len(closes)
                 ev_res = EventSleeve(self.settings, self._shared_stock_broker(),
                                      lots=self.lots).cycle(
                     context["brain"]["shock_assets"], px_by_sym, self.notifier,
@@ -919,8 +923,10 @@ class Runner:
             except Exception as exc:
                 print(f"  [event sleeve] skipped: {type(exc).__name__}: {exc}")
 
-        # 4b') The crypto event sleeve: the stock event sleeve's twin, crypto
-        # only, own capital, own 3 slots — split out 2026-08-19 so a loud
+        # 4b') The crypto event sleeve: crypto's OWN third policy — vol-target
+        # sized, winter-gated, alts included — not a copy of the stock sleeve
+        # above or the crypto_book.py tactical sleeve. See its module
+        # docstring for the full reasoning. Split out 2026-08-19 so a loud
         # crypto shock can no longer starve a stock candidate of size (or vice
         # versa) out of a pool the user thinks of as separate. Runs on the
         # same fresh-shock gate as the stock sleeve, 24/7 like the crypto book.
@@ -928,11 +934,12 @@ class Runner:
             try:
                 from ai_investing.strategy.crypto_event_sleeve import CryptoEventSleeve
                 px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+                bars_by_sym = {a.symbol: bars_by_key.get(a.key, []) for a in self.assets}
                 from ai_investing.learning.spine import regime_of
                 ra = ((context.get("brain") or {}).get("regime") or {}).get("risk_appetite")
                 cev_res = CryptoEventSleeve(self.settings).cycle(
-                    context["brain"]["shock_assets"], px_by_sym, self.notifier,
-                    regime=regime_of(ra))
+                    context["brain"]["shock_assets"], px_by_sym, bars_by_sym,
+                    self.notifier, regime=regime_of(ra), winter=winter)
                 if cev_res["opened"] or cev_res["closed"]:
                     print(f"  [crypto event sleeve] +{len(cev_res['opened'])} "
                           f"-{len(cev_res['closed'])} | equity ${cev_res['equity']:,.0f}")

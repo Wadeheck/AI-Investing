@@ -1,32 +1,73 @@
-"""The crypto event-reaction sleeve — crypto's twin of `event_sleeve.py`.
+"""The crypto event-reaction sleeve — crypto's OWN third policy, not a copy of
+`event_sleeve.py` and not `crypto_book.py` run twice.
 
-`EventSleeve` trades the FRESH SHOCK (today's news alone, no history, no
-decay) but is stocks only (2026-08-19): crypto and stocks used to fight over
-the same 3 slots and the same $10k, so a loud crypto shock could starve a
-stock candidate of size out of a pool the user thinks of as "the stock event
-sleeve". This module is the split-out other half — same fresh-shock idea,
-own capital, own slots, crypto only.
+All three books can share the same brain, but "trade the fresh shock" means
+something different for each asset class, and copying the stock sleeve's
+numbers onto crypto assets would be pasting one market's calibration onto a
+different one's volatility and clock:
 
-It deliberately does NOT inherit the majors-only restriction from
-`crypto_book.py` (R27: alts are signal-only there). That restriction exists
-because the HODL/tactical sleeve trades the ACCUMULATED field, where alt
-history is thin and a slow drift is easy to mistake for edge. This sleeve
-reacts to a single fresh shock crossing a fixed floor — if an alt-coin node
-throws a large enough shock to qualify, catching that IS the point of an
-event sleeve, alts included.
+  vs `event_sleeve.py` (stocks, fresh shock too):
+    - SIZING: vol-targeted (CRYPTO_EVENT_VOL_TARGET), not an equal slice of
+      equity. A stock event sleeve's 3 names are drawn from one universe of
+      broadly similar large/mid-cap vol; this book's 3 names can be BTC
+      (~60% annualized) next to a thinly-traded alt (200%+). An equal-dollar
+      slice would let the alt dominate the book's actual risk while looking
+      identically sized on paper — vol-targeting scales the notional down
+      for the wilder name so 1-of-3 slots means 1-of-3 RISK, roughly.
+    - CLOCK: CRYPTO_EVENT_HOLD_DAYS defaults to 1, not 2 — the user's own
+      framing for wanting this sleeve at all was "crypto goes in and out
+      fast"; a shock that hasn't resolved in a day is a different trade than
+      the 2-day window the stock gauntlet actually validated.
+    - REGIME: gated on `winter` (BTC below its 100d average) by default —
+      see WINTER GATE below. The stock sleeve only wires this in as an
+      off-by-default conditional (R38/R39); here it is the crypto-specific
+      default because the asset class actually crashes 60-80% on a cycle,
+      which US large caps don't.
+    - No lot-size flooring, no shared-venue plumbing (see below) — crypto
+      trades fractionally and never touches Longbridge, so the whole-share
+      truncation and pending-order machinery `event_sleeve.py` needs for
+      real fills doesn't apply here at all, not just "isn't used yet".
 
-Same shape as the stock event sleeve, translated to a 24/7 book:
-  - enter when |fresh shock| >= CRYPTO_EVENT_MIN
-  - at most CRYPTO_EVENT_N concurrent positions, equal slices of the sleeve's
-    equity
+  vs `crypto_book.py` (crypto, but the ACCUMULATED field, not fresh shocks):
+    - Different signal entirely: `crypto_book.py`'s tactical sleeve reacts to
+      `asset_impacts` (conviction built up with decay over days); this book
+      reacts to `shock_assets` (today's news alone, no history, no decay).
+      Same brain, different clock — this one can act within a cycle of the
+      event, the accumulated-field sleeve reacts to a trend forming.
+    - NOT majors-only (R27). That restriction exists because the ACCUMULATED
+      field over thin alt-coin history is easy to mistake for edge — a slow
+      drift with little data behind it. A single fresh shock crossing a
+      fixed floor is a different claim: if an alt-coin node throws a large
+      enough shock to qualify, catching that IS the point of an event
+      sleeve. See `tradable_crypto_symbols()` in `brain/seed.py` for the
+      full curated coin list this book can act on (23 coins as of
+      2026-08-19; whichever of those the live exchange actually lists ends
+      up on CRYPTO_WATCHLIST and is what `prices_by_sym` carries in).
+    - No HODL core, no bear-driven core trim — this book holds nothing by
+      default and never rebalances a passive position; every position here
+      was opened by a specific shock and closes by its own clock or stop.
+    - Separate capital, separate ledger policy name ("crypto_event" vs
+      "crypto_tact"/"crypto"), so the learning spine scores this sleeve's
+      calls on their own merits rather than blending them into the tactical
+      sleeve's track record.
+
+WINTER GATE: while BTC trades below its 100-day average, this book stops
+OPENING new positions — existing ones still exit on their own clock or stop,
+exits are never gated. This is deliberately narrower than `crypto_book.py`'s
+R28 bear exit (four-stream ensemble, liquidates + trims the core): a single
+trend signal is enough to make one policy decision ("don't buy MORE risk into
+a downtrend") without pretending to forecast the full BEAR_K=2-of-4 call that
+governs actual liquidation elsewhere. CRYPTO_EVENT_WINTER_GATE=0 turns it off.
+
+Same fresh-shock shape as the stock sleeve otherwise:
+  - enter when |fresh shock| >= CRYPTO_EVENT_MIN, at most CRYPTO_EVENT_N
+    concurrent positions
   - exit after CRYPTO_EVENT_HOLD_DAYS, or on the user's 10% hard stop
-  - LONG ONLY. No leverage, no shorts — v1, mirroring the stock sleeve's
-    adopted (R35) shape rather than its off-by-default conditional variants.
-  - runs on EVERY engine cycle, not gated to stock-market hours — crypto
-    never closes, same reasoning as `crypto_book.py`.
-  - it "decides if it wants to trade": the threshold IS the decision. A
-    quiet cycle with no shock over CRYPTO_EVENT_MIN holds cash and does
-    nothing, same as the stock sleeve on a quiet news day.
+  - LONG ONLY. No leverage, no shorts — v1.
+  - runs on EVERY engine cycle, 24/7, same reasoning as `crypto_book.py`.
+  - it "decides if it wants to trade": the threshold (and now the winter
+    gate) IS the decision. A quiet cycle, or a cycle in a downtrend, holds
+    cash and does nothing.
 
 No shared venue here — crypto never routes to Longbridge in this codebase,
 so this book uses a local, non-venue `PaperBroker` exactly like
@@ -46,9 +87,13 @@ from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
 CRYPTO_EVENT_MIN = float(os.environ.get("CRYPTO_EVENT_MIN", "0.05"))
 CRYPTO_EVENT_N = int(os.environ.get("CRYPTO_EVENT_N", "3"))
-CRYPTO_EVENT_HOLD_DAYS = int(os.environ.get("CRYPTO_EVENT_HOLD_DAYS", "2"))
+CRYPTO_EVENT_HOLD_DAYS = int(os.environ.get("CRYPTO_EVENT_HOLD_DAYS", "1"))
 HARD_STOP = 0.10          # USER HARD RULE: max 10% loss on any position
 START_CASH = float(os.environ.get("CRYPTO_EVENT_START_CASH", "100000"))
+# Crypto-specific sizing and regime knobs — independently tunable from both
+# event_sleeve.py's EVENT_* and crypto_book.py's VOL_TARGET/BEAR_K.
+CRYPTO_EVENT_VOL_TARGET = float(os.environ.get("CRYPTO_EVENT_VOL_TARGET", "0.04"))
+CRYPTO_EVENT_WINTER_GATE = os.environ.get("CRYPTO_EVENT_WINTER_GATE", "1").lower() in ("1", "true", "yes")
 
 
 class CryptoEventSleeve:
@@ -123,10 +168,14 @@ class CryptoEventSleeve:
         return eq
 
     # -- one pass per engine cycle, 24/7 --------------------------------------
-    def cycle(self, shock_assets: dict, prices_by_sym: dict, notifier=None,
-              labels: dict | None = None, regime: str = "neutral") -> dict:
-        """shock_assets: brain state["shock_assets"] — FRESH impacts only."""
+    def cycle(self, shock_assets: dict, prices_by_sym: dict, bars_by_sym: dict | None = None,
+              notifier=None, labels: dict | None = None, regime: str = "neutral",
+              winter: bool = False) -> dict:
+        """shock_assets: brain state["shock_assets"] — FRESH impacts only.
+        bars_by_sym: recent daily bars per symbol, for vol-targeted sizing.
+        winter: BTC below its 100d average — gates new entries, not exits."""
         labels = labels or {}
+        bars_by_sym = bars_by_sym or {}
         opened, closed = [], []
         held = self._state.setdefault("held", {})     # sym -> {entry, opened_day, shock}
         open_syms = {p.asset.symbol for p in self.broker.get_positions().values()}
@@ -178,7 +227,20 @@ class CryptoEventSleeve:
                                   f" ({pos.asset.symbol}): {reason} (pretend money).")
 
         # 2) entries — biggest fresh crypto shocks above the floor. Long only.
-        room = max(0, CRYPTO_EVENT_N - len(open_syms))
+        # WINTER GATE: a downtrending BTC doesn't stop this book from EXITING
+        # (the loop above never checks it) — only from adding new risk. Room
+        # collapses to 0 rather than skipping the block outright so the log
+        # line below still fires and a quiet cycle in a downtrend is visible
+        # as "gated", not silently indistinguishable from "no shocks today".
+        gated = winter and CRYPTO_EVENT_WINTER_GATE
+        room = 0 if gated else max(0, CRYPTO_EVENT_N - len(open_syms))
+        if gated and shock_assets:
+            crypto_shocks = {s: r for s, r in shock_assets.items()
+                             if "/" in s and float(r.get("impact", 0.0)) >= CRYPTO_EVENT_MIN}
+            if crypto_shocks:
+                self._log("gated", reason="winter (BTC < 100d)",
+                          shocks={s: round(float(r.get("impact", 0.0)), 4)
+                                  for s, r in crypto_shocks.items()})
         if room:
             eq = self._equity(prices_by_sym)
             cands = []
@@ -197,8 +259,25 @@ class CryptoEventSleeve:
             cands.sort(reverse=True)
             trust = self.ledger.size_multiplier("crypto_event", regime) if self.ledger else 1.0
             for _, im, sym, row in cands[:room]:
-                notional = min(eq * trust / max(1, CRYPTO_EVENT_N),
-                               self.broker.get_cash() * 0.9)
+                base = min(eq * trust / max(1, CRYPTO_EVENT_N),
+                           self.broker.get_cash() * 0.9)
+                # VOL-TARGETED SIZING (crypto-specific — see module docstring):
+                # an equal slice treats BTC and a thin alt as the same bet.
+                # Scale by target/realized daily vol, clipped 0.3-2.0x like
+                # crypto_book.py's tactical sleeve, so 1-of-3 slots is closer
+                # to 1-of-3 RISK than 1-of-3 DOLLARS.
+                rv_daily = 0.04
+                bars = bars_by_sym.get(sym) or []
+                if len(bars) >= 21:
+                    rets = [(bars[i].close / bars[i - 1].close - 1.0)
+                            for i in range(-20, 0) if bars[i - 1].close]
+                    if rets:
+                        mu = sum(rets) / len(rets)
+                        rv = (sum((r - mu) ** 2 for r in rets) / max(1, len(rets) - 1)) ** 0.5
+                        if rv > 1e-6:
+                            rv_daily = rv
+                            base *= max(0.3, min(2.0, CRYPTO_EVENT_VOL_TARGET / rv))
+                notional = min(base, self.broker.get_cash() * 0.9)
                 if notional < 500:
                     continue
                 px = prices_by_sym[sym]
@@ -219,10 +298,9 @@ class CryptoEventSleeve:
                 opened.append((sym, im, notional))
                 self._log("buy", symbol=sym, price=px, notional=round(notional, 2),
                           shock=round(im, 4), node=row.get("node", ""),
-                          size_mult=round(trust, 3))
+                          size_mult=round(trust, 3), rv_daily=round(rv_daily, 4))
                 if self.ledger:
-                    self.ledger.record("crypto_event", sym, 1, im,
-                                       float(row.get("vol_daily") or 0.03),
+                    self.ledger.record("crypto_event", sym, 1, im, rv_daily,
                                        CRYPTO_EVENT_HOLD_DAYS, regime=regime,
                                        driver=row.get("node", ""), notional=notional)
                 if notifier:
