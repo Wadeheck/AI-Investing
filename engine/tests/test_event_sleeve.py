@@ -27,6 +27,21 @@ def test_enters_only_above_the_shock_floor():
         assert "BBB" not in syms, "shock below the floor must be ignored"
 
 
+def test_ignores_crypto_shocks_entirely():
+    """2026-08-19: the sleeve used to route any "/" symbol to crypto and let it
+    compete for the same 3 slots and the same $10k as stocks. Crypto now has its
+    own sleeve (crypto_event_sleeve.py) and its own capital; this book must never
+    open a crypto position, no matter how large the shock."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sl = es.EventSleeve(_settings(tmp))
+        shocks = {"BTC/USD": {"impact": 0.9, "node": "crypto_flow"},
+                  "AAA": {"impact": es.EVENT_MIN + 0.02, "node": "semis"}}
+        r = sl.cycle(shocks, {"BTC/USD": 60000.0, "AAA": 100.0})
+        syms = [o[0] for o in r["opened"]]
+        assert "BTC/USD" not in syms, "crypto shocks must never open a position here"
+        assert "AAA" in syms, "stock shocks above the floor still open"
+
+
 def test_never_shorts_a_negative_shock():
     with tempfile.TemporaryDirectory() as tmp:
         sl = es.EventSleeve(_settings(tmp))

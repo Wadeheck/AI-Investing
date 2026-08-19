@@ -516,14 +516,16 @@ class Runner:
         """
         from ai_investing.strategy.crypto_book import CryptoBook
         from ai_investing.strategy.event_sleeve import EventSleeve
+        from ai_investing.strategy.crypto_event_sleeve import CryptoEventSleeve
         from ai_investing.strategy.investor import Investor
         # The sleeve and the investing book take the shared stock adapter; the
-        # crypto book never touches it (Longbridge is stock-only) and its
-        # constructor does not accept one.
+        # crypto book and its event twin never touch it (Longbridge is
+        # stock-only) and their constructors do not accept one.
         shared = self._shared_stock_broker()
         for name, cls, kw in (("crypto", CryptoBook, {}),
                               ("event sleeve", EventSleeve,
                                {"stock_broker": shared, "lots": self.lots}),
+                              ("crypto event sleeve", CryptoEventSleeve, {}),
                               ("investor", Investor,
                                {"stock_broker": shared, "lots": self.lots})):
             try:
@@ -916,6 +918,26 @@ class Runner:
                           f"-{len(ev_res['closed'])} | equity ${ev_res['equity']:,.0f}")
             except Exception as exc:
                 print(f"  [event sleeve] skipped: {type(exc).__name__}: {exc}")
+
+        # 4b') The crypto event sleeve: the stock event sleeve's twin, crypto
+        # only, own capital, own 3 slots — split out 2026-08-19 so a loud
+        # crypto shock can no longer starve a stock candidate of size (or vice
+        # versa) out of a pool the user thinks of as separate. Runs on the
+        # same fresh-shock gate as the stock sleeve, 24/7 like the crypto book.
+        if context.get("brain") and context["brain"].get("shock_assets"):
+            try:
+                from ai_investing.strategy.crypto_event_sleeve import CryptoEventSleeve
+                px_by_sym = {a.symbol: prices.get(a.key, 0.0) for a in self.assets}
+                from ai_investing.learning.spine import regime_of
+                ra = ((context.get("brain") or {}).get("regime") or {}).get("risk_appetite")
+                cev_res = CryptoEventSleeve(self.settings).cycle(
+                    context["brain"]["shock_assets"], px_by_sym, self.notifier,
+                    regime=regime_of(ra))
+                if cev_res["opened"] or cev_res["closed"]:
+                    print(f"  [crypto event sleeve] +{len(cev_res['opened'])} "
+                          f"-{len(cev_res['closed'])} | equity ${cev_res['equity']:,.0f}")
+            except Exception as exc:
+                print(f"  [crypto event sleeve] skipped: {type(exc).__name__}: {exc}")
 
         # 4c) Book realised P&L into the live slice, AFTER this cycle's fills and
         # BEFORE anything reports equity. The account tells us position quantities;

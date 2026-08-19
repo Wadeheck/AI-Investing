@@ -406,6 +406,7 @@ class ChatBot:
             "🏛 investing": float(getattr(self.settings, "invest_starting_cash", 0) or 0),
             "⚡ event sleeve": float(_os.environ.get("EVENT_START_CASH", 0) or 0),
             "₿ crypto": float(_os.environ.get("CRYPTO_START_CASH", 0) or 0),
+            "⚡₿ crypto event": float(_os.environ.get("CRYPTO_EVENT_START_CASH", 0) or 0),
         }
         books = []
         unpriced = []          # books whose equity could not be read at all
@@ -415,7 +416,8 @@ class ChatBot:
                           float(s.get("cash", 0) or 0), s.get("positions") or []))
         for icon_title, fname in (("🏛 investing", "invest_state.json"),
                                   ("⚡ event sleeve", "event_state.json"),
-                                  ("₿ crypto", "crypto_state.json")):
+                                  ("₿ crypto", "crypto_state.json"),
+                                  ("⚡₿ crypto event", "crypto_event_state.json")):
             blob = self._read(fname)
             book = blob.get("broker") if isinstance(blob.get("broker"), dict) else blob
             if not book:
@@ -534,7 +536,7 @@ class ChatBot:
         total_cash = float(s.get("cash", 0) or 0)
         total_equity = float(s.get("equity", 0) or 0)
 
-        # All four books, always. Reporting only two understated capital by
+        # All five books, always. Reporting only two understated capital by
         # $103,333 and hid an event sleeve that had stopped trading. If a book
         # is idle that is information; silence is not.
         for icon, title, fname, empty in (
@@ -544,6 +546,8 @@ class ChatBot:
                  "no fresh shocks above threshold"),
                 ("₿", "Crypto book", "crypto_state.json",
                  "flat — in cash"),
+                ("⚡₿", "Crypto event sleeve", "crypto_event_state.json",
+                 "no fresh crypto shocks above threshold"),
         ):
             blob = self._read(fname)
             book = blob.get("broker") if isinstance(blob.get("broker"), dict) else blob

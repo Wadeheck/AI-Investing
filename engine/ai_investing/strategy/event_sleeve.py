@@ -5,6 +5,14 @@ days). The investing book trades 6-month theses. This sleeve trades the FRESH
 SHOCK: what today's news alone says, propagated on its own with no history and
 no decay (`brain.think()` -> state["shock_assets"]).
 
+STOCKS ONLY (2026-08-19). `_asset()` used to route any symbol with a "/" to
+crypto, so this sleeve could fill one of its 3 slots with a crypto shock and
+starve a stock candidate of the same size, out of a pool the user thinks of as
+"the stock event sleeve". Crypto shocks now get their own capital and slots in
+`crypto_event_sleeve.py` — see that module for the twin. Filtered at the
+candidate loop, not just in `_asset`, so a crypto shock is never sized, held or
+counted against EVENT_N here.
+
 Same brain, faster clock. Own capital, own book file, own rules:
   - enter when |fresh shock| >= EVENT_MIN (0.05 = the measured p90 of the
     shock distribution; p99 is 0.11)
@@ -51,8 +59,6 @@ EVENT_SHORT_WINTER = os.environ.get("EVENT_SHORT_WINTER", "1").lower() in ("1", 
 
 
 def _asset(sym: str, exchange: str) -> Asset:
-    if "/" in sym:
-        return Asset(sym, AssetClass.CRYPTO, exchange=exchange)
     return Asset(sym, AssetClass.STOCK)
 
 
@@ -331,6 +337,10 @@ class EventSleeve:
             shorts_ok = EVENT_SHORT and (winter or not EVENT_SHORT_WINTER)
             cands = []
             for sym, row in (shock_assets or {}).items():
+                if "/" in sym:
+                    # STOCKS ONLY — crypto shocks belong to crypto_event_sleeve.py,
+                    # not this book's 3 slots and $10k. See module docstring.
+                    continue
                 im = float(row.get("impact", 0.0))
                 px = prices_by_sym.get(sym, 0.0)
                 if px <= 0 or sym in open_syms or sym in held:
