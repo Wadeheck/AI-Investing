@@ -20,6 +20,15 @@ fees are a rounding error, tests on 12 symbols x 240d (~16x the old sample),
 and picks configs on TRAIN ONLY before a single holdout evaluation.
 
 Run:  cd engine && ../.venv/bin/python -m ai_investing.research.scalp_lab [--build]
+
+VERDICT (2026-08-19, first run against this rebuild -- it sat unrun for a
+week). All three families killed at all three cost scenarios, including this
+account's real Gemini fees; cross-sectional momentum killed too. `revert`
+(mean-reversion) is the only one with any gross signal and it flips negative
+at Gemini's real cost schedule. Full numbers and reasoning:
+docs/research/SCALP_MODEL.md, "2026-08-19 rebuild re-test". Nothing here was
+promoted; do not point scalp.live at these families without a fresh
+holdout-clearing run.
 """
 from __future__ import annotations
 
