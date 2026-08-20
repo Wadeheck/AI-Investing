@@ -318,6 +318,28 @@ class BinanceFuturesBroker(BrokerAdapter):
             out[asset.key] = Position(asset, qty, float(p.get("entryPrice") or 0.0))
         return out
 
+    def snapshot(self) -> dict:
+        """Report wallet balance (free + margin locked in open positions), not
+        just `get_cash()`'s free-only figure — this is display/state-file only
+        (see BrokerAdapter.snapshot's docstring: never fed back via
+        from_state()), so it doesn't touch order sizing, which must keep using
+        `get_cash()`'s free balance.
+
+        Reporting free-only cash here is what made `cash + net position value`
+        stop reconciling to `get_equity()` once a position locked margin out of
+        it: a reader saw cash collapse to a few hundred dollars next to a
+        deeply-invested-looking net figure for a book that was actually flat.
+        Wallet balance moves only with realized P&L/fees, not with margin
+        locked/freed by opening or closing a position, so it stays the stable
+        "capital at rest" figure the rest of the reporting code expects.
+        """
+        bal = self.client.fetch_balance()
+        usdt = bal.get("USDT") or {}
+        cash = float(usdt.get("total", usdt.get("free", 0.0)) or 0.0)
+        return {"cash": cash, "positions": [
+            {"symbol": p.asset.symbol, "qty": p.qty, "avg_price": p.avg_price}
+            for p in self.get_positions().values()]}
+
     def submit(self, order: Order, price: float) -> Order:
         market_symbol = self._market_symbol(order.asset.symbol)
         self._prepare(market_symbol)

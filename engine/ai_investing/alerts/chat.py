@@ -466,7 +466,14 @@ class ChatBot:
                         for p in positions if float(p.get("qty", 0) or 0) > 0)
             shorts = sum(-float(p.get("qty", 0) or 0) * float(p.get("price", 0) or 0)
                          for p in positions if float(p.get("qty", 0) or 0) < 0)
-            held = f"cash ${cash:,.0f} + ${longs - shorts:,.0f} invested"
+            # NET is derived as eq - cash, not recomputed from qty * price, so
+            # "cash + net reconciles to equity" holds BY CONSTRUCTION. It used
+            # to recompute via qty * price, which silently assumes cash already
+            # reflects the full entry proceeds/outlay of every open position —
+            # true for a paper book, false for a margined futures position
+            # (opening one locks margin OUT of cash instead), which read a
+            # flat book as thousands of dollars invested in the wrong direction.
+            held = f"cash ${cash:,.0f} + ${eq - cash:,.0f} invested"
             if shorts > 0:
                 held += (f" · *${longs + shorts:,.0f} at risk* "
                          f"(${longs:,.0f} long, ${shorts:,.0f} short)")
