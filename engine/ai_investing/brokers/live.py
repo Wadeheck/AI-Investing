@@ -285,6 +285,22 @@ class BinanceFuturesBroker(BrokerAdapter):
         usdt = bal.get("USDT") or {}
         return float(usdt.get("free", 0.0) or 0.0)
 
+    def get_equity(self) -> float:
+        """Total margin balance (wallet balance + unrealized P&L across every
+        position), read straight from Binance instead of reconstructed from
+        cash + qty * price. See BrokerAdapter.get_equity for why that
+        reconstruction is wrong here: isolated-margin shorts were reporting
+        equity thousands of dollars underwater on a book that was actually
+        flat, because locking margin to open a short moves free cash the
+        opposite direction the reconstruction assumes.
+        """
+        bal = self.client.fetch_balance()
+        tmb = (bal.get("info") or {}).get("totalMarginBalance")
+        if tmb is not None:
+            return float(tmb)
+        usdt = bal.get("USDT") or {}
+        return float(usdt.get("total", 0.0) or 0.0)
+
     def get_positions(self) -> dict[str, Position]:
         out: dict[str, Position] = {}
         try:

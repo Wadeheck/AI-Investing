@@ -111,6 +111,19 @@ class BrokerAdapter(ABC):
     def portfolio(self) -> Portfolio:
         return Portfolio(self.get_cash(), self.get_positions())
 
+    def get_equity(self) -> float | None:
+        """Total account equity, read straight from the venue, or None if this
+        adapter has no better number than cash + mark-to-market.
+
+        The default reconstruction every caller falls back to (cash + sum of
+        qty * price) assumes opening a short CREDITS cash with sale proceeds —
+        true for a paper broker or a real spot short-sell, false for a margined
+        futures short, which LOCKS margin out of free cash instead. An adapter
+        whose "cash" doesn't carry that assumption (see BinanceFuturesBroker)
+        must override this so callers can skip the reconstruction entirely.
+        """
+        return None
+
     def snapshot(self) -> dict:
         """Read-only view of cash/positions, same shape as PaperBroker.state().
 

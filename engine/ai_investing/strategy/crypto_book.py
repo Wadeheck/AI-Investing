@@ -137,7 +137,9 @@ class CryptoBook:
             p["stale_mark"] = not priced
             mv += qty * px
             stale += 0 if priced else 1
-        self._state["equity"] = round(float(b.get("cash", 0.0)) + mv, 2)
+        venue_equity = self.broker.get_equity()
+        self._state["equity"] = (round(venue_equity, 2) if venue_equity is not None
+                                 else round(float(b.get("cash", 0.0)) + mv, 2))
         self._state["stale_marks"] = stale
         self._state["marked_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -182,6 +184,9 @@ class CryptoBook:
             pass
 
     def equity(self, prices: dict) -> float:
+        venue_equity = self.broker.get_equity()
+        if venue_equity is not None:
+            return venue_equity
         eq = self.broker.get_cash()
         for p in self.broker.get_positions().values():
             px = prices.get(p.asset.symbol, 0.0)
