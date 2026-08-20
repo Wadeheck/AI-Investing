@@ -1,4 +1,4 @@
-"""Routes orders to the right live broker by asset class: crypto -> ccxt exchange,
+"""Routes orders to the right live broker by asset class: crypto -> Binance Futures,
 stocks -> Longbridge/moomoo, presented behind the single BrokerAdapter interface the
 engine uses. Cash is summed across venues (mind cross-currency — a known v1 caveat).
 """

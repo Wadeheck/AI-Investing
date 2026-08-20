@@ -361,6 +361,18 @@ class Settings:
         default_factory=lambda: _get("CRYPTO_EVENT_BINANCE_TESTNET_API_KEY", ""))
     crypto_event_binance_api_secret: str = field(
         default_factory=lambda: _get("CRYPTO_EVENT_BINANCE_TESTNET_API_SECRET", ""))
+    # The general engine's crypto exposure (brokers/__init__.py's
+    # _make_crypto_broker, routed through RoutingBroker alongside the stock
+    # broker whenever LIVE_TRADING=true) used to be CcxtBroker against
+    # Gemini — replaced with BinanceFuturesBroker (Gemini was unreliable in
+    # practice). A THIRD separate testnet account/key from the two crypto
+    # sleeves above, same reasoning: this book can trade the full crypto
+    # watchlist (not just majors), so it can collide with either sleeve's
+    # positions if it shared an account with one of them.
+    crypto_trading_binance_api_key: str = field(
+        default_factory=lambda: _get("CRYPTO_TRADING_BINANCE_TESTNET_API_KEY", ""))
+    crypto_trading_binance_api_secret: str = field(
+        default_factory=lambda: _get("CRYPTO_TRADING_BINANCE_TESTNET_API_SECRET", ""))
     data_timeframe: str = field(default_factory=lambda: _get("DATA_TIMEFRAME", "1d"))  # 1d | 1h | 15m | 5m ...
     stock_broker: str = field(default_factory=lambda: _get("STOCK_BROKER", "paper"))
     poll_seconds: int = field(default_factory=lambda: _get_int("POLL_SECONDS", 300))
