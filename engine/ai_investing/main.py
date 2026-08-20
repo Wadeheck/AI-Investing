@@ -16,12 +16,28 @@ from ai_investing.learning.store import ParamStore
 from ai_investing.runner import Runner
 
 
+def _crypto_venue(live: bool | None = None) -> str:
+    """Where crypto orders actually GO, not `CRYPTO_EXCHANGE`.
+
+    Since `8a9bc63` the live crypto leg is always `BinanceFuturesBroker`;
+    `crypto_exchange` survives only as the tag on `Asset` and as CcxtBroker's
+    exchange id. Printing it as the venue told an operator "crypto: gemini" on
+    a LIVE banner while every order was routing to Binance Futures testnet —
+    an announce-the-state error (§4.17) on the one line that exists to say what
+    this process is about to trade against.
+    """
+    if not (settings.live if live is None else live):
+        return f"{settings.crypto_exchange} (paper — no venue)"
+    from ai_investing.brokers.live import BinanceFuturesBroker
+    return f"{BinanceFuturesBroker.name}{' (testnet)' if settings.crypto_sandbox else ''}"
+
+
 def _banner() -> None:
     mode = "LIVE — REAL MONEY" if settings.live else "PAPER (simulated)"
     print("=" * 68)
     print(f"  AI-Investing engine   |   mode: {mode}")
     print(f"  data: {settings.data_provider}   stocks: {settings.stock_broker}   "
-          f"crypto: {settings.crypto_exchange}")
+          f"crypto: {_crypto_venue()}")
     print(f"  watchlist: {', '.join(settings.stock_watchlist + settings.crypto_watchlist)}")
     if settings.live:
         print("  !! LIVE trading is ON. Orders will hit a real broker.")
@@ -31,7 +47,8 @@ def _banner() -> None:
 def _check_broker() -> None:
     """Read-only validation of live broker legs (crypto via ccxt, stocks via SDK)."""
     from ai_investing.brokers import _make_crypto_broker, _make_stock_broker
-    print(f"Checking live brokers — stocks: {settings.stock_broker}, crypto: {settings.crypto_exchange}")
+    print(f"Checking live brokers — stocks: {settings.stock_broker}, "
+          f"crypto: {_crypto_venue(live=True)}")   # this check builds the LIVE legs
     for label, make in (("stocks", _make_stock_broker), ("crypto", _make_crypto_broker)):
         try:
             broker = make(settings)
