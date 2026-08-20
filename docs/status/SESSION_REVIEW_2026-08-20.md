@@ -157,3 +157,9 @@ verify" pattern OPERATIONS.md warns against, a genuine fix-forward).
   but `ANTHROPIC_API_KEY` is blank on both — the "brain"'s LLM calls actually
   run on BytePlus ModelArk today, not Claude. Not fixed (no key to give it),
   just surfaced — see the memory note `ai-investing-brain-llm-provider`.
+- **Closed same day, separate session:** going live on real futures margin
+  (§3 above) broke the equity math these sleeves inherited from the paper
+  broker — the event sleeve's shorts read as -$4,265 equity on a book that
+  was actually flat. Found, fixed in three passes, and verified against the
+  live account; a stale paper-trading seed in `.env` was inflating the
+  reported loss further on top of that. See STATE_OF_THE_SYSTEM.md §4.36.

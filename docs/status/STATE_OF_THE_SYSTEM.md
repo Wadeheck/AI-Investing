@@ -1638,6 +1638,65 @@ timeline, the file-staleness artefact that made the halt look unresolved
 longer than it was, and the still-open design gap:
 `docs/design/SHARED_ACCOUNT.md` → "The USO late-fill halt (2026-08-19)".
 
+### 4.36 Equity read -$4,265 on a book that was flat: the paper-broker valuation formula doesn't hold under real margin *(2026-08-20)*
+
+Reported by the user: the crypto event sleeve (`crypto_event_sleeve.py`), live
+on Binance Futures testnet since the day before, showed equity of -$4,265.44 in
+the Telegram `/assets` line, next to cash of $340 and two open shorts whose own
+per-position `pnl` fields were both *positive* — an internal contradiction that
+was the actual tell, not the headline number itself.
+
+Root cause: `_stamp_marks()`/`_equity()` (duplicated in `crypto_book.py` and
+`crypto_event_sleeve.py`, canonical form in `models.py`'s `Portfolio.equity()`)
+compute equity as `cash + sum(qty * price)`. That formula assumes opening a
+short CREDITS cash with sale proceeds — true for `PaperBroker` and a real spot
+short-sell, false for a margined futures short on `BinanceFuturesBroker`, which
+LOCKS margin OUT of free cash instead. `get_cash()` returns only the free
+balance, so the reconstruction was double-subtracting the position's notional:
+once because free cash had already dropped by the margin locked to open it,
+again via `qty * price` in the formula itself.
+
+Verified directly against the live testnet account (not just the state file)
+before touching code: real `totalMarginBalance` was $5,014.87 (+$16.85
+unrealized) at the exact moment the state file read -$4,265.44 for the same
+account — an ~$9,280 gap on a book that was, in fact, roughly flat.
+
+Fixed in three passes, each verified against the live account after its own
+restart, not just the diff:
+1. `f00e477` — added `BrokerAdapter.get_equity()` (default `None`) and a
+   `BinanceFuturesBroker` override reading Binance's own `totalMarginBalance`;
+   both crypto sleeves use it when available instead of the `cash + qty*price`
+   reconstruction.
+2. `cadba0d` — fixing (1) surfaced a second symptom: `/assets`'
+   "cash + invested = equity" line stopped reconciling, because `cash` was
+   still `get_cash()`'s free-only figure and "invested" was still `qty*price`
+   notional. `BinanceFuturesBroker.snapshot()` (display/state-file only, never
+   fed back via `from_state()`) now reports wallet balance instead of
+   free-only; `chat.py` derives "invested" as `equity - cash` instead of
+   recomputing it, so the identity holds by construction for every book, not
+   only paper ones.
+3. `562e620` — (2)'s own fix had a bug: ccxt maps
+   `balance['USDT']['total']` to Binance's `totalMarginBalance` (already
+   equity-inclusive) for this account type, not free+used, so cash and equity
+   briefly collapsed to the same number and "invested" read $0 instead of the
+   real ~$15 unrealized P&L. Switched to reading `info.totalWalletBalance`
+   explicitly, verified different from `totalMarginBalance` on the live
+   account (4998.02 vs 5004.31 at the time of the fix).
+
+Separately, not a code defect: `.env`'s `CRYPTO_START_CASH` /
+`CRYPTO_EVENT_START_CASH` were still `10000` — a leftover paper-trading seed
+from before both sleeves went live on 2026-08-20 funded with a real $4,999.89.
+That made the Telegram delta report each crypto book as "down ~$5,000" on top
+of the equity bug, purely from comparing today's real balance to a stale paper
+number, and inflated the reported total-portfolio "$50,000 start" by the same
+~$10,000. Corrected in the ProDesk's `.env` to `4999.89` (config only, does
+not travel with `git pull`, no commit).
+
+`pytest tests` (from `engine/`) run before and after each commit: 550 passed,
+the same 8 pre-existing failures (`test_alert_storm.py`,
+`test_bullshit_layer.py`) both before and after — confirmed identical on
+unmodified `main` via `git stash`, so none of this caused or masked them.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
