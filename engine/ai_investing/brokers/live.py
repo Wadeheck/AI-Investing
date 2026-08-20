@@ -334,8 +334,14 @@ class BinanceFuturesBroker(BrokerAdapter):
         "capital at rest" figure the rest of the reporting code expects.
         """
         bal = self.client.fetch_balance()
+        # NOT usdt["total"]: ccxt maps that to Binance's marginBalance (wallet +
+        # unrealized P&L) for this account type — i.e. the same number
+        # get_equity() returns — which collapsed "invested" (equity - cash) to
+        # ~0 and hid the position entirely. totalWalletBalance excludes
+        # unrealized P&L, which is what "capital at rest" needs to mean here.
+        twb = (bal.get("info") or {}).get("totalWalletBalance")
         usdt = bal.get("USDT") or {}
-        cash = float(usdt.get("total", usdt.get("free", 0.0)) or 0.0)
+        cash = float(twb) if twb is not None else float(usdt.get("free", 0.0) or 0.0)
         return {"cash": cash, "positions": [
             {"symbol": p.asset.symbol, "qty": p.qty, "avg_price": p.avg_price}
             for p in self.get_positions().values()]}
