@@ -219,6 +219,7 @@ class BinanceFuturesBroker(BrokerAdapter):
 
     name = "binance_futures"
     live = True
+    margined = True        # get_cash() is free MARGIN, not spendable proceeds — see §4.36
 
     def __init__(self, settings, leverage: int | None = None, long_only: bool = True,
                  api_key: str | None = None, api_secret: str | None = None):
@@ -296,10 +297,22 @@ class BinanceFuturesBroker(BrokerAdapter):
         """
         bal = self.client.fetch_balance()
         tmb = (bal.get("info") or {}).get("totalMarginBalance")
-        if tmb is not None:
-            return float(tmb)
-        usdt = bal.get("USDT") or {}
-        return float(usdt.get("total", 0.0) or 0.0)
+        if tmb is None:
+            tmb = (bal.get("USDT") or {}).get("total")
+        if tmb is None:
+            # RAISE, never return 0.0. A zero here is indistinguishable from a
+            # genuinely empty account, and every caller writes it straight into
+            # a state file as this book's equity — the §4.7 signature (a book
+            # priced at zero by an outage, then flattened against a number that
+            # never happened) and the same absent-vs-free sentinel confusion
+            # §4A still lists as open for `prices[key] = 0.0`. Both callers of
+            # get_equity run inside the runner's per-book try/except, so an
+            # exception skips this book's mark and leaves the last GOOD equity
+            # on disk, which is the honest outcome.
+            raise RuntimeError(
+                "binance futures: balance response carried neither "
+                "info.totalMarginBalance nor USDT.total — equity unreadable")
+        return float(tmb)
 
     def get_positions(self) -> dict[str, Position]:
         out: dict[str, Position] = {}

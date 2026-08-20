@@ -163,3 +163,10 @@ verify" pattern OPERATIONS.md warns against, a genuine fix-forward).
   was actually flat. Found, fixed in three passes, and verified against the
   live account; a stale paper-trading seed in `.env` was inflating the
   reported loss further on top of that. See STATE_OF_THE_SYSTEM.md §4.36.
+  A follow-up sweep the same day found the fix had only been applied where the
+  bug was *observed*: the main trading book routes crypto to the same margined
+  venue and was never fixed (correct today only because the leg is 1x and
+  long-only — now guarded at construction, and logged as an open defect),
+  `get_equity()` could still report a phantom `0.0`, and `/assets` hid a
+  long-only margined book's exposure. All three fixed, and §4.36 finally has
+  regression tests (`engine/tests/test_margined_equity.py`).

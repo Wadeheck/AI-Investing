@@ -111,6 +111,14 @@ class BrokerAdapter(ABC):
     def portfolio(self) -> Portfolio:
         return Portfolio(self.get_cash(), self.get_positions())
 
+    # True only for adapters whose get_cash() is a MARGIN balance — i.e. where
+    # opening a position locks cash instead of exchanging it for the position's
+    # value, so `cash + qty * price` is not this account's equity (§4.36). Such
+    # an adapter must override get_equity(); a caller that cannot use
+    # get_equity() (RoutingBroker, which has to blend two venues) must refuse
+    # any configuration where the reconstruction would be wrong.
+    margined = False
+
     def get_equity(self) -> float | None:
         """Total account equity, read straight from the venue, or None if this
         adapter has no better number than cash + mark-to-market.

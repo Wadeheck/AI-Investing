@@ -1697,6 +1697,49 @@ the same 8 pre-existing failures (`test_alert_storm.py`,
 `test_bullshit_layer.py`) both before and after — confirmed identical on
 unmodified `main` via `git stash`, so none of this caused or masked them.
 
+**Follow-up review, same day.** The three fixes above were re-read against the
+rest of the codebase before this entry was considered closed. All three hold,
+but the sweep found the fix had been applied only where the bug had been
+*observed*, and three more consequences of the same root cause were still live:
+
+1. **The main trading book was never fixed at all** — only the two sleeves
+   were. It routes crypto through the same `BinanceFuturesBroker`
+   (`RoutingBroker`, live since `8a9bc63`) but values itself through
+   `Portfolio.equity(prices)`, i.e. the exact `cash + qty * price`
+   reconstruction §4.36 is about, and `RoutingBroker` never overrode
+   `get_equity()`. It is *numerically* correct today only by coincidence: at
+   `CRYPTO_FUTURES_LEVERAGE=1` the margin locked equals the notional added
+   back, and `RISK_ALLOW_SHORT=false` keeps the leg long-only. Flip either env
+   var — neither raises anything on its own — and the main book's equity is
+   wrong in the §4.36 direction (a short double-subtracts its notional; 2x
+   adds back half a notional that was never deducted), and that is the number
+   the circuit breaker halts on (§4.7). `RoutingBroker` cannot simply call
+   `get_equity()`: it needs one cash figure spanning two venues, and
+   `get_equity()` returns a finished number with nowhere to blend in a
+   marked-to-market stock leg. So it now **refuses to construct** outside the
+   1x-long-only window that makes its formula true, with the reason in the
+   exception. Structural limitation logged in §4A.
+2. **`get_equity()` returned `0.0` on a malformed balance response** — a
+   phantom zero written straight into a state file as this book's equity, the
+   §4.7 signature and the same absent-vs-zero sentinel confusion §4A still
+   lists as open for `prices[key] = 0.0`. It raises now; both call sites sit
+   inside the runner's per-book `try/except`, so an unreadable balance skips
+   that book's mark and leaves the last *good* equity on disk.
+3. **`/assets` still hid a long-only margined book's exposure.** Deriving
+   "invested" as `equity - cash` (`cadba0d`) makes that figure just unrealized
+   P&L on a margined book, because `cash` is now wallet balance with the
+   locked margin still inside it. The "at risk" clause that rescues the
+   reading was gated on `shorts > 0`, so the ₿ crypto book — live, long-only —
+   would have rendered a $4.6k open position as "cash $4,998 + $17 invested",
+   i.e. as flat. Gated on gross differing from net now, the same test the
+   portfolio footer already applied.
+
+Also: none of §4.36 had a test. `engine/tests/test_margined_equity.py` now pins
+all of it — the venue-equity read, wallet-vs-margin cash, the raise, the
+long-only at-risk clause, and the routing refusal — against a stub balance blob
+shaped like the real response, no network. `pytest tests`: 556 passed, the same
+8 pre-existing failures.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1715,6 +1758,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~Tests inherit the ambient `.env`~~ | **CLOSED §4.19.** A test process no longer loads `.env` at all, detected automatically. | — |
 | **7 live-path loaders hardcode `data/`** | `data/{calendar_events,comps,estimates,fundamentals_history,ownership,value_scanner}.py` and `scalp/live.py` build their path from `__file__`, so no caller or test can redirect them (§4.21). All are read-only reference loaders that decide no trade, which is why they were not swept in one change. | A test touching them reads live data and can flip with the market — the §4.21 failure mode. `test_data_path_isolation.py` pins the list so it cannot grow. |
 | **`prices[key] = 0.0` still means "no data"** | The runner encodes a missing bar as zero — a sentinel that means *absent* and reads as *free*. It caused §4.7 and is currently contained by `mark_price()` at every consumer rather than removed at the source. The root fix is to omit the key, which touches every price consumer. | Contained, not gone. A new consumer that forgets `mark_price` reopens §4.7. |
+| **The main book's equity formula can't value a margined leg — it is guarded, not fixed** | §4.36 gave each crypto SLEEVE a venue-read `get_equity()`, because each owns exactly one broker. The main trading book can't do that: `Portfolio.equity(prices)` needs ONE cash figure spanning Longbridge + Binance Futures, and `get_equity()` hands back a finished number with nowhere to blend a marked stock leg into it. So `cash + qty*price` still values the routed book, and it is only true while the crypto leg is 1x and long-only. `RoutingBroker.__init__` now REFUSES anything else (`test_margined_equity.py` pins it), which converts a silent wrong number into a startup failure — it does not make the number right. The real fix is a `Portfolio.equity()` that accepts a per-venue equity override for the legs that have one. | None today: `CRYPTO_FUTURES_LEVERAGE=1`, `RISK_ALLOW_SHORT=false`. The cost is paid the day either needs to change — the engine will refuse to start rather than trade, and shorting crypto from the main book stays blocked until the formula is fixed properly. |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
@@ -1747,6 +1791,7 @@ automatically, since several of these are judgement calls, not bugs.
 | Live AAPL position, no venue stop | Fires on its own: the next time a stop-loss placement is attempted for this position, the reason is now journalled (`!! NO VENUE STOP` if it fails again). If the same failure recurs with a tick-legal price, escalate — that would rule out §4.23 a second time and point at something else. | `journal.db orders`, `reason` column, next attempt. |
 | ~~Adviser predicts well; books don't trade it~~ | **No longer a "revisit" row — self-checking.** `ai-investing-adviser-gate.timer` re-measures this exact threshold daily and flips `data/adviser_gate.json`'s `eligible` flag itself; `runner.py` picks up the change on its own next cycle. Nothing for a human to watch for anymore. | `data/adviser_gate.json` (`eligible`, and the measured numbers behind it); Telegram alerts on any flip. |
 | 7 live-path loaders hardcode `data/` | Next time any of the 7 named modules is touched for an unrelated reason, or `test_data_path_isolation.py`'s pinned list would need to grow to admit an 8th — fix all 7 in one pass then, rather than let the count grow. | `test_data_path_isolation.py`'s pinned list. |
+| Main book can't value a margined leg | Fires on its own, loudly: the engine refuses to start the moment `CRYPTO_FUTURES_LEVERAGE` leaves 1 or `RISK_ALLOW_SHORT` becomes true while the crypto leg is Binance Futures. Do NOT relax the check to get moving — that is exactly the -$4,265 report coming back on the book the circuit breaker acts on. Teach `Portfolio.equity()` a per-venue equity override instead. | `RoutingBroker._check_equity_is_reconstructable`, and the refusal text in the service log on restart. |
 | `prices[key] = 0.0` sentinel | Not data-gated — schedule as a deliberate one-PR task. **Do it before the non-USD trading gate above is lifted**: a new market multiplies the number of price consumers this sentinel can reach. | `mark_price()` call sites, `git grep "= 0.0"` in `runner.py`. |
 | Main-loop coverage is one smoke test | Same trigger as the sentinel above — **before** the non-USD gate lifts or a new broker adapter (moomoo) goes live. A hot-path change with only a smoke test is exactly how §4.16 shipped a crash loop. | `test_runner_cycle.py` — add scenario coverage before either expansion. |
 | Sleeve's 32:1 risk/reward | Revisit at **whichever comes first**: (a) the sleeve's first 10% stop-out on any single leg — compare that loss against cumulative realised P&L to date (currently +$874.12 across 4 cycles, so a full-size stop ≈ −$349 would dent but not erase it; a second one shortly after would); or (b) **15 completed 2-day cycles** (currently 4) — enough to separate a real edge from a good run. | `data/event_journal.jsonl`, count `event: sell` lines with `reason` starting `clock`. |

@@ -474,7 +474,16 @@ class ChatBot:
             # (opening one locks margin OUT of cash instead), which read a
             # flat book as thousands of dollars invested in the wrong direction.
             held = f"cash ${cash:,.0f} + ${eq - cash:,.0f} invested"
-            if shorts > 0:
+            # Gated on gross DIFFERING from net, not on `shorts > 0`. Deriving
+            # net as `eq - cash` (above) made the shorts-only gate wrong for a
+            # third kind of book: on a margined futures book `cash` is wallet
+            # balance (margin locked in a position is still inside it) so net
+            # collapses to just unrealized P&L. A LONG-only futures book — the
+            # ₿ crypto book, live and long_only — then rendered $4.6k of open
+            # position as "cash $4,998 + $17 invested", i.e. as flat, with no
+            # at-risk clause because it had no shorts. This is the same test
+            # the footer below already applies to the portfolio total.
+            if longs + shorts - (eq - cash) > 1:
                 held += (f" · *${longs + shorts:,.0f} at risk* "
                          f"(${longs:,.0f} long, ${shorts:,.0f} short)")
             lines.append(f"{title}: *${eq:,.0f}*{pnl}  ({held} in {len(positions)})")
