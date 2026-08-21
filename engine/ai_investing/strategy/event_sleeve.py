@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.shared import build_book_broker
 from ai_investing.util import atomic
+from ai_investing.strategy.booklog import BookBasisMixin
 from ai_investing.models import Asset, AssetClass, Order, OrderStatus, Side, mark_price
 
 EVENT_MIN = float(os.environ.get("EVENT_MIN", "0.05"))
@@ -62,7 +63,7 @@ def _asset(sym: str, exchange: str) -> Asset:
     return Asset(sym, AssetClass.STOCK)
 
 
-class EventSleeve:
+class EventSleeve(BookBasisMixin):
     def __init__(self, settings, stock_broker=None, lots=None):
         """`stock_broker` is the ONE shared live stock adapter, or None.
 
@@ -450,7 +451,8 @@ class EventSleeve:
         if self._state.get("last_mark") != today:
             self._state["last_mark"] = today
             self._log("mark", equity=round(eqnow, 2), cash=round(self.broker.get_cash(), 2),
-                      positions=len(self.broker.get_positions()))
+                      positions=len(self.broker.get_positions()),
+                      **self._basis_fields())
         self._mark_prices = prices_by_sym
         self._save()
         return {"opened": opened, "closed": closed,

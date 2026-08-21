@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from ai_investing.brokers.shared import build_book_broker
 from ai_investing.util import atomic
 from ai_investing.execution.approvals import ProposalBook
+from ai_investing.strategy.booklog import BookBasisMixin
 from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
 STOP_PCT = 0.10            # HARD RULE (user): max 10% loss on any investment
@@ -46,7 +47,7 @@ def _asset(symbol: str, crypto_exchange: str = "") -> Asset:
     return Asset(symbol, AssetClass.STOCK)
 
 
-class Investor:
+class Investor(BookBasisMixin):
     def __init__(self, settings, stock_broker=None, lots=None):
         """`stock_broker` is the ONE shared live stock adapter, or None — see
         `EventSleeve.__init__` for why None is the normal case."""
@@ -151,7 +152,8 @@ class Investor:
             self._log("mark", equity=self._state.get("equity"),
                       cash=round(float(b.get("cash", 0.0)), 2),
                       positions=len(b.get("positions") or []),
-                      stale_marks=self._state.get("stale_marks"))
+                      stale_marks=self._state.get("stale_marks"),
+                      **self._basis_fields())
             # PERSIST THE GATE (2026-08-12). last_mark_day was set on the
             # in-memory state AFTER the only _save() in this method, so it
             # reached disk solely if some later call happened to save. Across a

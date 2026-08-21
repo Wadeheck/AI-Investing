@@ -133,6 +133,40 @@ def test_the_live_seed_still_loads_and_propagates():
     assert impacts, "seeded graph still transmits a shock"
 
 
+def test_indistinguishable_names_share_one_view_not_n():
+    """The graph resolves 202 objects across 476 assets. Names it cannot tell
+    apart must not be sized as independent bets."""
+    from ai_investing.brain.adviser import indistinguishable_groups
+    ai = {
+        "DBS": {"impact": 0.1204}, "OCBC": {"impact": 0.1204}, "UOB": {"impact": 0.1204},
+        "NVDA": {"impact": 0.7581},                 # its own value: not degenerate
+        "SPY": {"impact": 0.0},                     # untouched: not a "group"
+        "QQQ": {"impact": 0.0},
+    }
+    d = indistinguishable_groups(ai)
+    assert d == {"DBS": 3, "OCBC": 3, "UOB": 3}
+    assert "NVDA" not in d, "a name with its own signature keeps full conviction"
+    assert "SPY" not in d, "untouched assets are not a degenerate group"
+
+
+def test_the_live_graph_really_is_degenerate():
+    """A regression guard on the measurement itself: if future wiring genuinely
+    differentiates the co-member groups, this number should FALL, and that is
+    the signal the discount is doing less work because the graph is doing more."""
+    from ai_investing.brain.adviser import indistinguishable_groups
+    g = KnowledgeGraph.seeded()
+    impacts, _, _ = g.propagate({"crypto_liquidity": 0.6}, max_hops=3)
+    ai = g.asset_impacts(impacts)
+    touched = {s: r for s, r in ai.items() if abs(r["impact"]) > 1e-4}
+    degen = indistinguishable_groups(ai)
+    assert len(touched) > 10, "fixture must actually touch a cluster"
+    assert len(degen) > len(touched) // 2, (
+        "as of 2026-08-21 most crypto names a liquidity shock touches are "
+        f"indistinguishable ({len(degen)}/{len(touched)}); if this now fails "
+        "because the graph differentiates them, update the number — do not "
+        "delete the test")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

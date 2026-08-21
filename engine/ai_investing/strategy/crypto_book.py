@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.paper import PaperBroker
 from ai_investing.util import atomic
+from ai_investing.strategy.booklog import BookBasisMixin
 from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
 MAJORS = ("BTC/USD", "ETH/USD", "SOL/USD")
@@ -81,7 +82,7 @@ def _hist(settings, name: str):
         return None
 
 
-class CryptoBook:
+class CryptoBook(BookBasisMixin):
     def __init__(self, settings):
         self.settings = settings
         d = os.path.dirname(os.path.abspath(settings.state_path))
@@ -401,7 +402,8 @@ class CryptoBook:
             self._state["last_mark_day"] = today
             self._log("mark", equity=round(eq, 2), cash=round(self.broker.get_cash(), 2),
                       positions=len(self.broker.get_positions()),
-                      bear=bool(bear), bear_signals=why)
+                      bear=bool(bear), bear_signals=why,
+                      **self._basis_fields())
         self._mark_prices = prices
         self._save()
         return {"equity": round(eq, 2), "cash": round(self.broker.get_cash(), 2),

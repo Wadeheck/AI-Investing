@@ -19,6 +19,7 @@ every list is frozen in advice_log so the adviser's hit-rate can be measured.
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -51,6 +52,52 @@ MIN_SCORE = 0.03
 _SUFFIX_MARKET = {"HK": "HK", "SI": "SG", "SS": "CN", "SZ": "CN", "T": "JP",
                   "KS": "KR", "TW": "TW", "PA": "EU", "DE": "EU", "AS": "EU",
                   "L": "EU", "SW": "EU"}
+
+
+def indistinguishable_groups(asset_impacts: dict) -> dict[str, int]:
+    """{symbol: how many assets the graph gave the IDENTICAL impact this cycle}.
+
+    THE GRAPH RESOLVES FEWER OBJECTS THAN IT HOLDS. Probing the live graph with
+    each of its 81 origin nodes in turn (2026-08-21) produced only 202 distinct
+    response signatures across 476 assets — 42.4%. 104 assets are an exact
+    duplicate of a peer:
+
+        x5  nio, xpeng, liauto, gotion, sanhua
+        x4  ccb, boc, abc, cmb          x4  atom, aave, dot, ltc
+        x3  dbs, ocbc, uob              x3  amat, lrcx, klac
+        x3  crwd, panw, cibr            x3  avax, near, link
+
+    Each hangs off the same single `member_of` edge into the same theme, so the
+    path-sum that BRAIN.md §4d describes ("converging medium-strength paths add,
+    which is how clusters actually move") has exactly one term and the cluster
+    reduces to a sector lookup. The chain the advice prints — "Crypto liquidity
+    down -> Crypto majors down -> Bitcoin down" — is true of the THEME and
+    carries no per-name information at all.
+
+    It shows in the record. `crwd` and `panw` have identical signatures; over
+    the same window PANW long hit 1.00 (+7.66%) and CRWD short_or_avoid hit 0.00
+    (+7.16%). Same graph read, opposite calls, opposite outcomes.
+
+    So the field's conviction is scaled by 1/sqrt(group) — the standard
+    correlated-positions adjustment, and the same reasoning as the fragility
+    dial's sqrt(HHI). A view held identically across N names is one view, not N,
+    and sizing each name as an independent bet is how a "diversified" book ends
+    up holding one position five times.
+
+    Deliberately NOT done here: adding FET/BCH/HYPE/ATOM to
+    CONFIRMED_MISCALIBRATED. Their raw records look damning (FET/USD long
+    n=526, hit 0.00) but deduplicated to one observation per (symbol, day) they
+    are 5, 3, 2 and 13 days — none significant. Acting on those numbers would
+    repeat the counting defect this whole change exists to fix. UNI/USD stays
+    because it survives deduplication: 12 days, hit 0.17, t=-2.97.
+    """
+    buckets: dict[float, list[str]] = {}
+    for sym, row in asset_impacts.items():
+        v = round(float(row.get("impact") or 0.0), 4)
+        if abs(v) < 1e-4:
+            continue                 # untouched by this shock; not a "group"
+        buckets.setdefault(v, []).append(sym)
+    return {s: len(g) for g in buckets.values() for s in g if len(g) > 1}
 
 
 def _market_of(symbol: str) -> str:
@@ -201,6 +248,8 @@ def advise(settings, brain, log: bool = True) -> dict:
     # on the formula/technical leg only — no causal chain to show, and their
     # `chain` says so honestly.
     watched = set(settings.stock_watchlist) | set(settings.crypto_watchlist)
+    # how many names share each landed impact -- see indistinguishable_groups
+    degeneracy = indistinguishable_groups(asset_impacts)
     symbols |= {s for s in watched if s in formula}
 
     for sym in symbols:
@@ -216,6 +265,9 @@ def advise(settings, brain, log: bool = True) -> dict:
         impact = asset_impacts.get(sym, {}).get("impact", 0.0)
         pi = priced_in.get(sym, {}).get("priced_in", 0.0)
         impact_eff = impact * (1.0 - pi)   # the tape already ran? less signal left
+        # a view the graph holds identically across N names is one view, not N
+        degen = degeneracy.get(sym, 1)
+        impact_eff /= math.sqrt(degen)
         score = W_FIELD * impact_eff * rel.get(sym, 1.0)
         score += W_FORMULA * formula.get(sym, 0.0)
         score += W_SCENARIO * boosts.get(sym, 0.0)

@@ -535,11 +535,20 @@ left to be forgotten.
 
 ### 5.3 43% of live orders are being rejected
 
-`journal.db.orders`: **39 filled, 34 rejected, 6 pending.** Recent rejects
-include `1024.HK` twice with `code=602035 Wrong bid size, please change the
-price` — §4.23's tick-size defect recurring on the HK board, where
-`snap_to_tick` was proven for `.US` only. Two `pending` orders from 08-19
-(`USO`, `1810.HK`) still sit `[unconfirmed after 4 checks]`.
+`journal.db.orders`: **39 filled, 34 rejected, 6 pending.** 21 of the rejects
+are `qty < 1 share`; **10 are `code=602035 Wrong bid size, please change the
+price`** — the code §4.23 was about.
+
+**It is not §4.23 recurring, and it took reading `submitted_price` to see
+that.** On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and
+HK$34.10; the first two were rejected and the third filled. All three are legal
+multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34
+name, and all three were snapped correctly on the way out. **The cause is
+unknown** — snapping harder would fix nothing, and the obvious diagnosis is the
+wrong one.
+
+Two `pending` orders from 08-19 (`USO`, `1810.HK`) still sit
+`[unconfirmed after 4 checks]`.
 
 ### 5.4 A quarter of every cycle's decisions are structurally unexecutable
 
@@ -581,7 +590,7 @@ already names — **every item here was silent and passed its own health checks.
 | 3 | The formula's learning loop has never run, for 26 days | Partly. §4.28 recorded `outcomes = 0 rows` on 08-17. It was filed as an observation, not as "the central claim of FORMULA.md is not operating." |
 | 4 | 212 inert nodes, 104 duplicate signatures, and a `none` transmission hub | Yes — this is exactly what `graph_gap_scan.py` and `cluster_gap_scan.py` were built for, and `cluster_gap_scan.py` was committed *yesterday*. Neither has been run against the live graph. |
 | 5 | The LLM-edge cue (328) fired ~5 days early, at double the assumed rate, with 0 edges ever reviewed | Yes, structurally: §4B's cue requires a human to run `review_edges.py --stats`, and the review queue built in §4.22 has never been used once. Every cue in §4B except the adviser gate has this same property — it fires only if someone remembers to look. |
-| 6 | `1024.HK` orders rejected on tick size, four months after §4.23 | Yes. §4.23's fix was proven against `.US` and the HK board was reached on 08-17 without re-proving it — the same "applied where the bug was observed" pattern that commit `a53cb82` had to correct for the margin-equity fix two days ago. |
+| 6 | 10 orders rejected `602035`, cause still unknown | **No — and the obvious answer is the wrong one.** The natural read is "§4.23's tick defect, on a board it was never proven against". It is not: the prices sent were legal ticks. What *could* have been avoided is being unable to tell — the request context a diagnosis needs was never journalled, which is the same reason §4.23 itself cost eight orders before anyone could see it. |
 | 7 | The crypto book's basis change written as a −50% equity mark | Yes. §4.14's own lesson is "declared basis, never inferred," and the broker migration on 08-20 was a deliberate, planned basis change. |
 
 ---
@@ -629,8 +638,12 @@ the logic exists and is well-reasoned. Then re-run the emotion calibration
 against a proper control (post-any-event return), and expect both
 coefficients to collapse toward 0.
 
-**5. Clean the graph, and raise the digester's proposal bar.** Delete the
-`none` node and its 23 edges; drop the 6 orphans; triage the 212 inert nodes —
+**5. Clean the graph, and bound the digester.** Delete the `none` node and its
+23 edges — and note that a shape-based filter run against the live graph found
+**14** such placeholder nodes carrying 37 edges, not the one visible by eye
+(`6_unnamed_financial_institutions`, `unnamed_international_bank_syndicate`,
+`undisclosed_client`, `private_investors`, two Bezos consortia…). Triage the
+212 inert nodes —
 wire the real companies, delete the news-vocabulary ones. Then deal with the
 cause rather than the queue: at **88 proposals/week with 0 ever reviewed**, the
 review mechanism is not a control surface, it is a backlog. §4A already
@@ -639,12 +652,22 @@ judgement about how much self-wiring is wanted. That judgement is now overdue �
 LLM wiring reaches parity with curated wiring in ~5 weeks at this rate, not the
 ~14 weeks §4B projected.
 
-**6. Widen the crypto sub-graph, and generalize the UNI fix.** 13 of 17 coins
-are indistinguishable. Either give the alts real differentiating wiring (L1 vs
-DeFi vs AI-token vs payments; ETH-beta vs BTC-beta), or accept the model has no
-per-alt view and stop issuing per-alt directional calls. In the meantime, FET,
-BCH, HYPE and ATOM belong in `CONFIRMED_MISCALIBRATED` alongside UNI on exactly
-the evidence UNI was added on.
+**6. Stop sizing indistinguishable names as independent bets.** 13 of 17
+coins, and 104 assets overall, are exact duplicates of a peer. The real fix is
+differentiating wiring (L1 vs DeFi vs AI-token vs payments; ETH-beta vs
+BTC-beta) and that is a curation project. The immediate fix is honesty about
+what the graph knows: field conviction scaled by 1/√(group size), the standard
+correlated-positions adjustment and the same reasoning as the fragility dial's
+√HHI. A view held identically across N names is one view, not N — and sizing
+each as independent is how a "diversified" book ends up holding one position
+five times.
+
+**Explicitly NOT recommended, on second look:** adding FET/BCH/HYPE/ATOM to
+`CONFIRMED_MISCALIBRATED`. Their raw records look damning (`FET/USD` long
+n=526, hit 0.00) — but deduplicated they are **5, 3, 2 and 13 distinct days**,
+none significant. Acting on those numbers would be committing the exact error
+§1 of this review is about. `UNI/USD` stays because it survives the correction:
+12 days, hit 0.17, t=−2.97.
 
 **7. Act on the short side.** Three instruments agree conviction is
 anti-predictive there. The cheapest correct response is to stop *sizing* on
@@ -655,7 +678,7 @@ frees the ~27% of daily decisions currently discarded.
 **8. Place one non-USD order.** `O39.SI` is one of nine statistically real
 calls in the entire record, hit 0.88, and the market has been reachable for
 four days. §4B says this is a decision, not a wait. The same applies to the
-`1024.HK` tick-size reject, which blocks HK generally.
+10 outstanding `602035` rejects, whose cause is now instrumented but not yet known.
 
 **9. Make the §4B cues self-checking.** Two cues fired unnoticed in this review
 (LLM edges at 354 vs 328; the sleeve's cycle count) because they are checked by

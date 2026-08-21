@@ -360,6 +360,9 @@ def apply_adviser_gate(decisions: list, settings) -> list:
         formula conviction already in target_weight (independent_score)
       - the score is clamped before scaling, so beta means what it says
       - the sign the formula chose is never reversed, only scaled or zeroed
+      - a bearish adviser score never ADDS size to a short (see the tilt block):
+        the gate's evidence is long-side, and the bearish side of this brain is
+        measurably anti-predictive
     """
     try:
         with open(_gate_path(settings)) as fh:
@@ -397,6 +400,27 @@ def apply_adviser_gate(decisions: list, settings) -> list:
         # shift in target weight, rather than "whatever the score happened to be,
         # then clipped at the book limit."
         tilt = beta * max(-1.0, min(1.0, adv_score))
+        # LONG-SIDE ONLY. The gate's eligibility evidence is a LONG-side
+        # hit-rate, and the bearish side of this brain is not merely weaker,
+        # it is anti-predictive — three instruments agree, measured
+        # 2026-08-21 on one observation per (symbol, day):
+        #
+        #   advice, conviction short_or_avoid   hit 0.383  (n=47)
+        #   advice, NON-conviction short_or_avoid hit 0.493  (n=67)
+        #   event_outcomes, impact_sign = -1    hit 0.442  (n=835)
+        #   ...against impact_sign = +1         hit 0.671  (n=2518)
+        #
+        # and 5 of the 9 (symbol, call) pairs that clear |t|>=2 over >=8 days
+        # are significantly WRONG bearish calls (TSLA, 9880.HK, MP, ETH/USD).
+        # More conviction on that side means more wrong, so a bearish adviser
+        # score must not add size to a short. It may still SHRINK one — that
+        # direction is safe under the same evidence.
+        #
+        # NOT inverted: a 0.383 measured on 47 observations is not a signal to
+        # trade the other way, it is a signal to stop trading it. Inverting
+        # would be fitting to the sample that revealed the problem.
+        if tilt < 0 and d.target_weight < 0:
+            tilt = 0.0
         # never flip the sign the formula chose, and never grow a position by more
         # than the tilt: this can scale conviction, not reverse it.
         nudged = max(-1.0, min(1.0, d.target_weight + tilt))

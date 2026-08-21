@@ -655,6 +655,28 @@ class LongbridgeBroker(BrokerAdapter):
         except Exception as exc:  # pragma: no cover - network path
             order.status = OrderStatus.REJECTED
             order.reason = f"longport: {exc}"
+            # 602035 AGAIN, AND NOT FOR THE REASON §4.23 FOUND. On 2026-08-20
+            # three 1024.HK orders went out at 34.05, 34.15 and 34.10; the first
+            # two were rejected 602035 and the third filled. All three are legal
+            # multiples of the HK$0.05 spread that `tick_size` correctly returns
+            # for a HK$34 name, so the tick rule is NOT the cause here and
+            # snapping harder would fix nothing.
+            #
+            # The cause is unknown. Rather than guess at a fix, record what a
+            # diagnosis needs and does not currently have: the tick the code
+            # believed applied, and the reference price it snapped from. §4.23
+            # took eight lost orders to diagnose precisely because the request
+            # was not journalled; this is the same lesson applied one level
+            # deeper.
+            if "602035" in str(exc) and is_limit:
+                try:
+                    venue_px = self._venue_price(order.limit_price, order.asset)
+                    vsym = self._symbol(order.asset)
+                    order.reason += (f" [tick={tick_size(vsym, venue_px)} "
+                                     f"venue_px={venue_px:.4f} "
+                                     f"sent={order.submitted_price} sym={vsym}]")
+                except Exception:
+                    pass          # diagnosis must never mask the rejection itself
         return order
 
     def fetch_fill(self, order_id: str):

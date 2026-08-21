@@ -241,8 +241,15 @@ def test_apply_adviser_gate_nudges_and_caps_when_enabled():
     assert "adviser-gate" in by_sym["GLD"].rationale
     assert by_sym["GLD"].direction == SignalDirection.LONG
 
-    assert by_sym["O39.SI"].target_weight == -1.0       # capped at -1.0
-    assert by_sym["O39.SI"].direction == SignalDirection.SHORT
+    # A bearish adviser score no longer deepens a short (2026-08-21): the gate's
+    # evidence is a LONG-side hit-rate, and this brain's bearish side measures
+    # anti-predictive. The clamp-then-cap arithmetic this case used to cover is
+    # exercised on the long side by GLD above; the symmetric-deepening BEHAVIOUR
+    # is what changed, deliberately. See
+    # test_a_bearish_adviser_score_never_grows_a_short.
+    assert by_sym["O39.SI"].target_weight == -0.95      # untouched, not deepened
+    assert "adviser-gate" not in by_sym["O39.SI"].rationale, \
+        "an untouched decision passes through completely unchanged"
 
     assert by_sym["UNRELATED"].target_weight == 0.2     # no adviser score -> untouched
 
@@ -401,3 +408,36 @@ if __name__ == "__main__":
         if _name.startswith("test_") and callable(_fn):
             _fn()
     print("ok")
+
+
+def test_a_bearish_adviser_score_never_grows_a_short():
+    """The gate's evidence is a LONG-side hit-rate, and the bearish side of this
+    brain is anti-predictive on three independent measurements (2026-08-21,
+    deduplicated): conviction short_or_avoid 0.383 vs non-conviction 0.493;
+    event_outcomes impact_sign=-1 at 0.442 against +1's 0.671; and 5 of the 9
+    (symbol, call) pairs clearing |t|>=2 are wrong bearish calls.
+
+    A negative adviser score may still SHRINK a short. It may not deepen one.
+    And it is NOT inverted -- 0.383 on 47 observations says stop trading it, not
+    trade the other way.
+    """
+    tmp = tempfile.mkdtemp()
+    settings = FakeSettings(tmp)
+    with open(ag._gate_path(settings), "w") as fh:
+        json.dump({"eligible": True, "adviser_long": {"hit": 0.75}}, fh)
+    with open(settings.brain.advice_path, "w") as fh:
+        json.dump({"trades": [
+            {"symbol": "AAA", "score": -0.9, "drivers": {"field": -0.9, "formula": 0.0}},
+            {"symbol": "BBB", "score": +0.9, "drivers": {"field": +0.9, "formula": 0.0}},
+            {"symbol": "CCC", "score": +0.9, "drivers": {"field": +0.9, "formula": 0.0}},
+        ]}, fh)
+
+    short_deepened = _decision("AAA", -0.30)   # bearish score onto a short
+    long_grown = _decision("BBB", 0.30)        # bullish score onto a long
+    short_shrunk = _decision("CCC", -0.30)     # bullish score onto a short
+    out = ag.apply_adviser_gate([short_deepened, long_grown, short_shrunk], settings)
+    by = {d.asset.symbol: d for d in out}
+
+    assert by["AAA"].target_weight == -0.30, "a bearish score must not deepen a short"
+    assert by["BBB"].target_weight > 0.30, "the long side still gets its nudge"
+    assert by["CCC"].target_weight > -0.30, "shrinking a short is still allowed"

@@ -15,6 +15,31 @@ class BrokerAdapter(ABC):
     name = "broker"
     live = False
 
+    def basis(self) -> str:
+        """Identity of the BOOK this adapter backs — not its size or its value.
+
+        WHY A BOOK NEEDS A NAME. On 2026-08-20 the crypto sleeve moved from an
+        in-memory PaperBroker seeded at $10,000 to a real Binance Futures testnet
+        account holding $5,000. `crypto_journal.jsonl` recorded:
+
+            2026-08-19  10,052.20
+            2026-08-20   4,999.89
+
+        Nothing was lost. But the equity journal is a curve, and everything that
+        reads it — the circuit breaker, the watchdog, daily_status — saw -50.3%
+        in a day. This is §4.14 ("a change of book size read as a 90% crash")
+        exactly, whose fix was "declared basis, never inferred"; the declaration
+        existed for the main runner's book (`runner._book_basis`) and the sleeves
+        never got one.
+
+        Declared, never inferred, for the reason CircuitBreaker.ensure_basis
+        gives: "equity moved a lot, must be a new book" is precisely how you
+        teach a safety system to explain away a real crash. The default here is
+        the adapter's own class and name, which changes exactly when the venue
+        does and never when the money does.
+        """
+        return f"{self.__class__.__name__}:{self.name}"
+
     @abstractmethod
     def get_cash(self) -> float:
         ...

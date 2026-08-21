@@ -118,6 +118,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.paper import PaperBroker
 from ai_investing.util import atomic
+from ai_investing.strategy.booklog import BookBasisMixin
 from ai_investing.models import Asset, AssetClass, Order, Side, mark_price
 
 CRYPTO_EVENT_MIN = float(os.environ.get("CRYPTO_EVENT_MIN", "0.05"))
@@ -136,7 +137,7 @@ CRYPTO_EVENT_SHORT = os.environ.get("CRYPTO_EVENT_SHORT", "0").lower() in ("1", 
 CRYPTO_EVENT_SHORT_WINTER = os.environ.get("CRYPTO_EVENT_SHORT_WINTER", "1").lower() in ("1", "true", "yes")
 
 
-class CryptoEventSleeve:
+class CryptoEventSleeve(BookBasisMixin):
     def __init__(self, settings):
         self.settings = settings
         data_dir = os.path.dirname(os.path.abspath(settings.state_path))
@@ -390,7 +391,8 @@ class CryptoEventSleeve:
         if self._state.get("last_mark") != today:
             self._state["last_mark"] = today
             self._log("mark", equity=round(eqnow, 2), cash=round(self.broker.get_cash(), 2),
-                      positions=len(self.broker.get_positions()))
+                      positions=len(self.broker.get_positions()),
+                      **self._basis_fields())
         self._mark_prices = prices_by_sym
         self._save()
         return {"opened": opened, "closed": closed,
