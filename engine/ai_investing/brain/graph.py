@@ -141,6 +141,13 @@ class KnowledgeGraph:
         self._adj: Optional[dict] = None
         self._alias_index: Optional[dict[str, str]] = None
         self._calibration: dict[str, float] = {}   # edge key -> evidence multiplier
+        # Volume control on self-wiring — see propose_edge. 0 disables it.
+        # 6/day is ~42/week against a measured 88.5 and a §A10 assumption of <=1;
+        # it is deliberately a reduction rather than an attempt to reach the spec,
+        # because the spec's number was an estimate that has never been true and
+        # the honest bar is "slower than curated wiring grows", not "1".
+        self.daily_proposal_budget: int = 6
+        self.budget_deferred: int = 0              # refused today for budget, not merit
 
     @staticmethod
     def edge_key(e: Edge) -> str:
@@ -637,6 +644,40 @@ class KnowledgeGraph:
         return loops
 
     # -- growth: LLM-proposed nodes -------------------------------------------
+    # A NON-ANSWER IS NOT AN ENTITY. Asked for a counterparty the extractor
+    # sometimes has none to give, and answers "none", "undisclosed", "multiple
+    # banks", "a Saudi-led investor". Those went straight through propose_node
+    # and became asset nodes with real edges.
+    #
+    # What that cost, found 2026-08-21: a node literally called `none` had
+    # accumulated 23 llm edges and was the 17th most connected node in the live
+    # graph — skhynix -owns-> none 0.24, tsmc -owns-> none 0.50, avgo 0.35,
+    # `amazon_alphabet_microsoft` (itself a merged non-entity) 0.50, xrp 0.05.
+    # `owns` flows REVERSE (EDGE_FLOW), so any shock landing on `none` flowed
+    # back out into TSMC at half strength. A junk collector wired as a
+    # transmission hub between semiconductors, megacap tech and XRP.
+    #
+    # Refused by shape rather than by blocklist, so the next phrasing of "I
+    # don't know" is refused too — the blocklist alone would have caught `none`
+    # and missed `unnamed_acquirer`.
+    _NON_ENTITY_IDS = frozenset({
+        "none", "null", "na", "n_a", "nil", "unknown", "unspecified", "undisclosed",
+        "other", "others", "various", "tbd", "not_applicable", "not_disclosed",
+        "private", "private_investor", "private_investors", "anonymous",
+        "undisclosed_buyer", "undisclosed_investor", "multiple_banks", "public_markets",
+    })
+    _NON_ENTITY_MARKERS = ("unnamed", "undisclosed", "unknown", "anonymous",
+                           "consortium", "multiple_", "several_", "various_",
+                           "_led_investor", "_and_others", "unidentified")
+
+    @classmethod
+    def is_non_entity(cls, node_id: str) -> bool:
+        """True when an id is a placeholder for 'no named counterparty'."""
+        nid = (node_id or "").strip().lower()
+        if not nid or nid in cls._NON_ENTITY_IDS:
+            return True
+        return any(m in nid for m in cls._NON_ENTITY_MARKERS)
+
     def propose_node(self, node_id: str, label: str, aliases: list[str] | None = None,
                      proposed_by: str = "", ts: str = "", symbol: str = "",
                      market: str = "") -> bool:
@@ -656,6 +697,8 @@ class KnowledgeGraph:
         node_id = re.sub(r"[^a-z0-9_]", "", node_id.lower().replace(" ", "_").replace("-", "_"))
         if not node_id or node_id in self.nodes:
             return False
+        if self.is_non_entity(node_id):
+            return False        # a non-answer is not an entity — see above
         display_label = label if symbol else f"{label} (private)"
         self.nodes[node_id] = Node(
             id=node_id, type="asset", label=display_label[:60],
@@ -677,9 +720,30 @@ class KnowledgeGraph:
         is evidence the rejection may have been wrong, and burying that would
         repeat the mistake this codebase has now made four times: rendering a
         verdict nothing will ever grade. `contested_rejections()` is how it comes
-        back for a second hearing (see `scripts/review_edges.py --contested`)."""
+        back for a second hearing (see `scripts/review_edges.py --contested`).
+
+        A DAILY BUDGET bounds the stream. DIGESTION_SPEC §A10 justifies applying
+        llm edges automatically because "a bad proposal is damped by the cap" and
+        "Rare: expect <=1 per week". Measured 2026-08-21: 88.5/week, 131 in the
+        last 7 days, 354 pending review and — the part that matters —
+        `reviewed & kept: 0`. The review queue built as the control surface for
+        this has never been used once, on any edge, ever, so in practice there
+        was no control surface at all and llm wiring reaches parity with the 802
+        curated edges in about five weeks.
+
+        Review is a control on QUALITY and needs a human. A budget is a control
+        on VOLUME and does not — it holds regardless of how noisy the extractor
+        is on any given day, which is the property §A10 assumed and never had.
+        Edges refused for budget are not tombstoned: nothing is being judged
+        wrong, only deferred, and a genuinely recurring relationship will be
+        re-proposed tomorrow.
+        """
         if src not in self.nodes or dst not in self.nodes or type_ not in EDGE_FLOW:
             return False
+        if self.daily_proposal_budget and ts:
+            if self.proposals_on(ts[:10]) >= self.daily_proposal_budget:
+                self.budget_deferred += 1
+                return False
         for e in self.edges:
             if e.src == src and e.dst == dst and e.type == type_:
                 return False
@@ -757,6 +821,44 @@ class KnowledgeGraph:
         self._adj = None
         return True
 
+    def prune_non_entities(self, ts: str) -> dict:
+        """Remove placeholder nodes admitted before `propose_node` refused them,
+        and tombstone every edge they carried so the same wiring cannot walk back
+        in on the next digest.
+
+        Curated nodes are never touched — only nodes whose `state` records an
+        llm origin, which is the only provenance mark Node carries.
+
+        Returns {"nodes": [...], "edges": n} for the caller to report.
+        """
+        victims = [nid for nid, n in self.nodes.items()
+                   if self.is_non_entity(nid) and str(n.state or "").startswith("llm-proposed")]
+        removed_edges = 0
+        for nid in victims:
+            for e in [e for e in self.edges if e.src == nid or e.dst == nid]:
+                # tombstone first (it records WHY), then drop the edge
+                if e.provenance == "llm":
+                    self.reject_edge(e.src, e.dst, e.type,
+                                     f"non-entity node '{nid}': a placeholder for "
+                                     f"'no named counterparty', not a company", ts)
+                else:
+                    self.edges.remove(e)
+                removed_edges += 1
+            self.nodes.pop(nid, None)
+        if victims:
+            self._adj = None
+            self._alias_index = None
+        return {"nodes": victims, "edges": removed_edges}
+
+    def orphan_nodes(self) -> list[str]:
+        """LLM-proposed nodes with no edges at all — they cannot transmit or
+        receive a shock, so they are vocabulary, not wiring. Curated nodes are
+        excluded: an unwired seed node is a gap to FILL (see
+        scripts/graph_gap_scan.py), not something to delete."""
+        wired = {e.src for e in self.edges} | {e.dst for e in self.edges}
+        return sorted(nid for nid, n in self.nodes.items()
+                      if nid not in wired and str(n.state or "").startswith("llm-proposed"))
+
     def contested_rejections(self, min_suppressed: int = 3) -> list[dict]:
         """Tombstones the world keeps arguing with, most-argued first. A rejection
         re-proposed many times is the graph's version of noise-rescue: the source
@@ -764,6 +866,11 @@ class KnowledgeGraph:
         return sorted((r for r in self.rejected
                        if int(r.get("suppressed", 0)) >= min_suppressed),
                       key=lambda r: -int(r.get("suppressed", 0)))
+
+    def proposals_on(self, day: str) -> int:
+        """LLM edges proposed on a given YYYY-MM-DD. The budget's meter."""
+        return sum(1 for e in self.edges
+                   if e.provenance == "llm" and (e.proposed_at or "")[:10] == day)
 
     def proposal_rate(self, since_iso: str) -> int:
         """LLM edges proposed on or after `since_iso`. The number that matters is

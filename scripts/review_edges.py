@@ -189,6 +189,10 @@ def main() -> int:
     ap.add_argument("--reject", metavar="KEY", help="delete and tombstone an edge")
     ap.add_argument("--reason", default="", help="why it was rejected")
     ap.add_argument("--batch", metavar="FILE", help="apply JSONL decisions")
+    ap.add_argument("--hygiene", action="store_true",
+                    help="report placeholder ('none') nodes and unwired llm nodes")
+    ap.add_argument("--prune", action="store_true",
+                    help="remove placeholder nodes + their edges (writes the graph)")
     args = ap.parse_args()
 
     settings = Settings()
@@ -203,6 +207,43 @@ def main() -> int:
                          f"it reviews")
     graph = KnowledgeGraph.load(path)
     ts = _now().isoformat()
+
+    if args.hygiene or args.prune:
+        victims = [nid for nid in graph.nodes
+                   if KnowledgeGraph.is_non_entity(nid)
+                   and str(graph.nodes[nid].state or "").startswith("llm-proposed")]
+        deg = {}
+        for e in graph.edges:
+            deg[e.src] = deg.get(e.src, 0) + 1
+            deg[e.dst] = deg.get(e.dst, 0) + 1
+        print("\ngraph hygiene\n")
+        print(f"  nodes {len(graph.nodes)}   edges {len(graph.edges)}\n")
+        if victims:
+            print("  PLACEHOLDER NODES (a non-answer wired as an entity):")
+            for nid in sorted(victims, key=lambda n: -deg.get(n, 0)):
+                print(f"    {nid:<34} {deg.get(nid, 0):>3} edges  "
+                      f"{graph.nodes[nid].label}")
+        else:
+            print("  placeholder nodes:  none")
+        orphans = graph.orphan_nodes()
+        print(f"\n  UNWIRED llm nodes ({len(orphans)}) — vocabulary, not wiring:")
+        for nid in orphans[:30]:
+            print(f"    {nid:<34} {graph.nodes[nid].label}")
+        if len(orphans) > 30:
+            print(f"    ... and {len(orphans) - 30} more")
+        if not args.prune:
+            print("\n  (nothing written — re-run with --prune to remove the "
+                  "placeholder nodes)")
+            return 0
+        out = graph.prune_non_entities(ts)
+        graph.save(path)
+        print(f"\n  PRUNED {len(out['nodes'])} node(s) and {out['edges']} edge(s); "
+              f"each edge tombstoned so the next digest cannot re-add it.")
+        print(f"  graph is now {len(graph.nodes)} nodes / {len(graph.edges)} edges.")
+        print("  Unwired nodes were NOT removed — an unwired node is inert but "
+              "harmless,\n  and some are real companies awaiting wiring "
+              "(see graph_gap_scan.py).")
+        return 0
 
     if args.keep or args.reject or args.batch:
         decisions = []
