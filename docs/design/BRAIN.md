@@ -21,7 +21,7 @@ Quick map from vision to code:
 
 | Vision | Where it lives |
 |---|---|
-| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (seed v39: **802 curated + 317 LLM edges over 602 nodes**; factor nodes carry an `equilibrium` note). Live counts come from `scripts/brain_audit.py --section graph`, never from this table — the figure here was 283/562 and eleven seed versions stale before anyone checked. |
+| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (seed v39: **802 curated + 323 LLM edges over 609 nodes**; factor nodes carry an `equilibrium` note). Live counts come from `scripts/brain_audit.py --section graph`, never from this table — the figure here was 283/562 and eleven seed versions stale before anyone checked. |
 | News shocks a node and ripples to the others | `KnowledgeGraph.propagate()` — impulse × sign × weight × per-hop decay, with a full traversal trace |
 | Multi-market (Longbridge, not just US) | Asset nodes across US / HK / CN / SG / crypto; `MacroLinkageSignal` bridges Longbridge symbols (700.HK) to canonical ones (0700.HK) |
 | Noise vs real information (manipulation filter) | `brain/events.py` credibility score: source trust × corroboration × manipulation-likelihood × hype-language; sub-threshold events are labeled NOISE, shown but never propagated or traded |
@@ -330,11 +330,20 @@ Known simplifications that remain (the roadmap, in honesty):
   2026-08-21.* `brain/calibration.py` scores every curated influences-edge
   against realized forward returns and is designed to demote the contradicted
   ones. In production it has issued **0 supported and 0 contradicted verdicts
-  across 643 scored relationships** — `MIN_N = 20` and a typical edge sits at
-  n=16–17, because an edge only scores on days its source node was activated.
-  So every weight in the graph is still the hand-set prior it started as. The
-  "unproven" label is honest and doing its job; the demotion half of the design
-  has never fired. See STATE_OF_THE_SYSTEM §4A.
+  across 643 scored relationships** — and as of 2026-08-21 that is
+  **deliberate**. An edge only scores on days its source node was activated, so
+  a typical edge sat at n=16–17 and `MIN_N = 20` put the first verdicts ~3 days
+  away — on samples that are daily readings of a 5-day forward return, i.e.
+  about **four independent observations**. `MIN_N` is now **60** for causal
+  `influences` edges, with a separate **`MIN_N_DEMOTE_MEMBERSHIP = 120`** before
+  a structural `member_of` transmission may be demoted; promotion of a
+  membership stays at the ordinary bar. The asymmetry is in the PRIORS, not in
+  falsifiability: an `influences` edge is somebody's guess about a mechanism,
+  while a membership's prior comes from what a thing IS. So every weight in the
+  graph is still the hand-set prior it started as, and will be for ~2 more
+  months. The "unproven" label is honest and doing its job; the demotion half of
+  the design has not fired yet, by design. See STATE_OF_THE_SYSTEM §4.47 and
+  §4A.
 - **Expected-move magnitude is saturated.** The global `gain` correcting
   over/under-shoot is clamped to `[0.25, 2.0]` and sits **at 2.0** — realized
   moves are at least twice what the graph predicts and the calibrator cannot
@@ -342,7 +351,7 @@ Known simplifications that remain (the roadmap, in honesty):
   scaled by that bound, which is what the event sleeve's 32:1 risk/reward
   argument rests on.
 - **The graph resolves fewer objects than it holds.** 202 distinct response
-  signatures across 462 assets (43.7%); 104 assets are an exact duplicate of a
+  signatures across 469 assets (43.1%); 104 assets are an exact duplicate of a
   peer because each hangs off one `member_of` edge into a shared theme. For
   those names the path-sum below has exactly one term and the "cluster" is a
   sector lookup. Partially compensated (conviction × 1/√group, `brain/adviser.py`

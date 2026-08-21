@@ -843,9 +843,20 @@ that would have looked like a fix and done nothing.
   its 2.0 ceiling. `MIN_N=20` will start producing verdicts within days, at a
   sample size that cannot support them; raising it is a judgement call left
   open rather than made silently here.
-- **212 inert nodes** remain. The 14 placeholders are gone; triaging the rest
+  > **SETTLED later the same day — see §4.47.** The judgement was put to the
+  > user and taken: `MIN_N` 20 → **60** for causal edges, plus a separate
+  > `MIN_N_DEMOTE_MEMBERSHIP = 120` before structure may be demoted. The
+  > measurement that forced it: 56 relationships were about to cross the old
+  > bar and **6 would have been halved** — `arm->semis`, `xlf->us_financials`,
+  > `tsla->ev_supply_chain` — on ~4 independent observations. **`gain` at 2.0
+  > is NOT settled** and remains open as a sizing decision (§4A).
+- **Inert nodes** remain. The 14 placeholders are gone; triaging the rest
   (wire the real companies, delete the news vocabulary) is curation work, not a
-  code change.
+  code change. **Do not quote a figure from this document for this one** — it
+  moves daily with self-wiring, and this review alone contains three different
+  values measured at three different moments (212 before pruning, 198 after,
+  **205 of 469** on the last run of the day). `brain_audit.py --section graph`
+  is the answer; §4A carries the current one.
 - **`O39.SI` still has no order.** That one is a decision, not a wait.
 
 ---

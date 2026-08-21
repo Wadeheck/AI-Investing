@@ -203,7 +203,7 @@ add a weight. `graph.Edge.reviewed_at` says this out loud — a human keeping an
 LLM edge does not raise its confidence past the 0.6 cap, because review clears
 the queue, never the bar.
 
-**Before you widen anything, check whether it is already reaching.** 198 of 462
+**Before you widen anything, check whether it is already reaching.** 205 of 469
 asset nodes are inert to every macro shock, and 104 more are exact duplicates of
 a peer. Adding a node to a graph that cannot differentiate the ones it has is
 motion, not progress. `--section graph` gives you the number.
