@@ -708,3 +708,142 @@ construction.
 Nothing here was re-fit and nothing was simulated. Where the evidence is thin
 the review says so, and the thinnest evidence of all is the thing this system
 most wants to be true: that its long side is real.
+
+---
+
+## 10. What was implemented, and what it changed on the live box
+
+*All eight recommendations were applied the same day, in five commits
+(`bfb77d2`, `3039b95`, `44585db`, `27f7d2f`, `8049432`), deployed to the
+ProDesk, and verified against the live state. All 57 test files pass on both
+machines under the project's own runner.*
+
+**The counting unit** (`bfb77d2`). `advice_outcomes` gains `issue_date` and
+`is_primary`; every row is still written and auditable, and exactly one per
+(day, symbol) — the first call of that day — may be counted. The migration ran
+on the live 194MB database in 0.1s:
+
+```
+scorecard: labelled the counting unit — 42,882 graded rows collapse to 634
+distinct (day, symbol) observations (67.6x replication, now excluded from stats)
+```
+
+`adviser_gate` now counts observations on both sides. It had two code paths that
+first disagreed by 8 of 90 — one partitioned before filtering and the other
+after — which is the same defect in miniature; they now agree exactly. `min_n`
+moved 500 → 80, in the new unit. The measured effect on the live gate:
+
+```
+                 before          after
+adviser_long     n=4,040         n=90      hit 0.622, 15 days
+```
+
+Still not eligible, and now for an honest reason: `min_days: 30` is the binding
+constraint, as it always was in practice.
+
+**The reliability EMA** now steps once per (symbol, day). `reliability.json` was
+re-seeded to neutral — the old file is kept at
+`data/retired_reliability_saturated_20260821.json`. It had **56 of 122 symbols
+pinned at a bound**; it now has zero, and the weights it accumulates from here
+carry a ~5–6 day half-life instead of a same-day one.
+
+**The emotion layer, measured against a control group** (`8049432`). This is the
+single largest change to a live sizing input, and the answer came from the
+system's own record:
+
+```
+before   panic_rebound   coef  1.000   mean +1.192%   tstat 10.75
+         euphoria_fade   coef  1.000   mean +1.118%   tstat  5.17
+
+after    panic_rebound   coef  0.000   lift −0.00038  t −0.24   measured-contradicted
+         euphoria_fade   coef −0.167   lift −0.00115  t −0.50   measured
+```
+
+Panic events return +1.192% against an ordinary event's **+1.230%**. "Be greedy
+when others are fearful" was running at its clamped maximum on a lift of
+−0.0004. Measured against a control it is **zero**. The euphoria fade survives,
+correctly signed, shrunk from a clamped −1.0 to −0.167.
+
+`event_outcomes` also gained the benchmark columns it never had. Note what the
+report honestly says today — `return_basis: "absolute (excess column empty)"` —
+because the 25,372 existing rows predate the migration and only new rows carry a
+benchmark. The numbers above will move again as market-relative rows accumulate,
+and the label will say so.
+
+**The graph** (`3039b95`). A shape-based filter (not a blocklist — a blocklist
+catches `none` and misses `unnamed_acquirer`) found **14 placeholder nodes
+carrying 37 edges**, not the one visible by eye:
+
+```
+none                                23 edges
+saudi_led_investor                   2
+6_unnamed_financial_institutions     1
+unnamed_international_bank_syndicate 1
+undisclosed_client                   1
+private_investors                    1
+multiple_banks                       1
+... and 7 more
+```
+
+All pruned and every edge tombstoned, so the next digest cannot re-add the same
+wiring. Propagation is unchanged (`ai_capex_cycle` still reaches nvda 0.7581,
+tsmc 0.5858, avgo 0.5488). The live graph is **602 nodes / 1,119 edges** with 39
+tombstones. Self-wiring now carries a **6/day budget** — a control on volume,
+which unlike review needs no human; budget-refused edges are deferred, not
+tombstoned, because nothing about them was judged wrong.
+
+**Sizing** (`44585db`). Field conviction is scaled by 1/√(group size) for names
+the graph gave an identical impact — the standard correlated-positions
+adjustment. On a `crypto_liquidity` shock that is 28 of 34 touched assets.
+
+**The short side.** A bearish adviser score can no longer add size to a short.
+It may still shrink one. It is not inverted.
+
+**Book basis** (`44585db`). All four books now declare which book a mark belongs
+to, via one shared rule rather than four copies (§4.10's lesson). A venue change
+is stamped on the mark where it happens, so the next 10,052 → 4,999 step arrives
+already explained instead of reading as −50% to the breaker and the watchdog.
+
+**Self-checking cues** (`27f7d2f`). `scripts/cue_check.py` +
+`ai-investing-cue-check.timer`, installed and enabled (next fire 09:40 SGT).
+Four cues that need no judgement to *evaluate*, notifying only on a state
+change. First run:
+
+```
+  --  llm_edges_vs_curated             317 llm vs 802 curated (110/wk)
+  --  sleeve_risk_reward               16 clock exits, 0 stop-outs, $1,146.21 realized
+  --  reliability_issuance_days        17 distinct issuance days, 634 observations
+  --  edge_calibration_first_verdict   0 decided of 343 scored (gain=2.0)
+```
+
+### 10.1 Two recommendations deliberately not followed
+
+**FET, BCH, HYPE and ATOM were NOT added to `CONFIRMED_MISCALIBRATED`**, which
+§8 item 6 originally proposed. Deduplicated, they are **5, 3, 2 and 13 distinct
+days** — none significant. Acting on their raw records (`FET/USD` long n=526,
+hit 0.00) would have been the exact error §1 of this review is about. `UNI/USD`
+stays because it survives the correction: 12 days, hit 0.17, t=−2.97. The
+structural fix (the 1/√group discount) covers the class without asserting a
+per-symbol verdict the evidence cannot support.
+
+**The 602035 order rejects were instrumented, not "fixed."** The obvious
+diagnosis — §4.23's tick defect on a board it was never proven against — is
+wrong: the prices sent were legal ticks. The cause is unknown, so the rejection
+now carries the tick and reference price a diagnosis needs, rather than a change
+that would have looked like a fix and done nothing.
+
+### 10.2 Still open after this pass
+
+- **The formula has still never learned anything.** `journal.db.outcomes` is
+  still 0 rows and θ is still the hand-set prior. Deliberately untouched: §8's
+  "not recommended" stands — fitting on a 26-day single-regime sample is how you
+  get a confidently wrong model, and now that the measurement layer is fixed,
+  the right move is to let clean data accumulate first.
+- **The calibrator has still issued 0 verdicts** and `gain` is still pinned at
+  its 2.0 ceiling. `MIN_N=20` will start producing verdicts within days, at a
+  sample size that cannot support them; raising it is a judgement call left
+  open rather than made silently here.
+- **212 inert nodes** remain. The 14 placeholders are gone; triaging the rest
+  (wire the real companies, delete the news vocabulary) is curation work, not a
+  code change.
+- **`O39.SI` still has no order.** That one is a decision, not a wait.
