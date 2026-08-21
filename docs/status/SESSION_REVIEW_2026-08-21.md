@@ -564,3 +564,112 @@ it:
 > passing tests did not notice a script that could not start.
 
 Suite is now **647** under both runners.
+
+---
+
+## 11. The delegated decision: the gain ceilings
+
+The user handed me the two open decisions and said to pick. This records the
+call and the reasoning, because the reasoning is the durable part.
+
+### 11.1 The decision: HOLD. Do not raise them.
+
+And the reason is not caution — it is that **the evidence for raising them
+turned out to be a measurement artefact.**
+
+§4.45 measured median |realised/expected| = 14.4 and concluded `expected_move`
+was "one to two orders of magnitude too small". I repeated that conclusion twice
+in this session, including in §6 above, calling the saturated gains *"the single
+largest open risk to returns"*. Before acting on it I ran the control that
+§4.45 never had — **what the ratio is with no signal at all:**
+
+```
+median |realised / expected|             14.4
+median  own-5d-volatility / expected     15.5   <-- PURE NOISE
+directional hit rate                      0.526  (n=19 — a coin flip)
+```
+
+Indistinguishable. `expected_move` is the move **attributable to the event**;
+`realized_move` is the asset's **total** five-day move, which its own volatility
+dominates. The ratio measures signal-to-noise, not calibration error.
+
+### 11.2 Why raising them would have been actively harmful
+
+No gain can drive that ratio to 1.0 — only an asset that does nothing except
+what the event told it to. Reaching 1.0 at the live impact (~0.06) needs a gain
+above **13**, at which point every `expected_move` asserts the model predicts
+the asset's **entire five-day range**. That number feeds position sizing, the
+sleeve's risk/reward and stop distances. I would have inflated all three, on a
+52.6% hit rate, and called it a fix.
+
+**The honest lever is the other one.** The ratio falls when the event explains
+more of the move — bigger `impact`, a **graph-wiring** question. Which points
+straight back at the 200 inert assets and 320 unreviewed edges: unglamorous,
+and the actual work.
+
+### 11.3 The cue was wrong too, not just the conclusion
+
+§4B said *"revisit at 50 settled claims"*. More samples of a signal-to-noise
+ratio give a better estimate of **the noise** — not a reason to raise the gain.
+The cue that would actually matter is the ratio falling **below** its noise
+floor while the hit rate rises, which is a wiring outcome, not a sample-size
+one. Corrected.
+
+### 11.4 What the investigation turned up on the way
+
+**Every equity claim was sized off the same 2% constant.** All 17 carry
+`vol_daily = 0.0200` exactly; only BTC (0.0194) and ETH (0.0409) differ, because
+the crypto path computes its own. `brain/core.py` builds two dicts from one
+graph read — `_shock_assets` (what the event sleeve trades) and `asset_impacts`
+(the accumulated field) — and `enrich_with_scale` ran on the second only. JPM
+(~1.2% daily) and MP (~5%) were sized off one number. **Fifth instance today of
+one-of-two-paths-fixed**, after §4.14, §4.23, §4.36 and §4.49.
+
+### 11.5 Made permanent, not just written down
+
+`brain_audit.py` now prints the observed ratio, the noise floor, the hit rate
+and the conclusion **together**, and a test refuses to let the observed ratio be
+published without its control. That guard exists because mutation testing showed
+blanking the noise figure broke nothing — the audit could have quietly gone back
+to printing 14.4 alone, which is the reading this whole entry exists to kill.
+
+### 11.6 What is NOT claimed
+
+That the expectation is well calibrated. **n=19 at a coin-flip hit rate supports
+no claim in either direction.** The claim is narrower and sufficient: the 14x is
+not evidence for raising the gain, and the ceilings hold until there is evidence
+that is actually about the gain.
+
+**Lesson, and it is the third time this session:** a ratio without its null is
+not a measurement. §4.6 needed a benchmark before `hit` meant anything; §4.44
+needed a control group before "panic rebound" did; this needed a noise floor.
+Same correction every time — **compared with what?**
+
+### 11.7 The second decision, and why I did not take it
+
+`O39.SI` is the one qualifying long, blocked only because the live slice is
+USD-only. I did **not** place it, and that is a deliberate call rather than an
+oversight: SGX was closed for the whole of this session, so the order would have
+rested overnight and filled unattended at an open I could not watch — which is
+the opposite of what a first-ever order on an unproven market path is for. Its
+value is proving submit → fill → stop → exit **while someone is watching**. It
+should go in during SGT market hours.
+
+---
+
+## 12. Deploy state at the end of this session
+
+`ffe5b65` is committed and pushed to origin. **It is NOT yet on the ProDesk** —
+the box powered off on its daily schedule mid-deploy (Tailscale: clean
+disappearance, not a fault).
+
+Nothing is broken by this. The box is running the previous commit, which is the
+code that ran all evening, and the engine restarts from `ExecStartPre` on boot.
+The pending step is one `git pull` on the box, which will fast-forward cleanly:
+`scripts/brain_audit.py` was copied there by hand during the investigation and
+is **byte-identical** to the version in the commit, so it is not a conflicting
+local modification.
+
+**On the next session, before anything else:** `ssh -A prodesk`, `git pull`,
+restart the engine, and confirm `brain_audit.py --section learning` reports the
+`expected_move` block.
