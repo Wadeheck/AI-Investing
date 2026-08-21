@@ -12,7 +12,9 @@ Cross them:
 
 Per edge: n, hit_rate, mean signed return, t-stat, verdict —
   supported     t >= +1.5, n >= MIN_N   -> confidence x1.15 (capped)
-  contradicted  t <= -1.5, n >= MIN_N   -> confidence x0.5
+  contradicted  t <= -1.5, and n >= MIN_N for a causal `influences` edge, or
+                n >= MIN_N_DEMOTE_MEMBERSHIP for a structural `member_of`
+                transmission                       -> confidence x0.5
   unproven      otherwise               -> x1.0 (belief stands, unbacked)
 
 Plus a global GAIN: the ratio of realized |move| to predicted |expected move|
@@ -35,7 +37,39 @@ import sqlite3
 from datetime import datetime, timezone
 
 MIN_ACT = 0.05        # source activation below this is noise, not a signal
-MIN_N = 20            # samples before a verdict is allowed
+
+# HOW MUCH EVIDENCE OVERTURNS A HAND-SET WEIGHT.
+#
+# MIN_N was 20, and 20 sounds adequate until you notice what the samples are:
+# daily readings of a HORIZON-day forward return, so consecutive observations
+# overlap almost entirely. Twenty of them carry roughly `20 / HORIZON` = 4
+# independent observations — three weeks of one market.
+#
+# On 2026-08-21 that bar was ~3 days from being crossed by 56 relationships, of
+# which 14 would have been graded immediately and 6 demoted. What sat in that
+# demotion list is the argument:
+#
+#     arm -> semis          t=-2.97   would have been HALVED
+#     xlf -> us_financials  t=-2.85   would have been HALVED
+#     tsla -> ev_supply_chain t=-3.42 would have been HALVED
+#
+# So the priors are not alike, and treating them alike is the error:
+#
+#   an `influences` edge is SOMEONE'S GUESS about a mechanism. Overturning it
+#   needs evidence, and not much prior deference is owed.
+#
+#   a `member_of` path is STRUCTURAL — ARM is a semiconductor company, XLF is
+#   the financials ETF. The weight is not asserting that (which would be
+#   untestable); it is asserting how much of a sector move reaches the member,
+#   which IS empirical. But its prior comes from what the thing IS, not from a
+#   guess, and four independent observations cannot overturn structure. ARM
+#   lagging semis for three weeks is a fact about three weeks.
+#
+# So: a real bar for causal claims, and a much higher one before structure is
+# demoted. Promotion of a membership stays at the ordinary bar — strengthening
+# a structurally-grounded prior is the safe direction.
+MIN_N = 60            # causal edges: ~12 independent observations
+MIN_N_DEMOTE_MEMBERSHIP = 120   # structure yields only to sustained evidence
 T_BAR = 1.5           # |t| needed to move an edge off "unproven"
 DEADBAND = 0.003      # |move| under 0.3% decides nothing (matches scorecard)
 HORIZON = 5           # calendar snapshots ~ trading days, matches scorecard
@@ -80,7 +114,8 @@ def _forward_return(dated_prices: dict[str, float], dates: list[str],
 
 def _score_pair(src_acts: dict[str, float], px: dict[str, float], sign: int,
                 weight: float, vol: float, horizon: int,
-                mags: tuple[list[float], list[float]]) -> dict | None:
+                mags: tuple[list[float], list[float]],
+                structural: bool = False) -> dict | None:
     """Score one (source node -> asset) transmission: on every day the source
     was meaningfully activated, did the asset's forward return match?"""
     if not src_acts or len(px) < 3:
@@ -118,11 +153,18 @@ def _score_pair(src_acts: dict[str, float], px: dict[str, float], sign: int,
     t = max(-99.0, min(99.0, t))
     decided = hits + misses
     verdict = "unproven"
+    # `structural` marks a theme->member transmission: demoting it needs far
+    # more evidence than demoting somebody's guess about a mechanism.
+    demote_n = MIN_N_DEMOTE_MEMBERSHIP if structural else MIN_N
     if n >= MIN_N and t >= T_BAR:
         verdict = "supported"
-    elif n >= MIN_N and t <= -T_BAR:
+    elif n >= demote_n and t <= -T_BAR:
         verdict = "contradicted"
     return {"n": n, "hits": hits, "misses": misses,
+            "structural": bool(structural),
+            # what the evidence is worth once overlapping windows are counted;
+            # reported so a reader never has to re-derive it (§4.37's lesson)
+            "n_independent": max(1, n // max(1, HORIZON)),
             "hit_rate": round(hits / decided, 3) if decided else None,
             "mean_signed_ret": round(mean, 5), "tstat": round(t, 2),
             "verdict": verdict}
@@ -165,7 +207,8 @@ def calibrate(settings, graph, horizon: int = HORIZON) -> dict:
                 continue
             sym = src_asset.symbol.upper()
             r = _score_pair(acts.get(e.dst) or {}, prices.get(sym) or {}, e.sign,
-                            e.weight, vols.get(sym, 0.02), horizon, mags)
+                            e.weight, vols.get(sym, 0.02), horizon, mags,
+                            structural=True)      # see MIN_N_DEMOTE_MEMBERSHIP
             if r:
                 paths_report[graph.edge_key(e)] = r
 

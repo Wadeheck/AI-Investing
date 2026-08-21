@@ -202,9 +202,10 @@ def test_priced_in_discounts_chased_moves():
 def test_calibration_scores_edges_and_gain():
     from ai_investing.brain import calibration
     g = KnowledgeGraph.seeded()
-    ds = _dates(60)
+    ds = _dates(90)
     # gold_price node persistently UP; GLD grinds up -> the correlates edge is
-    # not scored (only influences); use oil_price -> shell (influences, w=0.6)
+    # not scored (only influences); use oil_price -> shell (influences, w=0.6).
+    # 90 dates because the last HORIZON of them have no forward price to score.
     prices = [(d, 50.0 * (1.0 + 0.004) ** i) for i, d in enumerate(ds)]
     s = _settings_with_db({"SHEL": prices})
     conn = sqlite3.connect(s.brain.db_path)
@@ -233,10 +234,97 @@ def test_calibration_scores_edges_and_gain():
     os.remove(s.brain.db_path)
 
 
-def test_calibration_contradicted_edge_demoted():
+def test_the_evidence_bars_are_meaningful_once_windows_overlap():
+    """Pin the DECISION, not a fixture.
+
+    Every other test here supplies plenty of dates, so lowering MIN_N breaks
+    none of them — mutation-testing this file showed exactly that: MIN_N back
+    to 20 left the suite green. But 20 was never 20 pieces of evidence. They are
+    daily readings of a HORIZON-day forward return, so consecutive samples
+    overlap almost entirely and 20 of them carry ~4 independent observations —
+    three weeks of one market, against which the calibrator was about to halve
+    `arm->semis` and `xlf->us_financials`.
+
+    So the bar is asserted in the unit that matters. Someone lowering it has to
+    argue with this number rather than with a fixture that happens to pass.
+    """
+    from ai_investing.brain import calibration as c
+    causal = c.MIN_N // c.HORIZON
+    structural = c.MIN_N_DEMOTE_MEMBERSHIP // c.HORIZON
+    assert causal >= 12, (
+        f"MIN_N={c.MIN_N} over a {c.HORIZON}-day window is ~{causal} independent "
+        f"observations — too few to overturn a hand-set weight")
+    assert structural >= 2 * causal, (
+        f"demoting STRUCTURE (~{structural} independent observations) must need "
+        f"materially more than demoting a guess (~{causal}); a membership's "
+        f"prior comes from what a thing IS")
+
+
+def test_a_structural_membership_is_not_demoted_on_causal_evidence():
+    """The judgement call of 2026-08-21, as a test.
+
+    A `member_of` transmission's prior comes from what a thing IS — ARM is a
+    semiconductor company, XLF is the financials ETF. Its WEIGHT is empirical
+    (how much of a sector move reaches the member), but four independent
+    observations cannot overturn structure, and at MIN_N=20 the calibrator was
+    three days from halving `arm->semis`, `xlf->us_financials` and
+    `tsla->ev_supply_chain` on three weeks of one market.
+
+    Same evidence that demotes a causal edge must NOT demote a membership.
+    """
     from ai_investing.brain import calibration
     g = KnowledgeGraph.seeded()
-    ds = _dates(60)
+    ds = _dates(90)                       # enough for MIN_N, not for MIN_N_DEMOTE
+    # semis theme UP while a member falls relentlessly
+    prices = [(d, 50.0 * (1.0 - 0.004) ** i) for i, d in enumerate(ds)]
+    s = _settings_with_db({"ARM": prices})
+    conn = sqlite3.connect(s.brain.db_path)
+    conn.executemany("INSERT INTO node_history VALUES(?,?,?)",
+                     [(d + "T12:00:00+00:00", "semis", 0.4) for d in ds])
+    conn.commit()
+    conn.close()
+    report = calibration.calibrate(s, g)
+    r = report["paths"].get("arm->semis:member_of")
+    os.remove(s.brain.db_path)
+
+    assert r is not None, "fixture: the membership must actually be scored"
+    assert r["structural"] is True
+    assert r["tstat"] < -1.5, "fixture: the evidence must genuinely point down"
+    assert calibration.MIN_N <= r["n"] < calibration.MIN_N_DEMOTE_MEMBERSHIP, (
+        f"fixture: n={r['n']} must clear the causal bar and NOT the structural one")
+    assert r["verdict"] != "contradicted", (
+        "a structural membership must not be halved on the evidence that would "
+        "demote a guess about a mechanism")
+
+
+def test_the_report_states_what_the_evidence_is_actually_worth():
+    """§4.37's lesson applied here: n is daily readings of a HORIZON-day forward
+    return, so a reader must never have to re-derive the independent count."""
+    from ai_investing.brain import calibration
+    g = KnowledgeGraph.seeded()
+    ds = _dates(90)
+    s = _settings_with_db({"SHEL": [(d, 50.0 * 1.004 ** i) for i, d in enumerate(ds)]})
+    conn = sqlite3.connect(s.brain.db_path)
+    conn.executemany("INSERT INTO node_history VALUES(?,?,?)",
+                     [(d + "T12:00:00+00:00", "oil_price", 0.4) for d in ds])
+    conn.commit()
+    conn.close()
+    r = calibration.calibrate(s, g)["edges"]["oil_price->shell:influences"]
+    os.remove(s.brain.db_path)
+    assert r["n_independent"] == max(1, r["n"] // calibration.HORIZON)
+    assert r["n_independent"] < r["n"], "overlapping windows must be visible"
+
+
+def test_calibration_contradicted_edge_demoted():
+    """A CAUSAL edge (`influences`) is somebody's guess about a mechanism, so
+    MIN_N evidence against it is enough to halve its confidence.
+
+    90 dates, not 60: `_score_pair` needs a forward price HORIZON days after
+    each activation, so the last few days score nothing and 60 dates land just
+    under MIN_N=60."""
+    from ai_investing.brain import calibration
+    g = KnowledgeGraph.seeded()
+    ds = _dates(90)
     # oil node UP but Shell relentlessly FALLING -> edge contradicted, x0.5
     prices = [(d, 50.0 * (1.0 - 0.004) ** i) for i, d in enumerate(ds)]
     s = _settings_with_db({"SHEL": prices})
@@ -406,9 +494,16 @@ def test_campaign_volume_confirmation_raises_pressure():
 
 # ----------------------------------------------- item 6: path calibration --
 def test_path_calibration_scores_theme_to_member_transmission():
+    """A membership CAN still be demoted — it just needs sustained evidence.
+
+    150 dates, not 60: a `member_of` transmission is structural, so demoting it
+    requires MIN_N_DEMOTE_MEMBERSHIP rather than MIN_N (2026-08-21). Structure
+    yields to a long run of contrary evidence; it does not yield to three weeks
+    of one market, which is what the old bar allowed.
+    """
     from ai_investing.brain import calibration
     g = KnowledgeGraph.seeded()
-    ds = _dates(60)
+    ds = _dates(150)
     # theme ai_datacenter persistently POSITIVE while member CRWV keeps FALLING:
     # the membership transmission is contradicted and that exact wire demotes
     prices = [(d, 40.0 * (1.0 - 0.004) ** i) for i, d in enumerate(ds)]
@@ -421,6 +516,7 @@ def test_path_calibration_scores_theme_to_member_transmission():
     report = calibration.calibrate(s, g)
     key = "crwv->ai_datacenter:member_of"
     assert key in report["paths"]
+    assert report["paths"][key]["n"] >= calibration.MIN_N_DEMOTE_MEMBERSHIP
     assert report["paths"][key]["verdict"] == "contradicted"
     assert report["summary"]["paths_scored"] >= 1
     factors = calibration.factors_from_report(report)
