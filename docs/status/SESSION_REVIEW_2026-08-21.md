@@ -416,3 +416,82 @@ section.
 3. **A test is not evidence until you have watched it fail.** Seven of today's
    passed with the bug put back — including one that would have let someone
    silently reverse a decision you had just made.
+
+---
+
+## 9. Follow-up pass — the register drifted again, hours after closing it
+
+This section exists because of exactly the failure §0 warned about: §4A had
+drifted from live state again, inside the same commit that claimed to have
+fixed drift. Found while fact-checking a draft summary paragraph before it
+went anywhere, not by a scheduled review — which is itself the finding worth
+keeping: **drift-checking has to happen at the moment a number is about to be
+reused, not on a calendar.**
+
+### 9.1 What was wrong
+
+Three things, all inside `STATE_OF_THE_SYSTEM.md`, none of them in this
+document (§5's figures were already correct):
+
+1. **§4A had stale figures that §2 of the same file already had right.**
+   §2 was refreshed from a live `brain_audit.py` run late in the day (per its
+   own rule); §4A's inert-asset and self-wiring rows were not carried forward
+   with it, and still read **198 inert / 462 assets / 317 unreviewed LLM
+   edges** — the numbers from *before* the day's later self-wiring growth,
+   not the **205 / 469 / 323** that §2 (and this document's §5) already had.
+2. **The §4 failure-register index table still contradicted §4A.** Row 4.40
+   read "❌ Filed, not fixed — see §4A" after §4A itself had already marked
+   4.40 CLOSED — the identical pattern that opened this whole review (§0: "the
+   last five commits each edited one §4A row and opened no register entry").
+   4.46 and 4.47 had no index row at all.
+3. **The venue-stop row's position count had aged out from under it.** It
+   read "13 positions... ten names in the trading book plus the sleeve's
+   three." The sleeve has since gone fully flat (0 positions — it runs flat
+   between events, not frozen, and §2 already said so); the number was true
+   of the 2026-08-21 check that produced it and not of anything after.
+
+### 9.2 How this was checked
+
+Per §4's own rule — not hand-derived:
+
+```
+$ ssh prodesk 'cd ~/Projects/AI-Investing && .venv/bin/python scripts/brain_audit.py'
+GRAPH   inert_assets: 205, assets_duplicating_a_peer: 104,
+        llm_edges: 323, unreviewed_llm_edges: 323
+LEARNING edge_calibration: gain: 2.0, gain_saturated: true
+BOOKS   trading 11 pos, investing 3, sleeve 0, crypto 3, crypto_event 1
+```
+
+`gain: 2.0, gain_saturated: true` is worth flagging on its own: it confirms
+against production, not just against `calibration.py`'s bound, that the
+2.0 clamp claimed throughout §1.2 and §6 is still actually binding today.
+
+§4A's open-row count was verified by counting the table directly rather than
+trusting either the committed figure or a later draft: **17 open rows**,
+unchanged — matching this document's own `19 → 17`, not a "24 → 16" figure
+that appeared in an early draft of a follow-on summary and had no commit
+behind it. Nothing closed between `4df3b2a` and now; there was no basis for a
+different count.
+
+### 9.3 Fixes applied
+
+Two commits, both documentation-only, both deployed to the ProDesk
+(`git pull` fast-forwarded cleanly, no conflict):
+
+| Commit | What it did |
+|---|---|
+| `c1aa11d` | §4A's inert-asset and self-wiring rows updated to 205/469/323, sourced to the `brain_audit.py` run above. §4 index table: row 4.40 flipped to closed; 4.46 and 4.47 rows added. |
+| `228ddb4` | Venue-stop row's "13 positions... the sleeve's three" rescoped to the check that produced it, rather than left reading as a current count — the trading book's 11 is what's still live. |
+
+No code changed. No defect count changed — this was register hygiene, not a
+fix, and is filed here rather than as a new §4.4x entry for that reason.
+
+### 9.4 What's next
+
+Unchanged from §7 — this pass corrected drift, it did not close or open
+anything. The 17 open rows, the one code item (`shadow.json`'s arithmetic
+test), the four decisions, the six waits, and the curation backlog are all
+exactly as §7 lists them. The one addition: whoever writes the next
+"still open, N → M" summary should pull §4A's row count directly (or read
+this section) rather than recall it — that is the specific mistake this pass
+exists to record.
