@@ -33,22 +33,22 @@ audit and paste. The previous set had drifted by 182 nodes and 323 edges before
 anyone noticed.*
 
 ```
-GRAPH    609 nodes, 1,125 edges = 802 curated + 323 LLM-proposed  (seed v39)
-                                        469 of the nodes are assets.
+GRAPH    604 nodes, 1,122 edges = 802 curated + 320 LLM-proposed  (seed v39)
+                                        464 of the nodes are assets.
                                         STOCK_WATCHLIST and CRYPTO_WATCHLIST are
                                         DERIVED from these — 258 tradable stock
                                         symbols (up from ~80 hand-maintained,
                                         §4.25) and 17 crypto (§4.26).
-                                        LLM wiring is 28.7% of the graph and now
+                                        LLM wiring is 28.5% of the graph and now
                                         capped at 6 new edges/day (§4.38).
-RESOLUTION  202 distinct response signatures across 469 assets = 43.1%.
-                                        205 assets are inert to every macro
+RESOLUTION  202 distinct response signatures across 464 assets = 43.5%.
+                                        200 assets are inert to every macro
                                         shock; 104 are an exact duplicate of a
                                         peer. The graph tells apart fewer
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    63 files / 655 tests, green under BOTH runners (the project's own
+TESTS    64 files / 672 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
          machines, and under random ordering — see §4.40 and §4.46
 COMMITS  304
@@ -209,6 +209,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.47 | The calibrator was three days from halving six relationships on four observations | ✅ `MIN_N` 20→60 for causal edges, 120 to demote a membership; deliberate, not yet graded (§4A) |
 | 4.48 | §4.40's own fix killed the X capture channel, and its own guard blessed it | ✅ Real `main(argv=None)`; guards now check the name is BOUND and that every argparse script still starts |
 | 4.49 | A number that is not valid JSON survived every restart, in every state file | ✅ `allow_nan=False` on write, non-finite refused on read, and the 0.0 price sentinel removed from the shadow path too |
+| 4.50 | A cleanup rule I wrote deleted Procter & Gamble from the live graph | ✅ `&` survives normalisation as `and`; node and edge restored; every `is_non_entity` caller must pass a type |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2304,6 +2305,57 @@ NameError: name 'argv' is not defined
 - **Lesson.** When a row names one file, ask what WROTE it. The shadow book was
   where the symptom appeared; `json.dumps` was where the defect lived.
 
+### 4.50 I deleted Procter & Gamble with a rule I wrote an hour earlier *(2026-08-21)*
+
+- **Context.** §4A's curation backlog — *"wire the real companies, delete the
+  vocabulary"* — had produced nothing in weeks because it was a sentence, not a
+  process. Reading the 31 unwired nodes showed two distinct problems needing
+  opposite fixes: a SHAPE defect (`amazon_alphabet_microsoft` — three companies
+  in one node; `uk_domestic_chip_startups` — a category) and an AGE defect
+  (`databricks`, `skanska` — real companies met once and never wired).
+- **What I shipped, and what it cost.** The shape rule read a double underscore
+  as *"two entities joined by a separator"*. Applied to the live graph it pruned
+  6 nodes and 4 edges — five of them correct, and one **Procter & Gamble**, whose
+  real `-> thorne` edge was tombstoned with it.
+- **Cause.** `propose_node` normalised with `re.sub(r"[^a-z0-9_]", "", ...)`,
+  which **deletes** `&`. The character that distinguishes a company from a pair
+  was gone before any rule could look at the id:
+
+```
+Procter & Gamble                  ->  procter__gamble          ONE company
+Johnson & Johnson                 ->  johnson__johnson         ONE company
+Fenway Sports Group / Liverpool   ->  fenway_sports__liverpool TWO
+Datacenter / HFT infrastructure   ->  datacenter__hft_infra    TWO
+```
+
+  The rule read all four as separators and was right about exactly one.
+- **Fix, and where it belongs.** No downstream rule could have got this right,
+  so it goes where the information still exists: `&` becomes ` and ` **before**
+  punctuation is stripped. P&G normalises to `procter_and_gamble`, and a
+  surviving `__` once again really does come from a separator — which makes the
+  rule that reads it sound rather than lucky. The node and its edge were
+  restored on the live box and the wrong tombstone removed.
+- **Why the dry run missed it.** I previewed the collection against
+  `orphan_nodes()` — the UNWIRED list — and P&G was **wired**. The prune reached
+  further than the preview I had checked. *A dry run that samples a different
+  population than the operation is not a dry run.*
+- **And I had written the warning myself, two commits earlier.** The test file
+  says: *"a false positive here refuses a real company permanently"* — my
+  reasoning for declining a `_and_` rule. I then shipped a different rule with
+  the identical failure mode.
+- **A third caller of the same function, found while fixing this.**
+  `is_non_entity(nid)` defaults to `"asset"`, and the seed's THEME nodes are
+  categories (`uk_banks`, `sg_banks`, `china_property_stocks`) — correct for a
+  theme, junk for an asset. Every type-blind caller reported three curated nodes
+  as placeholders: the hygiene guard caught it, `brain_audit.py` printed them,
+  and `review_edges.py` would have offered them for pruning. Now an AST guard
+  refuses any caller outside `graph.py` that omits the type.
+- **Lesson.** **A cleanup rule is a destructive operation and deserves the
+  scrutiny of one.** Both halves of this failed the standard I would apply to a
+  trade: the preview measured a different set than the action, and the rule was
+  written against ids whose distinguishing information had already been thrown
+  away upstream.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2312,7 +2364,7 @@ and the register had drifted **13 commits** behind reality.
 
 | Open | Detail | Risk today |
 |---|---|---|
-| **Self-wiring is bounded but still ungraded, and the review queue has never been used** | §4.38, 2026-08-21. The RATE is fixed: a 6/day budget replaced an unbounded stream that had reached **88.5/week — 131 in 7 days**, against §A10's stated ≤1/week. What is NOT fixed: nothing can grade an LLM edge (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), and `review_edges.py` reports **`reviewed & kept: 0`** — the queue built in §4.22 as the control surface has never been used once, on any edge, ever. Current (re-measured 2026-08-21 via `brain_audit.py`): **323 LLM edges, 28.7% of the graph, all 323 unreviewed.** | Bounded, not resolved. At 6/day LLM wiring can still reach parity with the 802 curated edges in ~9 months, and the only thing standing between a bad inference and the live field is the 0.6 confidence cap. Deciding the proposal BAR (as opposed to the budget) is still a judgement about how much self-wiring is wanted. |
+| **Self-wiring is bounded but still ungraded, and the review queue has never been used** | §4.38, 2026-08-21. The RATE is fixed: a 6/day budget replaced an unbounded stream that had reached **88.5/week — 131 in 7 days**, against §A10's stated ≤1/week. What is NOT fixed: nothing can grade an LLM edge (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), and `review_edges.py` reports **`reviewed & kept: 0`** — the queue built in §4.22 as the control surface has never been used once, on any edge, ever. Current (re-measured 2026-08-22 via `brain_audit.py`): **320 LLM edges, 28.5% of the graph, all 320 unreviewed.** | Bounded, not resolved. At 6/day LLM wiring can still reach parity with the 802 curated edges in ~9 months, and the only thing standing between a bad inference and the live field is the 0.6 confidence cap. Deciding the proposal BAR (as opposed to the budget) is still a judgement about how much self-wiring is wanted. |
 | **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested. One HK order has now filled (§5); SG, SH and SZ have never had one sent. | **Re-measured 2026-08-21 in the deduplicated unit (§4.37) — the earlier figures on this row were 65× inflated and have been replaced.** Conviction-long hit-rate by market: **KS 0.889 (n=9, +7.4%)**, **T 0.750 (n=4, +4.2%)**, **SI 0.875 (n=8, +1.9%)**, HK 0.562 (n=16), **US 0.551 (n=49, +1.2%)**. The brain's accuracy ranks INVERSELY with its ability to place the order — best in Korea and Tokyo, both unreachable; worst in the US, its only open market. `O39.SI` (7 days, hit 0.86) clears a binomial bar and has never been ordered. Re-run with `scripts/brain_audit.py --section reach`. |
 | **No position has a venue stop — and that is now mostly by design, not the 2026-08-05 mystery** | Re-checked 2026-08-21: the account's resting orders are LO/MO only, **zero protective orders**, across all 13 positions at the time of that check. Most of that is deliberate — `SHARED_STOCK_ACCOUNT` skips venue-side stops because a stop firing hours later cannot be attributed to a book (see `design/SHARED_ACCOUNT.md`). The original entry was about one unexplained `place_stop` failure for AAPL on 2026-08-05; that specific mystery is now moot, because the shared-account design superseded the code path. The REAL open item is the consequence, which the old framing understated. | Every position relies on the engine's cycle stop, which only fires when a cycle runs — precisely what an overnight gap defeats. This was bounded when it was one $307 share; it now covers the trading book's 11 positions (the sleeve's three from that check have since exited — it runs flat between events, not frozen; §2). Not a bug to patch: it is the price of the shared account, and the mitigation is either per-book sub-accounts or accepting gap risk explicitly. |
 | ~~The adviser predicts well; the books do not trade it~~ | **AUTOMATED 2026-08-15** (`brain/adviser_gate.py` + `scripts/adviser_gate_check.py`, daily timer `ai-investing-adviser-gate.timer`). This used to require a human to notice the §4B cue fired and manually decide whether to wire adviser conviction into position sizing. It no longer does: a daily job measures both sides itself (adviser long-side hit-rate vs. formula-engine short/avoid hit-rate, both n≥500 over 30+ days) and writes `data/adviser_gate.json`; `runner.py` reads that cached verdict every cycle and, only once it says `eligible: true`, applies a small BOUNDED nudge (`BLEND_WEIGHT=0.25`, capped at ±1.0 target weight, never an override) via `apply_adviser_gate()`. Checked against real production data on deploy day: **not yet eligible** — adviser n=1,361/hit 0.558/10 days (needs >0.60, 30+ days); formula-engine short n=359/hit 0.415/11 days (needs <0.35, n≥500, 30+ days) — so today it changes nothing, and won't until the evidence, not a person, says so. (Corrected same-day: the first version of this measurement graded formula "short" on the literal "will fall" claim instead of the "avoid"/excess-vs-benchmark rule it should use — same category error the 08-04 fix already corrected for the adviser's own `short_or_avoid` label, see row 6 in the failure register above. Caught before deploy; numbers here are post-fix.) | None today — inert by construction until its own measured thresholds clear, the same anti-overfitting posture as the walk-forward Deflated-Sharpe gate. |
@@ -2325,7 +2377,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~The main book's equity formula can't value a margined leg~~ | **CLOSED 2026-08-21 — fixed, not guarded.** `Portfolio.equity()` now accepts a per-venue equity override (`venue_equity`), exactly as this row said the real fix would be. The routed book values itself as `stock cash + marked stock positions + the crypto venue's OWN equity`, which is correct at ANY leverage and in EITHER direction. Proven in `test_margined_equity.py` against the two configurations the guard existed to refuse: at 2x the old formula overstates by $2,900+, on a short it understates by $11,000+ (the -$4,265 signature), and the blend is exact in both — while agreeing byte-for-byte at 1x long-only, where the old formula was already right. `exposure()` is deliberately NOT reduced by the override: margin distorts equity, not notional. The startup refusal REMAINS, narrowed to the case it is still needed for — a venue that cannot be read at construction, where the book does fall back to the reconstruction. | — |
 | **The formula has never learned anything, and now it is deliberate** | §4.28 recorded `journal.db.outcomes = 0 rows` on 2026-08-17; still 0 on 08-21. θ is bit-identical to the hand-set prior, `fitted: false`, RLS `n=8` with zero movement, and `params` holds 20 identical rows all from 2026-08-04. So BOTH loops in FORMULA.md §4 — ridge walk-forward curation and online RLS — have produced no weight change in the engine's entire life. The saved feature vector is also STALE: 8 features, missing `trend_zscore` (added 08-15) and `regime_persistence` (added 08-18), because the file has not been written since before they existed. | **Deliberate as of 2026-08-21, not merely unfixed.** Re-running `--optimize --save` now would fit θ on a 26-day, single-regime sample whose measurement layer was only just corrected (§4.37) — that is how you get a confidently wrong model. The right sequence is: let clean observations accumulate, THEN re-curate and let the Deflated-Sharpe gate decide. The cost of waiting is that the engine keeps running on priors, which it has done from the start. |
 | **The edge calibrator has issued 0 verdicts — now DELIBERATELY, and the bar is set** (§4.47) | 2026-08-21. It was ~3 days from its first verdicts at `MIN_N = 20`, which sounds adequate until you notice the samples are daily readings of a 5-day forward return: 20 of them carry **~4 independent observations**. 56 relationships were about to cross, 14 would have been graded at once, and 6 HALVED — including `arm->semis`, `xlf->us_financials` and `tsla->ev_supply_chain`. **Decision taken:** `MIN_N` 20 -> 60 for causal `influences` edges (~12 independent observations), and a separate `MIN_N_DEMOTE_MEMBERSHIP = 120` before a structural `member_of` transmission may be demoted. The reasoning is asymmetric priors, not "definitions cannot be wrong": an `influences` edge is someone's guess about a mechanism, while a membership's prior comes from what a thing IS — its weight is still empirical (how much of a sector move reaches the member) but four independent observations cannot overturn structure. Promotion of a membership stays at the ordinary bar; strengthening a structurally grounded prior is the safe direction. Reports now carry `n_independent` and `structural` so no reader re-derives either. | First verdicts now land in ~2 months rather than ~3 days, deliberately. **Still open and unchanged:** `gain` sits at its 2.0 clamp, so the magnitude correction is saturated — see §4.45, where the same saturation was found and half of it fixed. |
-| **205 assets are inert to every macro shock** | §4.39. The 14 placeholder nodes are gone, but 205 of 469 asset nodes (re-measured 2026-08-21 via `brain_audit.py`; §4.39's own figure of 198/462 predates the day's later self-wiring growth) still respond to none of the 81 origin shocks — overwhelmingly LLM-added entity nodes harvested from news copy (`boeing`, `chevron`, `blackrock`, `warner_bros`, `kenya`). They are graph vocabulary that was never wired into the causal field. | Inert nodes are harmless in propagation — they transmit nothing — but they inflate every "the graph knows about N companies" claim, and a tradable among them is scored on the formula leg alone with no causal chain. Triage is curation work: wire the real companies, delete the vocabulary. |
+| **200 assets are inert to every macro shock** | §4.39, §4.50. The placeholder nodes are gone and the curation now has a MECHANISM rather than a sentence (shape refusal + a 30-day collector for vocabulary that never became wiring), but 200 of 464 asset nodes still respond to none of the 81 origin shocks — overwhelmingly LLM-added entity nodes harvested from news copy (`boeing`, `chevron`, `blackrock`, `warner_bros`, `kenya`). They are graph vocabulary that was never wired into the causal field. | Inert nodes are harmless in propagation — they transmit nothing — but they inflate every "the graph knows about N companies" claim, and a tradable among them is scored on the formula leg alone with no causal chain. Triage is curation work: wire the real companies, delete the vocabulary. |
 | **10 live orders rejected `602035`, cause unknown — and the obvious diagnosis is wrong** | On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and HK$34.10; the first two were rejected `602035 Wrong bid size` and the third filled. All three are legal multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34 name, and all three were snapped correctly on the way out. **So this is NOT §4.23 recurring**, and snapping harder would fix nothing. | Unknown cause on a live order path, bounded by the orders being small and by two of three attempts eventually filling. Rather than ship a change that would look like a fix and do nothing, the rejection now carries the tick, the venue reference price and the symbol — the same instrumentation lesson §4.23 taught after eight lost orders, one level deeper. **Next occurrence will say why.** |
 | ~~The suite is green under the project runner and red under pytest~~ (§4.40) | **CLOSED 2026-08-21. Both runners now green: 62 files under `python3 tests/test_x.py`, **645 passed under `pytest engine/tests/`** — and under three random orderings, which is the stricter test.** Two distinct causes, neither cosmetic. (1) `watchdog.main()` called `parse_args()` with no argument, so it read `sys.argv` — which under pytest holds pytest's own flags, exiting 2. Fixed across **all 17 scripts** that had the pattern (`main(argv=None)`), because it is the same defect as the hardcoded data paths one layer up: a function reading global state its caller cannot set is neither testable nor configurable. (2) Six tests in `test_bullshit_layer.py` hit `sqlite3.OperationalError: database is locked` — `_fresh_settings()` DELETED files in one shared directory, and under a single process the sqlite handles production code leaves open accumulate against that path. Per-test directories, the same fix as `test_runner_decisions.py`. Both guarded: an AST check refuses any new script that parses `sys.argv` behind its caller. | — |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
