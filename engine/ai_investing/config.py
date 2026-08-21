@@ -27,6 +27,20 @@ def _running_under_test() -> bool:
         return False                       # explicit override, for a deliberate case
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return True
+    # `PYTEST_CURRENT_TEST` is set when a test STARTS, and this module is
+    # imported at COLLECTION time — before any of them. So on its own it is
+    # always false at the moment that actually matters. Checking sys.modules
+    # covers every way pytest is invoked, including `python -m pytest`, where
+    # sys.argv[0] is the module's `__main__.py` and the argv arm below sees
+    # nothing test-shaped at all.
+    #
+    # That hole is why 17 tests were red on the ProDesk and green on the dev box
+    # under pytest: the box's .env sets a $4,999.89 crypto book, the laptop's
+    # does not, and module-level constants captured whichever was ambient. Three
+    # tests were fixed one at a time for this before §4.19 made it automatic —
+    # and then the automation had a gap in exactly the runner nobody used.
+    if "pytest" in sys.modules:
+        return True
     argv0 = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
     if argv0 is not None:
         if argv0.parent.name == "tests" or argv0.name.startswith("test_"):

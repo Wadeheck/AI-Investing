@@ -162,6 +162,65 @@ def test_no_script_main_reads_sys_argv_behind_its_caller():
         f"so a test cannot drive them: {sorted(set(offenders))}")
 
 
+def test_a_test_process_never_loads_the_machines_dotenv():
+    """§4.19, and the gap that survived it.
+
+    A test that reads the machine's `.env` passes on one box and fails on the
+    other — three tests were fixed one at a time for exactly that before §4.19
+    made the detection automatic. But the automation had a hole in the runner
+    nobody used: `PYTEST_CURRENT_TEST` is set when a test STARTS while
+    `config.py` is imported at COLLECTION time, and under `python -m pytest`
+    `sys.argv[0]` is the module's `__main__.py`, which is not test-shaped.
+
+    So `.env` loaded, module-level constants captured whatever was ambient, and
+    17 tests were red on the ProDesk (whose .env sets a $4,999.89 crypto book)
+    and green on the laptop (whose does not).
+    """
+    import os
+    import sys as _sys
+    from ai_investing.config import _running_under_test
+
+    assert _running_under_test() is True, "a running test must be detected"
+
+    # AND at COLLECTION time, which is when it actually matters and where the
+    # gap was. Simulate it: `PYTEST_CURRENT_TEST` unset (no test has started)
+    # and argv[0] pointing at something not test-shaped, which is exactly what
+    # `python -m pytest` looks like.
+    if "pytest" not in _sys.modules:
+        return          # under the project's own runner there is nothing to simulate
+
+    prev_env = os.environ.pop("PYTEST_CURRENT_TEST", None)
+    prev_argv = _sys.argv[:]
+    _sys.argv = [str(Path(_sys.prefix) / "lib" / "pytest" / "__main__.py")]
+    try:
+        assert _running_under_test() is True, (
+            "at COLLECTION time neither PYTEST_CURRENT_TEST nor argv[0] says "
+            "'test' under `python -m pytest` — and config.py is imported THEN, "
+            "so .env loads and module-level constants capture the machine's "
+            "live configuration. This is what made 17 tests red on the ProDesk "
+            "and green on the laptop.")
+    finally:
+        _sys.argv = prev_argv
+        if prev_env is not None:
+            os.environ["PYTEST_CURRENT_TEST"] = prev_env
+
+
+def test_the_dotenv_override_still_works_for_a_deliberate_case():
+    """The escape hatch must stay — a test that genuinely wants the real file
+    opens it directly, and the flag exists for that."""
+    import os
+    from ai_investing.config import _running_under_test
+    prev = os.environ.get("AI_INVESTING_LOAD_DOTENV")
+    os.environ["AI_INVESTING_LOAD_DOTENV"] = "1"
+    try:
+        assert _running_under_test() is False
+    finally:
+        if prev is None:
+            os.environ.pop("AI_INVESTING_LOAD_DOTENV", None)
+        else:
+            os.environ["AI_INVESTING_LOAD_DOTENV"] = prev
+
+
 def test_crypto_book_reads_history_through_settings():
     """The specific regression: the bear signals must follow state_path."""
     import inspect
