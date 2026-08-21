@@ -734,7 +734,17 @@ class KnowledgeGraph:
             tradable node, same as a curated one, just llm-sourced — no
             "(private)" suffix, and graph_stock_symbols() will pick it up for
             fundamentals once symbol+market are both set."""
-        node_id = re.sub(r"[^a-z0-9_]", "", node_id.lower().replace(" ", "_").replace("-", "_"))
+        # "&" becomes "and" BEFORE punctuation is stripped. Without this it is
+        # simply deleted, and "Procter & Gamble" normalises to `procter__gamble`
+        # — indistinguishable from "Fenway Sports Group / Liverpool FC" ->
+        # `fenway_sports_group__liverpool_fc`. One is a company, the other is
+        # two companies, and the character that told them apart is gone by the
+        # time any rule can look. That collision deleted P&G from the live
+        # graph on 2026-08-21; the fix belongs here, where the information
+        # still exists, not in a rule downstream that can only guess.
+        node_id = node_id.lower().replace("&", " and ").replace("-", "_")
+        node_id = re.sub(r"[^a-z0-9_]", "", re.sub(r"\s+", "_", node_id.strip()))
+        node_id = re.sub(r"_{3,}", "__", node_id)
         if not node_id or node_id in self.nodes:
             return False
         if self.is_non_entity(node_id):

@@ -82,6 +82,41 @@ def test_a_placeholder_is_refused_whatever_type_it_claims_to_be():
         assert KnowledgeGraph.is_non_entity("fenway_sports__liverpool_fc", t)
 
 
+def test_an_ampersand_becomes_and_rather_than_vanishing():
+    """The false positive that reached the LIVE graph, and the reason the fix
+    belongs in normalisation rather than in a rule.
+
+    `re.sub(r"[^a-z0-9_]", "", ...)` DELETES `&`, so "Procter & Gamble" became
+    `procter__gamble` — byte-identical in shape to
+    "Fenway Sports Group / Liverpool FC" -> `fenway_sports_group__liverpool_fc`.
+    One is a company, the other is two companies, and the character that told
+    them apart was gone before any rule could look. The `__` rule then deleted
+    P&G from the live graph and tombstoned a real `procter__gamble -> thorne`
+    edge on 2026-08-21.
+
+    No downstream rule could have got this right. The information has to
+    survive normalisation, which is where it is fixed.
+    """
+    g = _g([Node(id="seed", type="asset", label="seed")])
+    for name in ("Procter & Gamble", "Johnson & Johnson", "Standard & Poors"):
+        assert g.propose_node(name, name, proposed_by="t", ts="2026-08-21"), name
+    assert "procter_and_gamble" in g.nodes
+    assert "johnson_and_johnson" in g.nodes
+    assert "standard_and_poors" in g.nodes
+    assert not any("__" in nid for nid in g.nodes), \
+        f"an ampersand still collapses into a separator: {sorted(g.nodes)}"
+
+
+def test_a_slash_still_marks_two_entities_and_is_refused():
+    """The other half: with `&` handled, a surviving `__` really does come from
+    a separator, so the rule that reads it is sound again."""
+    g = _g([Node(id="seed", type="asset", label="seed")])
+    for name in ("Fenway Sports Group / Liverpool FC",
+                 "Datacenter / HFT infrastructure"):
+        assert not g.propose_node(name, name, proposed_by="t", ts="2026-08-21"), name
+    assert len(g.nodes) == 1, f"a two-entity name was admitted: {sorted(g.nodes)}"
+
+
 def test_a_real_company_whose_name_contains_and_is_never_refused():
     """The rule deliberately omitted, and this test is why.
 
