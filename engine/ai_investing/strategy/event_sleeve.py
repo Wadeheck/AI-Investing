@@ -284,9 +284,33 @@ class EventSleeve(BookBasisMixin):
                     # position the book still owns — and a forgotten position has
                     # no stop and no clock. Keep it; the exit re-fires next cycle
                     # because the conditions above have not changed.
+                    # WHY `waiting` EXISTS. An exit whose own earlier sell is
+                    # still resting at the venue re-fires every cycle and is
+                    # correctly capped by the double-sell guard
+                    # (brokers/shared: "sell capped at its own claim of 0
+                    # share(s)"). That is the system working — the shares are
+                    # promised to an order that has not been answered yet, and
+                    # selling them twice would take the account short or through
+                    # another book's position.
+                    #
+                    # But it is indistinguishable, in the log, from an exit that
+                    # is genuinely failing. On 2026-08-21 three clock exits
+                    # (EWY/NVDA/TSM) were submitted at 00:07 UTC against a US
+                    # session that opens at 13:30, and the resulting ~29
+                    # `exit_unfilled` lines per symbol read as a broken exit path
+                    # on the one book with a demonstrated edge. It cost a real
+                    # investigation to establish that nothing was wrong.
+                    promised = 0.0
+                    try:
+                        promised = self.broker.pending_qty(
+                            pos.asset.key, Side.SELL)          # type: ignore[attr-defined]
+                    except Exception:
+                        pass
                     self._log("exit_unfilled", symbol=pos.asset.symbol, price=px,
                               requested_qty=round(abs(pos.qty), 6), reason=reason,
-                              detail=(o.reason or "no fill"))
+                              detail=(o.reason or "no fill"),
+                              waiting=bool(promised > 1e-9),
+                              promised_qty=round(promised, 6) or None)
                     continue
                 pnl = (px - entry) * (filled if not short else -filled)
                 settled = (self.ledger.settle("event", pos.asset.symbol, move,

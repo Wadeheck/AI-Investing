@@ -1957,10 +1957,29 @@ investigating §4.41 — and because the instrument had inherited it.
 - **Fix.** `brain_audit.py`'s `books` section reads the authoritative source per
   book, takes order flow from `journal.db.orders`, and reports `idle_pct` as
   null for margined books.
+- **And a fourth, an hour later, on the same investigation.** The event sleeve
+  logged `sell capped at its own claim of 0 share(s)` for EWY/NVDA/TSM and 29
+  `exit_unfilled` lines per symbol, which read as a broken exit path on the one
+  book with a demonstrated edge. It was not. The venue genuinely held all three
+  positions (TSM 8, NVDA 18, EWY 20), three clock exits were resting there
+  `NotReported`, and the cap is the DOUBLE-SELL GUARD working exactly as
+  designed — the shares are promised to an order that has not been answered, and
+  selling them twice would take the account short or through another book's
+  position. The exits were submitted 00:07 UTC against a US session that opens
+  at 13:30. Nothing was wrong; it was pre-market.
+
+  `exit_unfilled` now carries `waiting` / `promised_qty`, so "resting at the
+  venue" is distinguishable from "genuinely failing" without an investigation.
 - **Lesson.** An instrument that encodes the analyst's error is worse than no
   instrument, because it launders a guess into a number. Every "this book is
   doing nothing" claim needs the source named — and per-book state files are
   not interchangeable.
+
+  The tally for this investigation is worth keeping honest: **five suspicions,
+  two real defects** (§4.41, §4.42), one working-as-configured (the crypto event
+  sleeve's shorts, on a flag set against the evidence), and **two false alarms
+  of mine** — both resolved by going to the authoritative source rather than
+  reasoning from a state file. The two real ones were found the same way.
 
 ## 4A. Open defects — known, NOT fixed
 
