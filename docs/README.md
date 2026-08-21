@@ -81,6 +81,12 @@ Kept current. If reality changes, these change with it.
   **The two scorecard reviews are superseded on every `n` and t-statistic they
   quote** — their qualitative findings survive, their arithmetic does not.
   §10 records what was fixed and what was deliberately left alone.
+- **SESSION_REVIEW_2026-08-21.md** — ⭐ the WORK RECORD for that review: the
+  eleven defects (§4.37–§4.47), the fixes, the mutation-test results, **the four
+  things I got wrong**, and — the part to actually use — §7, which splits
+  everything still open into *code*, *decisions that are yours*, *waits with a
+  named cue*, and *curation*. Read this to find out what to do next; read
+  `BRAIN_REVIEW` to find out why.
 
 ## `design/` — how the system is built and why
 

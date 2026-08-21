@@ -33,31 +33,43 @@ audit and paste. The previous set had drifted by 182 nodes and 323 edges before
 anyone noticed.*
 
 ```
-GRAPH    602 nodes, 1,119 edges = 802 curated + 317 LLM-proposed  (seed v39)
-                                        462 of the nodes are assets.
+GRAPH    609 nodes, 1,125 edges = 802 curated + 323 LLM-proposed  (seed v39)
+                                        469 of the nodes are assets.
                                         STOCK_WATCHLIST and CRYPTO_WATCHLIST are
                                         DERIVED from these — 258 tradable stock
                                         symbols (up from ~80 hand-maintained,
                                         §4.25) and 17 crypto (§4.26).
-                                        LLM wiring is 28.3% of the graph and now
+                                        LLM wiring is 28.7% of the graph and now
                                         capped at 6 new edges/day (§4.38).
-RESOLUTION  202 distinct response signatures across 462 assets = 43.7%.
-                                        198 assets are inert to every macro
+RESOLUTION  202 distinct response signatures across 469 assets = 43.1%.
+                                        205 assets are inert to every macro
                                         shock; 104 are an exact duplicate of a
                                         peer. The graph tells apart fewer
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    62 files / 640 tests, green under BOTH runners (the project's own
+TESTS    62 files / 645 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
-         machines, and under random ordering — see §4.40
-COMMITS  285
+         machines, and under random ordering — see §4.40 and §4.46
+COMMITS  304
 
-BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
-  📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
-  🏛 investing paper, $10,000
-  ⚡ sleeve    paper, $10,000
-  ₿ crypto     paper, $10,000  (bear mode: 100% cash by design)
+BOOKS — restarted at USD 10,000 on 2026-08-05, by request; marks below are
+        live from the audit run of 2026-08-21T14:15Z
+  📈 trading      LIVE, routed to a Longbridge PAPER account
+                  equity 9,981.99   cash 4,176.21   11 positions   41.8% idle
+  🏛 investing    paper
+                  equity 9,817.74   cash 5,645.47    3 positions   57.5% idle
+  ⚡ sleeve       paper
+                  equity 11,355.73  cash 11,355.73   0 positions  100% idle
+                  (flat between events, not frozen — +1,146.21 realised)
+  ₿ crypto       Binance Futures TESTNET, basis changed 2026-08-20
+                  equity 5,007.99    3 positions.  Cash is COLLATERAL, so
+                  "idle %" is meaningless on this book and the audit prints null.
+  ₿ crypto-event Binance Futures TESTNET
+                  equity 4,805.29    1 position
+  ORDER FLOW      39 filled (24 buys) · 7 pending · 34 rejected
+                  The rejected count is NOT all one fault — see §5.3 and the
+                  `602035` row in §4A.
 
 AUTONOMY   TRADE_APPROVAL=false — all FOUR books enter and exit unattended (§4.17)
 YOUR SAY   the bot asks about its READ of the news, not its orders — 👍😐👎 on
@@ -74,23 +86,36 @@ by the double-buy bug in §4.15. Retired state is in `data/retired/`, and the
 brain, journal, reliability weights and learning ledger were all **kept**:
 resetting books is not erasing what the model learned.
 
-**The live book is currently idle, and not because of a bug.** Of 99 decisions,
-13 clear the confidence floor and **12 of them are shorts** — which neither paper
-venue permits (§4.15). The single qualifying long is `O39.SI`, excluded because the
-live slice is USD-only until non-USD is validated. A uniformly bearish model that
-cannot short has nothing to execute. Graded predictions still accumulate, which is
-why the scorecard work in §4.15 matters more than the fills.
+**The live book is no longer idle, and the paragraph that used to sit here was
+wrong by 2026-08-21.** It read *"the live book is currently idle"* on the strength
+of `state.json.broker.positions` being empty — which is empty **by construction**
+for a routed book, whose positions live in the `BookLedger` (`live_book.json`). The
+book had 24 filled buys and 11 open positions while that sentence stood. §4.43
+records the mistake; `brain_audit.py` now names its `positions_source` on every
+book so the same misreading cannot be repeated silently.
+
+What WAS true, and is now fixed, is the cause underneath it: of 99 decisions only
+13 cleared the confidence floor and **12 of those were shorts**, which neither
+paper venue permits (§4.15). That was not a market view being blocked — it was 40%
+of the strategist's thesis capacity being spent on positions that cannot open.
+§4.42 downgrades an unexecutable short to `avoid` at ingestion, so the capacity
+goes to something tradable. The single qualifying long, `O39.SI`, is still excluded
+because the live slice is USD-only until non-USD is validated (§4A).
 
 Read **equity**, not cash. A short's sale proceeds sit in cash while the shares
 are still owed, so cash is never a book's value. Conflating the two caused §4.4,
 and valuing a short at a zero price caused §4.7. (Moot in the 📈 book today —
 shorting is off, because neither paper venue permits it.)
 
-**The learning spine has run.** It has **1 settled claim**, and it is worth reading
-because it is the first evidence rather than design: `event:USO`, expected **+0.31%**,
-realised **−10.06%**, score −1.0. That single row exposed two spine defects and one
-strategy problem, all in §4.15 and §4A. One claim is not a track record; it is
-proof the instrument works.
+**The learning spine has run: 19 settled claims** as of 2026-08-21, up from the
+single `event:USO` row that first proved the instrument worked. Nineteen is still
+not a track record, but it is now enough to have found a defect no single row
+could: **15 of the 19 were clipped at ±3.0**, median |realised/expected| **14.4**,
+max **106**. `expected_move` is systematically one to two orders of magnitude too
+small, and the calibrator that exists to correct it was reading a signed average
+and therefore correcting **backwards**. See §4.45 — and note that the sleeve's
+much-quoted 32:1 risk/reward rests on the same broken `expected_move`, so that
+figure is closer to 2:1 and was measuring an expectation, not a strategy.
 
 **Every number above is USD.** SGD was considered and rejected: `BASE_CURRENCY`
 has never been exercised as anything but USD, and every `RISK_`/`SAFETY_` threshold
@@ -1865,13 +1890,40 @@ shaped like the real response, no network. `pytest tests`: 556 passed, the same
 - **Cause.** Cross-file state: several tests share a data directory and a
   module-level `tmp`, and `test_alert_storm.py` asserts against `sys.argv`,
   which under pytest contains pytest's own arguments.
-- **Why it is filed rather than fixed.** The per-file runner is the project's
-  actual convention and the one CI and the ProDesk use, so nothing is silently
-  broken today. But "all suites green" is stated in two places in this document
-  and it is only true of one runner — and the failing runner is the one a
-  newcomer will reach for first.
-- **Risk.** Low today, but it hides genuine test-isolation debt (§4.21's family)
-  and will mislead the next person who runs pytest and assumes they broke it.
+- **Why it was filed before it was fixed.** The per-file runner is the project's
+  actual convention and the one CI and the ProDesk use, so nothing was silently
+  broken. But "all suites green" was stated in two places in this document and
+  was only true of one runner — and the failing runner is the one a newcomer
+  reaches for first.
+- **FIXED, same day.** Two distinct causes, neither cosmetic:
+  1. `watchdog.main()` called `parse_args()` with no argument, so it read
+     `sys.argv` — which under pytest holds pytest's own flags, so argparse
+     exited 2 and both tests driving it failed for a reason unrelated to the
+     code under test. Fixed across **all 17 scripts** carrying the pattern
+     (`main(argv=None)`), not just the one that happened to have a test,
+     because it is the same defect as the hardcoded `data/` paths one layer up:
+     *a function that reads global state its caller cannot set is neither
+     testable nor configurable, and those are the same defect.* Production
+     still calls `main()` and still reads `sys.argv`.
+  2. Six tests in `test_bullshit_layer.py` failed
+     `sqlite3.OperationalError: database is locked`. `_fresh_settings()`
+     DELETED files inside one shared temp directory. Under the project runner
+     that is harmless — each file is a fresh process, so any sqlite handle
+     production code leaves open dies with it. Under pytest every file shares
+     one process, those handles accumulate against the same path, and deleting
+     the file underneath them locks it. Per-test directories fixed it. Note
+     what this was NOT: the tests close all six connections they open. The leak
+     is upstream, in production code other tests left open on the same path —
+     which is exactly why a shared directory was the wrong shape.
+- **Guarded so it cannot quietly return.** An AST check refuses any new script
+  that parses `sys.argv` behind its caller, mutation-tested by putting the
+  pattern back.
+- **Verified.** 62 files green under the project runner; **645 passed** under
+  `pytest engine/tests/`, including three different random orderings, which is
+  the stricter test.
+- **And then it got worse before it got better — see §4.46.** Deploying this fix
+  is what exposed a larger one: the same commit was green here and **17 red on
+  the ProDesk**.
 
 ### 4.41 The crypto book could not afford its own mandate *(2026-08-21)*
 
@@ -2058,6 +2110,113 @@ MP           0.00210    0.06679        31.8       3.0
   and wrong for the other, and the wrong one fails silently because the field
   still looks populated. Same shape as §4.6's `hit` before it got a benchmark.
 
+### 4.46 The suite was green here and 17 red on the ProDesk, under the same commit *(2026-08-21)*
+
+- **What.** Deploying §4.40's pytest fix surfaced a bigger one. Same commit,
+  same code: **640 passed** on the laptop, **17 FAILED** on the ProDesk. Exactly
+  the "green here, red there" that §4.21 exists to prevent.
+- **Cause.** The tests were reading the machine's live `.env`. `cb.START_CASH`
+  was **4,999.89** on the box (its `.env` sets the crypto book to the testnet
+  balance, §4.14) and **10,000** on the laptop, and the crypto and investor
+  suites assert against it. So the suite was not testing the code — it was
+  testing the machine.
+- **Why it hid, and this is the interesting part.** §4.19 was supposed to have
+  closed this: *"a test process no longer loads `.env` at all, detected
+  automatically."* The reasoning was right — what had failed three separate
+  times before was *remembering* to pin values by hand, so automating the
+  detection was the correct fix. But the automation had a hole in the one runner
+  nobody used:
+  - `PYTEST_CURRENT_TEST` is set when a test **starts**. `config.py` is imported
+    at **collection** time, before any test starts, so at the exact moment that
+    matters the variable is always unset.
+  - The argv fallback looks for `pytest` / `py.test` / `test_*` in
+    `sys.argv[0]`. Under `python -m pytest`, `argv[0]` is the module's
+    `__main__.py`, which is none of those.
+
+  So `.env` loaded during collection and every module-level constant captured
+  whatever was ambient on that machine.
+- **Fix.** `if "pytest" in sys.modules: return True` — true from the moment
+  pytest is imported, which is before collection, and true however it was
+  invoked.
+- **The guard test needed two attempts, and that is the lesson.** The first
+  version called `_running_under_test()` at test **run** time, when
+  `PYTEST_CURRENT_TEST` is already set — so it passed with the fix reverted and
+  proved nothing. It now **simulates collection time** (env var unset, `argv[0]`
+  not test-shaped) and is verified by mutation: removing the `sys.modules` check
+  turns it red. It no-ops under the project's own runner, where pytest genuinely
+  is not loaded and there is nothing to simulate.
+- **Lesson.** An automated detector is only as good as the *moment* it runs. A
+  check that fires after the value it protects has already been captured is not
+  a check. This is the third defect today whose first test passed with the bug
+  put back — see §4.44.
+
+### 4.47 The calibrator was three days from halving six relationships on four observations *(2026-08-21)*
+
+- **What.** The edge calibrator had issued zero verdicts in 26 days (§4A), and
+  the natural reading was "it needs more data". Measured, the opposite was true:
+  at `MIN_N = 20` it was **~3 days from its first verdicts**, with **56
+  relationships about to cross the bar, 14 gradable immediately, and 6 about to
+  be HALVED.**
+- **Why 20 was not 20.** The samples are daily readings of a **5-day forward
+  return**, so consecutive samples overlap almost entirely. Twenty of them carry
+  about **four independent observations** — three weeks of one market. This is
+  §4.37's pseudo-replication defect, in a second module, found only because
+  §4.37 taught us to look.
+- **The demotion list is the argument.** These are not marginal calls; each
+  would have had its weight cut in half:
+
+```
+arm  -> semis            t = -2.97
+xlf  -> us_financials    t = -2.85
+tsla -> ev_supply_chain  t = -3.42
+```
+
+- **Decision (the user's, on an explained choice): protect structure, raise the
+  bar for the rest.**
+
+```
+MIN_N                        20 -> 60     causal `influences` edges, ~12 independent obs
+MIN_N_DEMOTE_MEMBERSHIP            120     structural `member_of` transmissions
+```
+
+- **The reasoning is asymmetric PRIORS**, and I corrected my own framing while
+  implementing it. *"Definitions cannot be wrong"* is too strong: a `member_of`
+  weight does not assert **that** ARM is a semiconductor company, it asserts
+  **how much** of a semis move reaches ARM — which is genuinely empirical and
+  genuinely testable. The real asymmetry is **where the prior comes from**. An
+  `influences` edge is somebody's guess about a mechanism and is owed little
+  deference. A membership's prior comes from what the thing **is**, and four
+  independent observations cannot overturn structure. *ARM lagging semis for
+  three weeks is a fact about three weeks.*
+- **Promotion of a membership stays at the ordinary bar.** Strengthening a
+  structurally grounded prior is the safe direction; only demotion needs the
+  higher bar.
+- **Reports now carry `n_independent` and `structural`,** so no reader has to
+  re-derive what a sample is worth. That is §4.37's lesson applied at the point
+  of publication rather than at the point of reading.
+- **Four mutations checked; the fourth is why this entry exists.** Putting
+  `MIN_N` back to 20 **broke nothing**, because every fixture supplies plenty of
+  dates — so the tests would have let someone silently undo the decision. The
+  decision is now asserted in the unit that matters:
+
+```python
+assert MIN_N // HORIZON >= 12          # not "20 samples" — 12 real observations
+assert structural_bar >= 2 * causal    # structure needs more than a guess
+```
+
+- **Effect.** First verdicts now land in **~2 months instead of ~3 days**, on
+  deliberate grounds rather than by accident. Nothing gets halved on three weeks
+  of one market.
+- **NOT fixed by this.** `gain` remains pinned at its **2.0 clamp**, so the
+  magnitude correction is still saturated — the same saturation §4.45 found in
+  the learning spine, where the direction was fixed and the ceiling left as a
+  sizing decision. Two clamps, one story: the model under-predicts magnitude and
+  both corrections are capped below what the evidence asks for.
+- **Lesson.** "It has produced no output" and "it is not ready to produce
+  output" are different diagnoses with opposite fixes, and only measurement
+  tells them apart. The dangerous version of this module was not the silent one
+  — it was the one three days from speaking confidently.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2078,7 +2237,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~`prices[key] = 0.0` still means "no data"~~ | **CLOSED 2026-08-21 — removed at the source, not contained at the consumers.** The runner now builds `prices` by OMITTING a symbol with no bar (`{k: b[-1].close for k, b in bars_by_key.items() if b}`), so an absent price arrives as `None`: falsy for the `if not px: continue` decision guards, already handled by `mark_price(None, fallback)` for valuation, and — the point — **impossible to multiply by a quantity**. 0.0 * 100 shares is a plausible-looking $0; `None * 100` raises. Safe because all 44 readers of that dict use `.get()` (verified). THE TRAP THIS ALMOST SHIPPED WITH: `DataGuard.check` iterates `prices.items()`, so omitting keys would have made a blanket feed outage **silent** — the same failure as §4.7 with the opposite sign. The guard now also flags anything present in `bars_by_key` (what the cycle expected) and missing from `prices`. Seven cases in `test_price_absence.py`, including "a total outage is still LOUD". | — |
 | ~~The main book's equity formula can't value a margined leg~~ | **CLOSED 2026-08-21 — fixed, not guarded.** `Portfolio.equity()` now accepts a per-venue equity override (`venue_equity`), exactly as this row said the real fix would be. The routed book values itself as `stock cash + marked stock positions + the crypto venue's OWN equity`, which is correct at ANY leverage and in EITHER direction. Proven in `test_margined_equity.py` against the two configurations the guard existed to refuse: at 2x the old formula overstates by $2,900+, on a short it understates by $11,000+ (the -$4,265 signature), and the blend is exact in both — while agreeing byte-for-byte at 1x long-only, where the old formula was already right. `exposure()` is deliberately NOT reduced by the override: margin distorts equity, not notional. The startup refusal REMAINS, narrowed to the case it is still needed for — a venue that cannot be read at construction, where the book does fall back to the reconstruction. | — |
 | **The formula has never learned anything, and now it is deliberate** | §4.28 recorded `journal.db.outcomes = 0 rows` on 2026-08-17; still 0 on 08-21. θ is bit-identical to the hand-set prior, `fitted: false`, RLS `n=8` with zero movement, and `params` holds 20 identical rows all from 2026-08-04. So BOTH loops in FORMULA.md §4 — ridge walk-forward curation and online RLS — have produced no weight change in the engine's entire life. The saved feature vector is also STALE: 8 features, missing `trend_zscore` (added 08-15) and `regime_persistence` (added 08-18), because the file has not been written since before they existed. | **Deliberate as of 2026-08-21, not merely unfixed.** Re-running `--optimize --save` now would fit θ on a 26-day, single-regime sample whose measurement layer was only just corrected (§4.37) — that is how you get a confidently wrong model. The right sequence is: let clean observations accumulate, THEN re-curate and let the Deflated-Sharpe gate decide. The cost of waiting is that the engine keeps running on priors, which it has done from the start. |
-| **The edge calibrator has issued 0 verdicts — now DELIBERATELY, and the bar is set** | 2026-08-21. It was ~3 days from its first verdicts at `MIN_N = 20`, which sounds adequate until you notice the samples are daily readings of a 5-day forward return: 20 of them carry **~4 independent observations**. 56 relationships were about to cross, 14 would have been graded at once, and 6 HALVED — including `arm->semis`, `xlf->us_financials` and `tsla->ev_supply_chain`. **Decision taken:** `MIN_N` 20 -> 60 for causal `influences` edges (~12 independent observations), and a separate `MIN_N_DEMOTE_MEMBERSHIP = 120` before a structural `member_of` transmission may be demoted. The reasoning is asymmetric priors, not "definitions cannot be wrong": an `influences` edge is someone's guess about a mechanism, while a membership's prior comes from what a thing IS — its weight is still empirical (how much of a sector move reaches the member) but four independent observations cannot overturn structure. Promotion of a membership stays at the ordinary bar; strengthening a structurally grounded prior is the safe direction. Reports now carry `n_independent` and `structural` so no reader re-derives either. | First verdicts now land in ~2 months rather than ~3 days, deliberately. **Still open and unchanged:** `gain` sits at its 2.0 clamp, so the magnitude correction is saturated — see §4.45, where the same saturation was found and half of it fixed. |
+| **The edge calibrator has issued 0 verdicts — now DELIBERATELY, and the bar is set** (§4.47) | 2026-08-21. It was ~3 days from its first verdicts at `MIN_N = 20`, which sounds adequate until you notice the samples are daily readings of a 5-day forward return: 20 of them carry **~4 independent observations**. 56 relationships were about to cross, 14 would have been graded at once, and 6 HALVED — including `arm->semis`, `xlf->us_financials` and `tsla->ev_supply_chain`. **Decision taken:** `MIN_N` 20 -> 60 for causal `influences` edges (~12 independent observations), and a separate `MIN_N_DEMOTE_MEMBERSHIP = 120` before a structural `member_of` transmission may be demoted. The reasoning is asymmetric priors, not "definitions cannot be wrong": an `influences` edge is someone's guess about a mechanism, while a membership's prior comes from what a thing IS — its weight is still empirical (how much of a sector move reaches the member) but four independent observations cannot overturn structure. Promotion of a membership stays at the ordinary bar; strengthening a structurally grounded prior is the safe direction. Reports now carry `n_independent` and `structural` so no reader re-derives either. | First verdicts now land in ~2 months rather than ~3 days, deliberately. **Still open and unchanged:** `gain` sits at its 2.0 clamp, so the magnitude correction is saturated — see §4.45, where the same saturation was found and half of it fixed. |
 | **198 assets are inert to every macro shock** | §4.39. The 14 placeholder nodes are gone, but 198 of 462 asset nodes still respond to none of the 81 origin shocks — overwhelmingly LLM-added entity nodes harvested from news copy (`boeing`, `chevron`, `blackrock`, `warner_bros`, `kenya`). They are graph vocabulary that was never wired into the causal field. | Inert nodes are harmless in propagation — they transmit nothing — but they inflate every "the graph knows about N companies" claim, and a tradable among them is scored on the formula leg alone with no causal chain. Triage is curation work: wire the real companies, delete the vocabulary. |
 | **10 live orders rejected `602035`, cause unknown — and the obvious diagnosis is wrong** | On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and HK$34.10; the first two were rejected `602035 Wrong bid size` and the third filled. All three are legal multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34 name, and all three were snapped correctly on the way out. **So this is NOT §4.23 recurring**, and snapping harder would fix nothing. | Unknown cause on a live order path, bounded by the orders being small and by two of three attempts eventually filling. Rather than ship a change that would look like a fix and do nothing, the rejection now carries the tick, the venue reference price and the symbol — the same instrumentation lesson §4.23 taught after eight lost orders, one level deeper. **Next occurrence will say why.** |
 | ~~The suite is green under the project runner and red under pytest~~ (§4.40) | **CLOSED 2026-08-21. Both runners now green: 62 files under `python3 tests/test_x.py`, **640 passed under `pytest engine/tests/`** — and under three random orderings, which is the stricter test.** Two distinct causes, neither cosmetic. (1) `watchdog.main()` called `parse_args()` with no argument, so it read `sys.argv` — which under pytest holds pytest's own flags, exiting 2. Fixed across **all 17 scripts** that had the pattern (`main(argv=None)`), because it is the same defect as the hardcoded data paths one layer up: a function reading global state its caller cannot set is neither testable nor configurable. (2) Six tests in `test_bullshit_layer.py` hit `sqlite3.OperationalError: database is locked` — `_fresh_settings()` DELETED files in one shared directory, and under a single process the sqlite handles production code leaves open accumulate against that path. Per-test directories, the same fix as `test_runner_decisions.py`. Both guarded: an AST check refuses any new script that parses `sys.argv` behind its caller. | — |
@@ -2094,6 +2253,7 @@ and the register had drifted **13 commits** behind reality.
 | **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. Still climbing as of §4.26's deploy: 50.4% a few hours into that day, before the +4 crypto symbols added any further load — worth actually checking whether it settles or keeps trending, not just noting it again. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
+| **The declared book basis is wired but has not yet appeared in a live mark** | 2026-08-21. `BookBasisMixin` is mixed into all five books and `_basis_fields()` is called at every mark site (verified by grep and by `test_book_basis.py`), but an equity mark is written **once a day**, and the last one on the box (`stock_journal.jsonl`, 2026-08-20T16:01Z) predates the deploy. `brain_audit.py` still reports `basis: (undeclared)` for all five books, and the live state files have no `basis` key yet. | Low, and self-resolving — but it is **unverified in production**, which is a different claim from "fixed", and this document has been burned by that difference before (§4.19, §4.32). Do not mark §4.14's per-book extension proven until a real mark line carries it. **Cue: the next daily mark.** |
 | **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
 | ~~`_reconcile_shared()` can latch on a fill that resolves itself~~ (§4.35) | **CLOSED 2026-08-21.** The latch is now re-tested from live data every cycle instead of being cleared only by an operator restart. A drift caused by a pending order mid-settlement clears itself once `resolve_pending()` catches up, and the engine resumes on its own — which is what cost a ~40-minute four-book outage on 2026-08-19. A REAL ownership disagreement keeps failing the re-check and keeps the engine halted, with no timeout and no retry budget, because that is the one thing this check exists to prevent. The re-check is `quiet`: it never re-journals or re-alerts, so a genuinely halted book does not become §4.20's fifteen-pages-in-ninety-minutes. Four cases pinned in `test_shared_drift_latch.py`. | The second half of §4.35 remains: while genuinely halted the book's state file stops being written, so file-based checks (`daily_status.py`, `watchdog.py`) can still report a stale claim. Much smaller now that self-resolving halts end by themselves. |
 
@@ -2109,6 +2269,9 @@ automatically, since several of these are judgement calls, not bugs.
 
 | Open item | Cue to revisit | Where to check |
 |---|---|---|
+| Declared book basis not yet seen live (§4A) | **The next daily equity mark**, and nothing else. If a mark line lands without a `basis` field, the wiring is not doing what the grep says it does — treat that as a live defect, not a timing artefact. | `tail -1 data/stock_journal.jsonl` and `data/crypto_journal.jsonl`; or `brain_audit.py --section books`, where `basis` must stop reading `(undeclared)`. |
+| Edge calibrator's first verdicts (§4.47) | `MIN_N = 60` at roughly one scoreable day per edge per activation puts the first verdicts about **2 months out (~mid-October 2026)**. When they arrive, read the FIRST batch by hand before trusting the next — a bar chosen on reasoning is still a bar nobody has watched fire. Check `structural` and `n_independent` are populated on every verdict. | `data/edge_calibration.json` → `supported` / `contradicted` leaving 0; `brain_audit.py --section learning`. |
+| The two saturated gain clamps (§4.45, §4.47) | Not data-gated in the usual sense — it is a **sizing decision**, and the cue is having enough settled claims to size on. 19 today. Revisit at **50 settled claims**, or sooner if `abs_ratio` stops moving (which would mean the estimate has converged and the ceiling is the only thing left in the way). | `data/expectations.jsonl` (count `state: settled`); `data/learning_state.json` → `abs_ratio`; `edge_calibration.json` → `gain`, `gain_saturated`. |
 | ~~Digester edges 35× spec~~ | **NOW SELF-CHECKING** (2026-08-21). `scripts/cue_check.py` + `ai-investing-cue-check.timer` measure LLM edges against the CURRENT curated count daily and notify only on a state change — the cue is no longer dated against a 656 that has since moved, and no longer depends on someone remembering. It had already fired unnoticed at 354 before this was built. | `data/cue_state.json`; Telegram on any flip. |
 | Non-USD live trading off | Not data-gated — this is a deliberate action, not a wait. The cue is choosing to run it: place one small real HK or SG order (e.g. `D05.SI` or `2899.HK`) during HKT/SGT market hours and verify submit → fill → stop → exit, the same proof §5.1 already did for US via `F`. | `docs/status/OPERATIONS.md` → the live-order verification steps used for the US leg; repeat for one non-USD symbol. |
 | Live AAPL position, no venue stop | Fires on its own: the next time a stop-loss placement is attempted for this position, the reason is now journalled (`!! NO VENUE STOP` if it fails again). If the same failure recurs with a tick-legal price, escalate — that would rule out §4.23 a second time and point at something else. | `journal.db orders`, `reason` column, next attempt. |
