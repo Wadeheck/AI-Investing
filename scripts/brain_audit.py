@@ -1,0 +1,618 @@
+#!/usr/bin/env python3
+"""Audit the brain: every measurement in BRAIN_REVIEW_2026-08-21, on demand.
+
+WHY THIS EXISTS. That review was produced with throwaway scripts. Its findings
+were real and several were serious — a 65x sample-replication defect that had
+reversed the conclusions of two earlier reviews, a graph resolving 202 objects
+across 476 assets, four learning loops that had never produced an output — but
+the *instrument* that found them did not survive the session. A finding you
+cannot re-measure is a story, not a metric, and the next person (or the next
+model) starts from zero.
+
+So: one command, no arguments, read-only, no market calls and no LLM. It
+reproduces every number in that review against whatever the live state says
+today, and it is designed to be run BEFORE writing any future review.
+
+    python3 scripts/brain_audit.py                 # everything, human-readable
+    python3 scripts/brain_audit.py --json          # same, machine-readable
+    python3 scripts/brain_audit.py --section graph # just one
+
+WHAT IT WILL NOT DO. It does not decide anything, trade, or write to any file
+the engine reads. Judgement stays with the reader — see §10.4 of the review for
+what was deliberately left open and why.
+
+THE FOUR TRAPS IT ENCODES. Each of these produced a wrong published conclusion
+in this project's own history, and each is now checked rather than remembered:
+
+  1. PSEUDO-REPLICATION. `advice_log` is written every cycle, so one standing
+     view was graded ~126 times a day against the same forward return. Count
+     (symbol, day) observations, never rows. §1.
+  2. OVERLAPPING WINDOWS. Daily samples of a 5-day forward return share 4/5 of
+     their window, so even deduplicated observations are not independent. The
+     sample size is deflated by ~HORIZON_DAYS, giving `n_effective`. §1.2.
+  3. NO BENCHMARK. A call graded against zero measures the tape's drift. This
+     bit the advice scorecard in August (its `_BENCH` comment) and bit
+     event_outcomes again in the same way. §4.4.
+  4. NO CONTROL GROUP. "Panic rebounds" is a COMPARATIVE claim and needs an
+     ordinary event to compare against — measured against zero it returned the
+     same answer for opposite emotions. §4.4.
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import math
+import os
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "engine"))
+
+MIN_DAYS = 8                # below this, a hit-rate is an anecdote
+P_BAR = 0.05                # two-sided binomial, against a coin
+
+
+# --------------------------------------------------------------- statistics --
+def _binom_p(hits: int, n: int) -> float | None:
+    """Two-sided exact binomial p-value against p=0.5.
+
+    WHY NOT A t-TEST. `hit` is Bernoulli, and a t-test on it degenerates
+    exactly where the evidence is strongest: a symbol that hit 12 out of 12 has
+    zero sample variance, so the t is undefined and the pair silently drops out
+    of any "what clears a bar" list. The first draft of this script did that and
+    lost four of the nine pairs the 2026-08-21 review had reported, including a
+    12-for-12 record. A binomial test handles a perfect run natively, which is
+    the case that matters most.
+    """
+    if n <= 0:
+        return None
+    hits = max(0, min(n, int(round(hits))))
+    # P(X = k) under p=0.5 is C(n,k)/2^n; sum the tail at or below the observed
+    # likelihood, which for a symmetric null is both tails at distance >= |k-n/2|
+    d = abs(hits - n / 2)
+    total = sum(math.comb(n, k) for k in range(n + 1)
+                if abs(k - n / 2) >= d - 1e-9)
+    return min(1.0, total / (2 ** n))
+
+
+def _effective_n(n: int, horizon: int) -> int:
+    """Trap 2. Consecutive daily observations of an h-day forward return share
+    (h-1)/h of their window, so `n` daily samples carry roughly n/h independent
+    ones. Applying the deflation to the SAMPLE SIZE rather than to a finished
+    statistic is both simpler to explain and correct for a binomial: it says
+    plainly that 12 daily observations are about 2 independent bets."""
+    return max(1, int(n / max(1, horizon)))
+
+
+def _evidence(hits: int, n: int, horizon: int) -> dict:
+    """The honest pair: what the raw sample says, and what it says after the
+    windows are accounted for. Always report both — the gap between them IS the
+    finding, and quoting only the first is how this project published two
+    reviews that contradicted each other."""
+    n_eff = _effective_n(n, horizon)
+    return {
+        "n": n, "hits": hits,
+        "hit": round(hits / n, 3) if n else None,
+        "p": (None if (p := _binom_p(hits, n)) is None else round(p, 4)),
+        "n_effective": n_eff,
+        "p_effective": (None if (pe := _binom_p(round(hits * n_eff / n), n_eff)
+                                 if n else None) is None else round(pe, 4)),
+    }
+
+
+def _ro(path: str):
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+def _has_column(con, table: str, column: str) -> bool:
+    try:
+        return column in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return False
+
+
+# ------------------------------------------------------------------ section --
+def counting_unit(s) -> dict:
+    """Trap 1, as a standing check. Rows vs (symbol, day) observations."""
+    con = _ro(s.brain.db_path)
+    has = _has_column(con, "advice_outcomes", "is_primary")
+    try:
+        rows = con.execute("select count(*) from advice_outcomes").fetchone()[0]
+        obs = con.execute(
+            "select count(distinct symbol || date(ts_issued,'+8 hours')) "
+            "from advice_outcomes").fetchone()[0]
+        labelled = (con.execute(
+            "select count(*) from advice_outcomes where is_primary=1").fetchone()[0]
+            if has else None)
+        gradable = (con.execute(
+            "select count(*) from advice_outcomes where is_primary=1 "
+            "and hit is not null").fetchone()[0] if has else None)
+    except sqlite3.Error as exc:
+        return {"error": str(exc)}
+    finally:
+        con.close()
+    return {
+        "rows": rows, "observations": obs,
+        "replication": round(rows / obs, 1) if obs else None,
+        "labelled_primary": labelled,
+        # Like for like: distinct (symbol, day) over ALL rows, against the
+        # count of rows carrying the label. If these diverge, some write path
+        # is bypassing the rule -- which is how the original defect existed.
+        "label_agrees": labelled == obs if labelled is not None else None,
+        "gradable_observations": gradable,
+        "lost_to_deadband": (obs - gradable) if gradable is not None else None,
+        # A symbol-day whose FIRST call fell inside the deadband contributes no
+        # claim, and must NOT be replaced by a later re-issue that happened to
+        # land outside it -- that is selection on the outcome. Note also that
+        # re-issues of one day are graded at different moments against
+        # different "latest" prices, so near the deadband boundary they can
+        # genuinely disagree; the primary row is graded once, deterministically.
+        "note": "deadband losses are dropped, never back-filled from a re-issue",
+    }
+
+
+def directional_record(s, horizon: int) -> dict:
+    """direction x conviction, ONE observation per (symbol, day)."""
+    con = _ro(s.brain.db_path)
+    primary = " and is_primary=1" if _has_column(con, "advice_outcomes", "is_primary") else ""
+    try:
+        rows = con.execute(
+            "select direction, coalesce(is_conviction,1), symbol, "
+            "       date(ts_issued,'+8 hours') as d, hit, excess_ret "
+            "from advice_outcomes "
+            f"where hit is not null and excess_ret is not null{primary}").fetchall()
+    except sqlite3.Error as exc:
+        con.close()
+        return {"error": str(exc)}
+    con.close()
+
+    buckets: dict[tuple, list] = collections.defaultdict(list)
+    for direction, conv, _sym, _d, hit, exc in rows:
+        buckets[(direction, int(conv))].append((hit, exc))
+
+    out = {}
+    for (direction, conv), vals in sorted(buckets.items()):
+        out[f"{direction}/conv={conv}"] = {
+            **_evidence(sum(v[0] for v in vals), len(vals), horizon),
+            "avg_excess_pct": round(100 * sum(v[1] for v in vals) / len(vals), 2),
+        }
+    return out
+
+
+def symbol_record(s, horizon: int) -> dict:
+    """Which (symbol, call) pairs clear a real bar — in BOTH directions.
+
+    Reporting only the winners is how a track record flatters itself. This
+    reports every pair with >= MIN_DAYS distinct days clearing a two-sided
+    binomial p <= P_BAR, and separates the ones that are significantly RIGHT
+    from the ones that are significantly WRONG.
+    """
+    con = _ro(s.brain.db_path)
+    primary = " and is_primary=1" if _has_column(con, "advice_outcomes", "is_primary") else ""
+    try:
+        rows = con.execute(
+            "select symbol, direction, date(ts_issued,'+8 hours') as d, hit, excess_ret "
+            "from advice_outcomes "
+            f"where hit is not null and excess_ret is not null{primary}").fetchall()
+    except sqlite3.Error as exc:
+        con.close()
+        return {"error": str(exc)}
+    con.close()
+
+    per: dict[tuple, list] = collections.defaultdict(list)
+    for sym, direction, _d, hit, exc in rows:
+        per[(sym, direction)].append((hit, exc))
+
+    right, wrong, total = [], [], 0
+    for (sym, direction), vals in per.items():
+        total += 1
+        if len(vals) < MIN_DAYS:
+            continue
+        ev = _evidence(sum(v[0] for v in vals), len(vals), horizon)
+        if ev["p"] is None or ev["p"] > P_BAR:
+            continue
+        rec = {"symbol": sym, "call": direction, "days": len(vals),
+               "avg_excess_pct": round(100 * sum(v[1] for v in vals) / len(vals), 2),
+               **ev}
+        (right if ev["hit"] > 0.5 else wrong).append(rec)
+    return {"pairs_examined": total,
+            "bar": f">= {MIN_DAYS} distinct days and binomial p <= {P_BAR}",
+            "significantly_right": sorted(right, key=lambda r: r["p"]),
+            "significantly_wrong": sorted(wrong, key=lambda r: r["p"])}
+
+
+def event_record(s) -> dict:
+    """The second, independent instrument: graded event predictions.
+
+    Two different measurements agreeing is the only reason to believe anything
+    at this sample size, so this is reported beside the advice record rather
+    than folded into it.
+    """
+    con = _ro(s.brain.db_path)
+    has_basis = _has_column(con, "event_outcomes", "basis")
+    try:
+        by_sign = {}
+        for sign, noise, n, hit in con.execute(
+                "select impact_sign, is_noise, count(*), avg(hit) from event_outcomes "
+                "where hit is not null group by 1,2 order by 1,2"):
+            by_sign[f"sign={sign:+d}/noise={noise}"] = {
+                "n": n, "hit": round(hit, 3)}
+        by_emotion = {}
+        for emo, n, hit in con.execute(
+                "select emotion, count(*), avg(hit) from event_outcomes "
+                "where hit is not null group by 1 having count(*) >= 100 "
+                "order by count(*) desc"):
+            by_emotion[emo or "(none)"] = {"n": n, "hit": round(hit, 3)}
+        basis = {}
+        if has_basis:
+            for b, n in con.execute(
+                    "select coalesce(basis,'(null)'), count(*) "
+                    "from event_outcomes group by 1"):
+                basis[b] = n
+            benched = con.execute(
+                "select count(*) from event_outcomes "
+                "where bench_symbol is not null").fetchone()[0]
+        else:
+            benched = 0
+    except sqlite3.Error as exc:
+        con.close()
+        return {"error": str(exc)}
+    con.close()
+    return {
+        "by_sign": by_sign, "by_emotion": by_emotion,
+        "grading_basis": basis or "pre-migration (absolute only)",
+        "rows_with_benchmark": benched,
+        # Trap 3, named at the point of measurement rather than in a docstring
+        # nobody reads: a hit graded against zero measures the tape.
+        "warning": (None if benched else
+                    "NO row is market-relative yet — every hit-rate here is "
+                    "graded against ZERO, so it partly measures the window's "
+                    "drift. Treat the +1/-1 ASYMMETRY as the signal, not the level."),
+    }
+
+
+def graph_resolution(s) -> dict:
+    """How many distinct objects the graph can actually tell apart.
+
+    Probes every origin node individually and groups assets by their response
+    vector. This is the measurement behind "202 signatures across 476 assets".
+    It is the slowest section (a few seconds to a minute).
+    """
+    from ai_investing.brain.adviser import indistinguishable_groups
+    from ai_investing.brain.graph import KnowledgeGraph
+
+    g = KnowledgeGraph.load(s.brain.graph_path)
+    origins = sorted(i for i, n in g.nodes.items()
+                     if n.type in ("factor", "commodity", "actor"))
+    assets = [i for i, n in g.nodes.items() if n.type == "asset"]
+
+    signatures: dict[str, list] = {a: [] for a in assets}
+    for o in origins:
+        impacts = g.propagate({o: 0.6}, max_hops=3)[0]
+        for a in assets:
+            signatures[a].append(round(impacts.get(a, 0.0), 5))
+
+    groups = collections.defaultdict(list)
+    for a, vec in signatures.items():
+        groups[tuple(vec)].append(a)
+    inert = [a for a, vec in signatures.items() if not any(vec)]
+    duplicated = sum(len(v) for k, v in groups.items() if len(v) > 1 and any(k))
+
+    llm = [e for e in g.edges if e.provenance == "llm"]
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    placeholders = [n for n in g.nodes if KnowledgeGraph.is_non_entity(n)]
+
+    # a worked example, so the number is legible rather than abstract
+    example = indistinguishable_groups(
+        g.asset_impacts(g.propagate({"crypto_liquidity": 0.6}, max_hops=3)[0]))
+
+    return {
+        "nodes": len(g.nodes), "edges": len(g.edges), "assets": len(assets),
+        "origins_probed": len(origins),
+        "distinct_signatures": len(groups),
+        "resolution_pct": round(100 * len(groups) / len(assets), 1) if assets else None,
+        "inert_assets": len(inert),
+        "assets_duplicating_a_peer": duplicated,
+        "llm_edges": len(llm),
+        "llm_share_pct": round(100 * len(llm) / len(g.edges), 1) if g.edges else None,
+        "llm_proposed_last_7d": g.proposal_rate(week_ago),
+        "daily_proposal_budget": g.daily_proposal_budget,
+        "unreviewed_llm_edges": sum(1 for e in llm if not e.reviewed_at),
+        "placeholder_nodes": placeholders,
+        "orphan_llm_nodes": len(g.orphan_nodes()),
+        "example_crypto_liquidity_shock": {
+            "assets_touched": len([1 for v in g.asset_impacts(
+                g.propagate({"crypto_liquidity": 0.6}, max_hops=3)[0]).values()
+                if abs(v["impact"]) > 1e-4]),
+            "of_which_indistinguishable": len(example),
+        },
+    }
+
+
+def learning_loops(s) -> dict:
+    """Is anything actually learning? Each loop, with the evidence.
+
+    Every one of these was DESCRIBED as operating in the design docs while
+    producing no output in production. A loop that has never moved is not a
+    slow loop, it is a broken one, and it should be visible without reading
+    five JSON files by hand.
+    """
+    out: dict = {}
+    data = Path(s.brain.db_path).parent
+
+    # -- the formula: two loops, per FORMULA.md §4 ---------------------------
+    try:
+        f = json.loads((data / "formula.json").read_text())
+        model, rls = f.get("model") or {}, f.get("rls") or {}
+        theta, prior = rls.get("theta") or [], model.get("weights") or []
+        moved = any(abs(a - b) > 1e-12 for a, b in zip(theta, prior)) \
+            if len(theta) == len(prior) and theta else None
+        out["formula"] = {
+            "written": f.get("ts"), "version": model.get("version"),
+            "fitted": model.get("fitted"),
+            "features": len(model.get("feature_names") or []),
+            "feature_names": model.get("feature_names"),
+            "rls_samples": rls.get("n"),
+            "rls_theta_moved_from_prior": moved,
+            "alive": bool(model.get("fitted")) or bool(moved),
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        out["formula"] = {"error": str(exc)}
+
+    try:
+        con = _ro(s.db_path)
+        out["formula"]["outcomes_rows"] = con.execute(
+            "select count(*) from outcomes").fetchone()[0]
+        out["formula"]["param_versions"] = con.execute(
+            "select count(distinct weights) from params").fetchone()[0]
+        con.close()
+    except sqlite3.Error as exc:
+        out["formula"]["outcomes_rows"] = f"error: {exc}"
+
+    # -- the edge calibrator -------------------------------------------------
+    try:
+        cal = json.loads((data / "edge_calibration.json").read_text())
+        summary = cal.get("summary") or {}
+        gain = cal.get("gain")
+        out["edge_calibration"] = {
+            "generated": cal.get("generated"), **summary, "gain": gain,
+            # 0.25 and 2.0 are the clamp bounds in calibration.py. Sitting ON a
+            # bound means the estimate is saturated: the true value is at least
+            # this far out and the calibrator cannot say how much further.
+            "gain_saturated": gain in (0.25, 2.0),
+            "alive": (summary.get("supported", 0) + summary.get("contradicted", 0)) > 0,
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        out["edge_calibration"] = {"error": str(exc)}
+
+    # -- per-symbol reliability ----------------------------------------------
+    try:
+        rel = json.loads((data / "reliability.json").read_text())
+        vals = [v.get("r", 1.0) if isinstance(v, dict) else v for v in rel.values()]
+        pinned = sum(1 for v in vals if v <= 0.51 or v >= 1.39)
+        out["reliability"] = {
+            "symbols": len(vals), "pinned_at_a_bound": pinned,
+            "pinned_pct": round(100 * pinned / len(vals), 1) if vals else None,
+            "neutral": sum(1 for v in vals if abs(v - 1.0) < 1e-9),
+            # Saturation is the signature of an estimator stepping many times
+            # per real observation -- the defect fixed on 2026-08-21.
+            "healthy": (pinned / len(vals) < 0.25) if vals else None,
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        out["reliability"] = {"error": str(exc)}
+
+    # -- emotion coefficients ------------------------------------------------
+    try:
+        emo = json.loads((data / "emotion_calibration.json").read_text())
+        out["emotion_calibration"] = {
+            "generated": emo.get("generated"),
+            "return_basis": emo.get("return_basis", "(pre-control-group)"),
+            **{k: {kk: emo[k].get(kk) for kk in
+                   ("coef", "basis", "n", "baseline_n", "lift", "tstat")}
+               for k in ("panic_rebound", "euphoria_fade") if k in emo},
+            "has_control_group": "baseline_n" in (emo.get("panic_rebound") or {}),
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        out["emotion_calibration"] = {"error": str(exc)}
+
+    # -- the adviser sizing gate --------------------------------------------
+    try:
+        gate = json.loads((data / "adviser_gate.json").read_text())
+        out["adviser_gate"] = {k: gate.get(k) for k in
+                               ("checked_at", "eligible", "adviser_long",
+                                "formula_short", "threshold")}
+    except (OSError, json.JSONDecodeError) as exc:
+        out["adviser_gate"] = {"error": str(exc)}
+    return out
+
+
+def reach(s, horizon: int) -> dict:
+    """Correct calls the books could not act on — by market, and by whether the
+    symbol was EVER held.
+
+    The finding this exists to keep visible: on 2026-08-21 the brain's
+    conviction-long hit-rate was highest in Korea (0.983) and Tokyo (0.985),
+    both unreachable, and LOWEST in the US (0.584), its only open market —
+    inversely ranked with its ability to place the order.
+    """
+    data = Path(s.brain.db_path).parent
+    held: set[str] = set()
+    for jf in ("event_journal.jsonl", "invest_journal.jsonl", "crypto_journal.jsonl",
+               "stock_journal.jsonl", "crypto_event_journal.jsonl"):
+        try:
+            for line in (data / jf).read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("symbol"):
+                    held.add(r["symbol"])
+        except OSError:
+            continue
+
+    con = _ro(s.brain.db_path)
+    primary = " and is_primary=1" if _has_column(con, "advice_outcomes", "is_primary") else ""
+    try:
+        rows = con.execute(
+            "select symbol, date(ts_issued,'+8 hours'), hit, excess_ret "
+            "from advice_outcomes where direction='long' and is_conviction=1 "
+            f"  and hit is not null and excess_ret is not null{primary}").fetchall()
+    except sqlite3.Error as exc:
+        con.close()
+        return {"error": str(exc)}
+    con.close()
+
+    def market(sym: str) -> str:
+        if "/" in sym:
+            return "CRYPTO"
+        return sym.rsplit(".", 1)[1] if "." in sym else "US"
+
+    by_market = collections.defaultdict(list)
+    by_symbol = collections.defaultdict(list)
+    for sym, _d, hit, exc in rows:
+        by_market[market(sym)].append((hit, exc))
+        by_symbol[sym].append((hit, exc))
+
+    markets = {}
+    for m, vals in sorted(by_market.items(), key=lambda kv: -len(kv[1])):
+        markets[m] = {"n": len(vals),
+                      "hit": round(sum(v[0] for v in vals) / len(vals), 3),
+                      "avg_excess_pct": round(
+                          100 * sum(v[1] for v in vals) / len(vals), 2)}
+
+    never = []
+    for sym, vals in by_symbol.items():
+        if sym in held or len(vals) < 3:
+            continue
+        hit = sum(v[0] for v in vals) / len(vals)
+        if hit < 0.6:
+            continue
+        never.append({"symbol": sym, "days": len(vals), "hit": round(hit, 2),
+                      "avg_excess_pct": round(
+                          100 * sum(v[1] for v in vals) / len(vals), 2)})
+    return {"by_market": markets,
+            "symbols_traded_ever": len(held),
+            "correct_but_never_held": sorted(
+                never, key=lambda r: -r["avg_excess_pct"] * r["days"])}
+
+
+def books(s) -> dict:
+    """Per-book equity, and the declared basis it belongs to.
+
+    `basis` is the guard against §4.14: a change of BOOK read as a change in
+    VALUE. A step in an equity curve with a basis change beside it is
+    explained; the same step without one is a -50% day to the circuit breaker.
+    """
+    data = Path(s.brain.db_path).parent
+    out = {}
+    for label, fn in (("trading", "state.json"), ("investing", "invest_state.json"),
+                      ("event_sleeve", "event_state.json"), ("crypto", "crypto_state.json"),
+                      ("crypto_event", "crypto_event_state.json")):
+        try:
+            d = json.loads((data / fn).read_text())
+        except (OSError, json.JSONDecodeError):
+            out[label] = {"error": f"{fn} unreadable"}
+            continue
+        out[label] = {"equity": d.get("equity"), "ts": d.get("ts"),
+                      "basis": d.get("basis", "(undeclared)"),
+                      "halted": d.get("halted")}
+    return out
+
+
+SECTIONS = {
+    "counting_unit": counting_unit,
+    "directional": directional_record,
+    "symbols": symbol_record,
+    "events": event_record,
+    "graph": graph_resolution,
+    "learning": learning_loops,
+    "reach": reach,
+    "books": books,
+}
+_NEEDS_HORIZON = {"directional", "symbols", "reach"}
+
+
+# --------------------------------------------------------------- rendering --
+def _render(name: str, payload) -> None:
+    print(f"\n\033[1m{'=' * 74}\n{name.upper()}\n{'=' * 74}\033[0m")
+    print(json.dumps(payload, indent=1, default=str))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="audit the brain — read-only, no market calls")
+    ap.add_argument("--json", action="store_true", help="machine-readable, all sections")
+    ap.add_argument("--section", choices=sorted(SECTIONS), action="append",
+                    help="run only this section (repeatable)")
+    ap.add_argument("--horizon", type=int, default=None,
+                    help="forward-return horizon in days (default: the scorecard's)")
+    args = ap.parse_args()
+
+    from ai_investing.brain.scorecard import HORIZON_DAYS
+    from ai_investing.config import Settings
+    settings = Settings()
+    horizon = args.horizon or HORIZON_DAYS
+
+    wanted = args.section or list(SECTIONS)
+    report = {"generated": datetime.now(timezone.utc).isoformat(),
+              "horizon_days": horizon,
+              "brain_db": settings.brain.db_path,
+              "graph": settings.brain.graph_path}
+    for name in wanted:
+        fn = SECTIONS[name]
+        try:
+            report[name] = fn(settings, horizon) if name in _NEEDS_HORIZON else fn(settings)
+        except Exception as exc:      # one broken section must not hide the rest
+            report[name] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    if args.json:
+        print(json.dumps(report, indent=1, default=str))
+        return 0
+
+    print(f"\nbrain audit — {report['generated']}")
+    print(f"  {settings.brain.db_path}")
+    print(f"  horizon {horizon}d; every hit-rate below is one observation per "
+          f"(symbol, day)")
+    for name in wanted:
+        _render(name, report[name])
+
+    print(f"\n\033[1m{'=' * 74}\nHOW TO READ THIS\n{'=' * 74}\033[0m")
+    print("""
+  counting_unit  `replication` is rows per real observation. It is ~65 by
+                 construction (advice is re-logged every cycle) and that is
+                 FINE — what matters is that `label_agrees` is true, i.e. every
+                 statistic above counted observations. If it goes false, some
+                 write path is bypassing the rule.
+
+  directional    `p` is the raw binomial p-value; `p_effective` is the one to
+                 quote. Daily samples of a 5-day forward return share 4/5 of
+                 their window, so `n_effective` = n/5 independent bets. The GAP
+                 between p and p_effective is itself the finding.
+
+  symbols        Both lists matter, and they are printed at the same bar.
+                 `significantly_wrong` being long, and mostly bearish calls,
+                 was the 2026-08-21 finding three instruments agreed on. A
+                 track record that reports only its winners is a brochure.
+
+  events         The SECOND instrument, and independent of the advice record.
+                 Two measurements agreeing is the only reason to believe
+                 anything at this sample size. Read the +1 vs -1 asymmetry.
+
+  graph          `resolution_pct` is how many distinct objects the graph can
+                 tell apart, as a share of the assets it holds. Below ~50% most
+                 "stock picks" are sector calls wearing a ticker.
+
+  learning       Each loop reports `alive`. A loop that has never moved is not
+                 a slow loop.
+
+  reach          If hit-rate ranks INVERSELY with tradability, the constraint
+                 is the venue, not the model.
+""")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
