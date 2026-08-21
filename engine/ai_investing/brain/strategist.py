@@ -157,6 +157,51 @@ def _gather_evidence(settings, brain_state: dict, labels: dict[str, str]) -> dic
 
 
 # --------------------------------------------------------------- challenge --
+def stock_shorts_available(settings) -> bool:
+    """Can a `short` thesis on a stock actually become a position today?
+
+    Two independent switches say no, and either is sufficient:
+      - `SHARED_STOCK_ACCOUNT`: at the venue, opening a short and selling
+        another book's shares are the same order, so shorts are refused for
+        every book (`brokers/shared.SHORTS_REFUSED`).
+      - `RISK_ALLOW_SHORT=false`: the risk layer's own switch.
+    """
+    try:
+        if getattr(settings, "shared_stock_account", False):
+            return False
+        return bool(getattr(settings.risk, "allow_short", False))
+    except Exception:
+        return False           # unknown = assume not expressible, never propose
+
+
+def _shorts_rule(settings) -> str:
+    """The shorting rule, matched to what execution will actually accept.
+
+    WHY THIS IS COMPUTED. The prompt used to state flatly that "shorting
+    overvalued/bubble names is a valid thesis", while every stock short this
+    system produces is refused at the venue. On 2026-08-21 the live strategy
+    held 5 theses and TWO of them were shorts (`short-tech-bubble` -> TSLA,
+    `short-energy-stress` -> JKS). Both had been re-attempted and rejected
+    every cycle since 2026-08-19, and the investing book sat 57% cash.
+
+    So 40% of the strategist's scarce thesis capacity was spent on ideas that
+    could never become positions — and the daily rejection was the only trace.
+
+    An `avoid` is not a watered-down short. It is the claim this system can
+    actually act on (don't hold it), the claim the scorecard already grades
+    correctly against a benchmark, and — per docs/research/SHORT_STRATEGY.md,
+    where shorts have failed six independent tests — the better claim anyway.
+    """
+    if stock_shorts_available(settings):
+        return ("- Shorting overvalued/bubble names is a valid thesis when "
+                "valuations support it.")
+    return (
+        "- STOCK SHORTS CANNOT BE EXECUTED and will be rejected every cycle. Use\n"
+        "  stance \"avoid\" for a name you expect to LAG the market — that is a real,\n"
+        "  graded claim this system can act on by not holding it. Do NOT propose\n"
+        "  stance \"short\" on a stock; the slot is wasted and the position never opens.")
+
+
 _PROMPT = """You are the long-horizon strategist of a trading system. Your job today is to
 CHALLENGE the standing 6-month strategy against fresh evidence — NOT to rewrite it.
 
@@ -166,8 +211,10 @@ RULES (these are the point of your existence):
   (macro readings, valuations, financial health, a structural break) contradicts it.
 - Default verdict is "kept". Be honest when evidence weakens a thesis, but weakening
   is not breaking.
-- Shorting overvalued/bubble names is a valid thesis when valuations support it.
+{shorts_rule}
 - Max {max_theses} theses. Plain language a beginner understands; no jargon.
+- Every thesis slot is scarce. A thesis this system CANNOT express is a wasted
+  slot, not a cautious one.
 
 STANDING STRATEGY (age: {age} days, unchanged for {streak} days):
 {prev}
@@ -232,6 +279,7 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None,
     universe = ", ".join(f"{s} ({labels.get(s, s)})"
                          for s in settings.stock_watchlist + settings.crypto_watchlist)
     out = llm(_PROMPT.format(max_theses=MAX_THESES, age=age, streak=streak,
+                             shorts_rule=_shorts_rule(settings),
                              prev=json.dumps(prev_view, indent=1),
                              evidence=json.dumps(evidence, indent=1),
                              universe=universe))
@@ -273,8 +321,22 @@ def challenge_strategy(settings, strat: dict, evidence: dict, llm=None,
                           if n.type == "asset" and n.symbol}
             except Exception:
                 pass
+            stance = p.get("stance", "long")
+            # A PROMPT INSTRUCTION IS NOT A CONTROL. _shorts_rule() asks the
+            # model not to propose stock shorts when they cannot execute; this
+            # enforces it, because the model may ignore the instruction and the
+            # cost of it doing so is a permanently dead thesis slot plus a
+            # rejected order every cycle, forever. Crypto is unaffected — the
+            # event sleeve can genuinely short perpetual futures.
+            if (stance == "short" and not stock_shorts_available(settings)
+                    and any("/" not in str(s) for s in (p.get("symbols") or []))):
+                stance = "avoid"
+                veto_notes.append(
+                    f"'{str(p.get('title', pid))[:40]}' downgraded short -> avoid: "
+                    f"stock shorts cannot execute, and an unexecutable thesis "
+                    f"occupies a slot without ever opening a position")
             t = {"id": pid, "title": str(p.get("title", pid))[:80],
-                 "stance": p.get("stance", "long"),
+                 "stance": stance,
                  "thesis": str(p.get("thesis", ""))[:500],
                  "assumptions": str(p.get("assumptions", ""))[:300],
                  "symbols": [s for s in (p.get("symbols") or []) if s in valid][:3],

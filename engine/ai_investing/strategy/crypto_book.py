@@ -48,6 +48,54 @@ TAKE = 0.12                    # tactical take-profit (tact_take, adopted)
 HOLD_DAYS = 5                  # tactical max hold (tact_hold, adopted)
 ENTRY_MIN = 0.10               # field impact needed to open a tactical long
 GAIN = 0.4                     # crypto_gain (adopted)
+
+# --------------------------------------------------- the smallest useful trade --
+# WHY THIS IS NOT A CONSTANT ANY MORE. Both trade gates here used a hardcoded
+# $500 floor: `gap > max(500.0, 0.02 * eq)` for the HODL core and
+# `if notional < 500: continue` for the tactical sleeve. Both were calibrated
+# against a $10,000 book, where $500 is 5%.
+#
+# On 2026-08-20 this book moved to a Binance Futures testnet account holding
+# $5,000. The HODL core targets HODL_FRAC/3 = 6.67% per major, so:
+#
+#     per-major target   0.20 x 4,999.89 / 3  =  $333.33
+#     minimum trade      max(500, 2% of eq)   =  $500.00
+#     333.33 > 500.00                         =  False
+#
+# The book could no longer buy the thing it is mandated to hold. It sat 100%
+# cash from 2026-08-20, believing itself invested, placing zero orders — and
+# said nothing, because a gate that never opens logs nothing. Break-even is
+# $7,500 of equity; below that the core is unreachable by construction.
+#
+# This is STATE_OF_THE_SYSTEM §4.14's family again — logic calibrated to a book
+# size, surviving a change of book size. The fix is the same shape as the fix
+# there: derive it, never hardcode it.
+#
+# Two things a floor is legitimately for, so both are represented:
+#   - FEES/VENUE: a trade too small to be worth its costs. Absolute, and the
+#     venue has its own minimum notional anyway.
+#   - CHURN: a rebalance too small to matter to the portfolio. Relative.
+# 0.05 x equity reproduces the old $500 exactly at the $10,000 book these
+# numbers were tuned on, and scales with the book from here.
+#
+# And the guard that makes deadlock structurally impossible: a rebalance
+# threshold may never exceed a quarter of the target it is rebalancing toward.
+MIN_TRADE_USD = 100.0          # venue/fee floor (Binance USDⓈ-M min notional)
+CHURN_FRAC = 0.05              # = the old $500, at the $10,000 book it was set on
+REBALANCE_FRAC = 0.25          # a top-up must be worth >= this much of its target
+
+
+def min_trade_usd(equity: float, target: float | None = None) -> float:
+    """Smallest trade worth placing — never larger than what it is buying.
+
+    `target` is the position size being rebalanced toward. Passing it is what
+    prevents the deadlock above: the threshold is capped at REBALANCE_FRAC of
+    the target, so a book can always reach its own mandate.
+    """
+    churn = CHURN_FRAC * max(0.0, equity)
+    if target is not None and target > 0:
+        churn = min(churn, REBALANCE_FRAC * target)
+    return max(MIN_TRADE_USD, churn)
 VOL_TARGET = 0.024             # R32 vol-targeted sizing
 BEAR_K = 2                     # evidence streams needed to cash out (R28)
 HODL_TRIM = 0.80               # fraction of the core sold in a bear
@@ -227,11 +275,49 @@ class CryptoBook(BookBasisMixin):
                 fired.append("ETF outflows")
         return len(fired), fired
 
+    def _reconcile_held(self, held: dict) -> None:
+        """Drop `held` metadata for positions the venue does not have.
+
+        `held[sym]` records WHAT KIND of position this is (hodl vs tactical) and
+        when it was opened. It is metadata about a position, never evidence that
+        one exists — the broker is the authority on that, and every sizing read
+        in this file already goes to `broker.get_positions()`.
+
+        It can only ever lag or orphan, never lead: `held[sym]` is written only
+        inside `if o.filled_qty`. So an entry with no matching venue position
+        means the position went away underneath it.
+
+        That is exactly what happened on 2026-08-20. The book was migrated from
+        a PaperBroker (which held BTC/ETH/SOL) to a Binance Futures testnet
+        account (which holds nothing), and `held` came across in the state file:
+
+            broker.positions  []
+            held              {BTC/USD: hodl, ETH/USD: hodl, SOL/USD: hodl}
+
+        Nothing here reads `held` as a buy-blocker, so this did not by itself
+        freeze the book (the $500 floor did that — see min_trade_usd). But it
+        made every diagnostic lie about what the book was holding, which is how
+        the freeze went unnoticed for a day. Same family as §4.31/§4.32:
+        local bookkeeping and the account disagreeing, with the local copy
+        believed.
+        """
+        try:
+            live = {p.asset.symbol for p in self.broker.get_positions().values()}
+        except Exception:
+            return                    # unreadable venue: change nothing, ever
+        orphans = [s for s in held if s not in live]
+        for s in orphans:
+            held.pop(s, None)
+        if orphans:
+            self._log("held_reconciled", dropped=orphans,
+                      note="venue holds no such position; local metadata cleared")
+
     # -- one pass, every cycle, 24/7 -----------------------------------------
     def cycle(self, brain_assets: dict, bars_by_sym: dict, prices: dict,
               notifier=None) -> dict:
         held = self._state.setdefault("held", {})
         today = datetime.now(timezone.utc).date().isoformat()
+        self._reconcile_held(held)
         days = self._state.setdefault("days", [])
         if today not in days:
             days.append(today)
@@ -316,15 +402,40 @@ class CryptoBook(BookBasisMixin):
                 cur = next((p.qty * px for p in self.broker.get_positions().values()
                             if p.asset.symbol == sym and held.get(sym, {}).get("kind") == "hodl"), 0.0)
                 gap = per - cur
-                if gap > max(500.0, 0.02 * eq) and self.broker.get_cash() > gap:
-                    o = self.broker.submit(Order(Asset(sym, AssetClass.CRYPTO,
-                                                       exchange=self.settings.crypto_exchange),
-                                                 Side.BUY, gap / px, reason="HODL core"), px)
-                    if o.filled_qty:
-                        held[sym] = {"kind": "hodl", "day": today}
-                        opened.append((sym, "hodl", gap))
-                        self._log("buy", symbol=sym, kind="hodl", qty=round(o.filled_qty, 6),
-                                  price=px, notional=round(gap, 2))
+                floor = min_trade_usd(eq, per)
+                if gap <= floor:
+                    # AN IDLE BOOK IS INFORMATION; SILENCE IS NOT (§4.4). This
+                    # branch used to be an invisible `if` with no else, so the
+                    # book sat 100% cash for a day with nothing anywhere saying
+                    # why. Logged once per symbol per day, not per cycle.
+                    if gap > 0 and self._state.get("hodl_blocked_day") != today:
+                        self._state["hodl_blocked_day"] = today
+                        self._log("hodl_below_floor", symbol=sym,
+                                  gap=round(gap, 2), floor=round(floor, 2),
+                                  target=round(per, 2), equity=round(eq, 2),
+                                  note="core top-up smaller than the minimum trade")
+                    continue
+                if self.broker.get_cash() <= gap:
+                    if self._state.get("hodl_cash_day") != today:
+                        self._state["hodl_cash_day"] = today
+                        self._log("hodl_no_cash", symbol=sym, gap=round(gap, 2),
+                                  cash=round(self.broker.get_cash(), 2))
+                    continue
+                o = self.broker.submit(Order(Asset(sym, AssetClass.CRYPTO,
+                                                   exchange=self.settings.crypto_exchange),
+                                             Side.BUY, gap / px, reason="HODL core"), px)
+                if o.filled_qty:
+                    held[sym] = {"kind": "hodl", "day": today}
+                    opened.append((sym, "hodl", gap))
+                    self._log("buy", symbol=sym, kind="hodl", qty=round(o.filled_qty, 6),
+                              price=px, notional=round(gap, 2))
+                else:
+                    # A submit that does not fill was previously silent — the
+                    # `if o.filled_qty:` had no else, so a rejected or pending
+                    # core buy left no trace at all.
+                    self._log("buy_unfilled", symbol=sym, kind="hodl",
+                              notional=round(gap, 2), status=str(o.status),
+                              reason=(o.reason or "")[:120])
 
         # 4) TACTICAL sleeve — field-driven, vol-sized, time-boxed
         tact_val = sum(p.qty * mark_price(prices.get(p.asset.symbol), p.avg_price)
@@ -374,7 +485,12 @@ class CryptoBook(BookBasisMixin):
                         notional *= max(0.3, min(2.0, VOL_TARGET / rv))
                 room = TACT_CAP * eq - tact_val
                 notional = min(notional, room, self.broker.get_cash() * 0.9)
-                if notional < 500:
+                # No `target` here: the notional IS the intent, so only the
+                # fee/churn floor applies. Same scale-with-the-book fix as the
+                # core above — this was a hardcoded 500, i.e. 10% of a $5,000
+                # book, which made a tactical entry near-unreachable after the
+                # venue migration halved the account.
+                if notional < min_trade_usd(eq):
                     continue
                 o = self.broker.submit(Order(Asset(sym, AssetClass.CRYPTO,
                                                    exchange=self.settings.crypto_exchange),

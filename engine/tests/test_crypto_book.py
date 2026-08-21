@@ -53,6 +53,78 @@ def test_builds_the_hodl_core_when_calm():
         assert abs(core / cb.START_CASH - cb.HODL_FRAC) < 0.05, "core ≈ 20% of the book"
 
 
+def test_a_smaller_book_can_still_reach_its_own_mandate():
+    """The 2026-08-20 freeze, pinned.
+
+    Both trade gates used a hardcoded $500 floor, tuned on a $10,000 book. When
+    this book moved to a Binance Futures testnet account holding $5,000, the
+    HODL core's per-major target fell to HODL_FRAC/3 = 6.67% = $333 — below the
+    floor — so the core became unreachable BY CONSTRUCTION. The book sat 100%
+    cash from 2026-08-20 placing zero orders, and said nothing, because a gate
+    that never opens logs nothing.
+
+    A book must always be able to buy the thing it is mandated to hold. This is
+    checked across the size range rather than at one number, because the defect
+    was invisible at the size the constants were written for.
+    """
+    for cash in (2_000.0, 4_999.89, 5_000.0, 10_000.0, 50_000.0):
+        with tempfile.TemporaryDirectory() as tmp:
+            book = cb.CryptoBook(_settings(tmp))
+            book.broker.cash = cash
+            r = book.cycle({}, BARS, PRICES)
+            core = sum(n for _, k, n in r["opened"] if k == "hodl")
+            assert core > 0, f"a ${cash:,.0f} book could not build its core at all"
+            # and it reaches roughly the mandate, not a token position
+            assert core / cash > cb.HODL_FRAC * 0.5, (
+                f"${cash:,.0f} book only reached ${core:,.0f} of a "
+                f"${cb.HODL_FRAC * cash:,.0f} mandate")
+
+
+def test_the_trade_floor_can_never_exceed_what_it_is_buying():
+    """The structural guarantee, independent of any particular book size: a
+    rebalance threshold above its own target is a deadlock, always."""
+    for equity in (500.0, 1_000.0, 5_000.0, 10_000.0, 100_000.0, 1_000_000.0):
+        target = cb.HODL_FRAC * equity / len(cb.MAJORS)
+        floor = cb.min_trade_usd(equity, target)
+        if target >= cb.MIN_TRADE_USD:
+            assert floor < target, (
+                f"equity ${equity:,.0f}: floor ${floor:,.2f} >= target "
+                f"${target:,.2f} — the core is unreachable")
+    # the old behaviour is preserved at the book size it was tuned on
+    assert cb.min_trade_usd(10_000.0) == 500.0, "0.05 x equity == the old $500 at $10k"
+
+
+def test_stale_held_metadata_is_reconciled_against_the_venue():
+    """`held` records what KIND of position exists, never that one does. After
+    the 2026-08-20 broker migration it claimed three majors the venue did not
+    have, so every diagnostic lied about the book while it sat frozen."""
+    with tempfile.TemporaryDirectory() as tmp:
+        book = cb.CryptoBook(_settings(tmp))
+        book._state["held"] = {"BTC/USD": {"kind": "hodl", "day": "2026-08-18"},
+                               "ETH/USD": {"kind": "hodl", "day": "2026-08-18"},
+                               "SOL/USD": {"kind": "hodl", "day": "2026-08-18"}}
+        assert not book.broker.get_positions(), "fixture: venue holds nothing"
+        book._reconcile_held(book._state["held"])
+        assert book._state["held"] == {}, "metadata for absent positions is dropped"
+
+
+def test_a_venue_we_cannot_read_changes_nothing():
+    """Reconciliation must never act on an unreadable account — that is how you
+    delete the record of a position that is actually there (§4.7's family)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        book = cb.CryptoBook(_settings(tmp))
+        held = {"BTC/USD": {"kind": "hodl", "day": "2026-08-18"}}
+        book._state["held"] = held
+
+        class _Blind:
+            def get_positions(self):
+                raise RuntimeError("venue unreachable")
+
+        book.broker = _Blind()
+        book._reconcile_held(held)
+        assert held == {"BTC/USD": {"kind": "hodl", "day": "2026-08-18"}}
+
+
 def test_never_buys_an_alt():
     with tempfile.TemporaryDirectory() as tmp:
         book = cb.CryptoBook(_settings(tmp))

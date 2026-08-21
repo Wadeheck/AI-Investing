@@ -501,14 +501,49 @@ def reach(s, horizon: int) -> dict:
 
 
 def books(s) -> dict:
-    """Per-book equity, and the declared basis it belongs to.
+    """Per-book equity, deployment, and the declared basis it belongs to.
 
     `basis` is the guard against §4.14: a change of BOOK read as a change in
     VALUE. A step in an equity curve with a basis change beside it is
     explained; the same step without one is a -50% day to the circuit breaker.
+
+    IS THE BOOK DEPLOYING CAPITAL? is the question this section actually exists
+    to answer, and getting it wrong is easy in two specific ways that both
+    happened on 2026-08-21:
+
+      1. `state.json.broker.positions` is EMPTY for the routed trading book and
+         always will be. Its holdings live in the BookLedger (`live_book.json`)
+         because the shared Longbridge account holds the shares and the ledger
+         records this book's CLAIM on them. Reading the wrong file said "0
+         positions" on a book holding ~$4,800 across eight names.
+      2. `stock_journal.jsonl` carries ONE DAILY EQUITY MARK by design
+         (runner._append_stock_journal) and has never carried fills. Counting
+         `event: buy` there said "0 buys" on a book with 24 filled buys.
+
+    Both readings suggested a frozen flagship book. It was trading normally.
+    So deployment is computed from the authoritative source per book, and the
+    order flow comes from `journal.db.orders`, which is where orders actually
+    are.
     """
     data = Path(s.brain.db_path).parent
-    out = {}
+    out: dict = {}
+
+    # order flow — one source for every book that routes through the engine
+    fills: dict = {}
+    try:
+        con = _ro(s.db_path)
+        n_fill, n_buy = con.execute(
+            "select count(*), sum(case when side='buy' then 1 else 0 end) "
+            "from orders where status='filled'").fetchone()
+        last = con.execute("select max(ts) from orders where status='filled'").fetchone()[0]
+        rejects = dict(con.execute(
+            "select status, count(*) from orders group by 1").fetchall())
+        con.close()
+        fills = {"filled": n_fill, "buys_filled": n_buy, "last_fill": last,
+                 "by_status": rejects}
+    except sqlite3.Error as exc:
+        fills = {"error": str(exc)}
+
     for label, fn in (("trading", "state.json"), ("investing", "invest_state.json"),
                       ("event_sleeve", "event_state.json"), ("crypto", "crypto_state.json"),
                       ("crypto_event", "crypto_event_state.json")):
@@ -517,9 +552,35 @@ def books(s) -> dict:
         except (OSError, json.JSONDecodeError):
             out[label] = {"error": f"{fn} unreadable"}
             continue
-        out[label] = {"equity": d.get("equity"), "ts": d.get("ts"),
-                      "basis": d.get("basis", "(undeclared)"),
-                      "halted": d.get("halted")}
+        eq = d.get("equity")
+        cash = d.get("cash")
+        b = d.get("broker") or {}
+        if cash is None:
+            cash = b.get("cash")
+        n_pos = len(b.get("positions") or [])
+        source = fn
+        if label == "trading":
+            # authoritative for the routed book — see the docstring
+            try:
+                led = json.loads((data / "live_book.json").read_text()).get("ledger") or {}
+                marks = led.get("marks") or {}
+                n_pos = sum(1 for m in marks.values() if (m.get("qty") or 0) != 0)
+                source = "live_book.json (BookLedger)"
+            except (OSError, json.JSONDecodeError):
+                pass
+        out[label] = {
+            "equity": eq, "cash": cash, "positions": n_pos,
+            "positions_source": source,
+            "idle_pct": (round(100 * cash / eq, 1)
+                         if isinstance(eq, (int, float)) and eq and isinstance(cash, (int, float))
+                         else None),
+            "basis": d.get("basis", "(undeclared)"),
+            "ts": d.get("ts"), "halted": d.get("halted"),
+        }
+    out["_order_flow"] = fills
+    out["_note"] = ("idle_pct high WITH positions>0 is a sizing question; "
+                    "idle_pct ~100 WITH positions 0 and no recent fill is a "
+                    "frozen book — check the trade floors (§4.41)")
     return out
 
 
