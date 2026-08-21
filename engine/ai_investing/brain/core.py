@@ -149,6 +149,15 @@ class Brain:
             from ai_investing.brain.scale import enrich_with_scale
             vols = enrich_with_scale(asset_impacts, self.settings, self.graph)
             priced_in_scores(self.settings, asset_impacts, vols)
+            # ...and the FRESH-shock dict too. `_shock_assets` is built above
+            # from the same graph read but is a SEPARATE dict, and it was never
+            # enriched — so the event sleeve's `row.get("vol_daily") or 0.02`
+            # fell back to that 0.02 on every equity claim it has ever opened.
+            # All 17 equity rows in `expectations.jsonl` carry vol_daily=0.0200
+            # exactly: JPM (~1.2% daily) and MP (~5%) sized off the same
+            # constant. Vol is a property of the ASSET, not of which impulse
+            # dict you happen to be holding. (§4.51)
+            enrich_with_scale(self._shock_assets, self.settings, self.graph)
         except Exception:
             pass
         fired = self.scenarios.match(events)

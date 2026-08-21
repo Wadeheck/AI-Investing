@@ -48,7 +48,7 @@ RESOLUTION  202 distinct response signatures across 464 assets = 43.5%.
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    64 files / 672 tests, green under BOTH runners (the project's own
+TESTS    66 files / 678 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
          machines, and under random ordering — see §4.40 and §4.46
 COMMITS  304
@@ -210,6 +210,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.48 | §4.40's own fix killed the X capture channel, and its own guard blessed it | ✅ Real `main(argv=None)`; guards now check the name is BOUND and that every argparse script still starts |
 | 4.49 | A number that is not valid JSON survived every restart, in every state file | ✅ `allow_nan=False` on write, non-finite refused on read, and the 0.0 price sentinel removed from the shadow path too |
 | 4.50 | A cleanup rule I wrote deleted Procter & Gamble from the live graph | ✅ `&` survives normalisation as `and`; node and edge restored; every `is_non_entity` caller must pass a type |
+| 4.51 | "The model under-predicts by 14x" was noise; and every equity claim was sized off one 2% constant | ✅ Gains NOT raised, with the noise floor now audited beside the ratio; `_shock_assets` enriched so vol is the asset's own |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2111,6 +2112,12 @@ MP           0.00210    0.06679        31.8       3.0
   risk/reward" is computed from `expected_move`. If that is ~14× too small, the
   true ratio is nearer 2:1 — the headline figure may have been measuring a
   broken expectation rather than a broken strategy.
+- **SUPERSEDED IN PART, 2026-08-22 — see §4.51.** The direction fix here is
+  sound and stands. The INFERENCE drawn from the 14.4 does not: measured against
+  a noise floor of 15.5 with a 52.6% hit rate, that ratio is what pure
+  volatility produces, so it is not evidence that `expected_move` is too small
+  and not grounds for raising `gain`. Read this entry's numbers with §4.51's
+  control beside them.
 - **Lesson.** A number reused by two consumers will eventually be right for one
   and wrong for the other, and the wrong one fails silently because the field
   still looks populated. Same shape as §4.6's `hit` before it got a benchmark.
@@ -2356,6 +2363,61 @@ Datacenter / HFT infrastructure   ->  datacenter__hft_infra    TWO
   written against ids whose distinguishing information had already been thrown
   away upstream.
 
+### 4.51 The "model under-predicts by 14x" was noise, and the decision not to act on it *(2026-08-22)*
+
+- **The decision asked for.** Whether to raise the two saturated gain ceilings
+  (§4.45, §4.47). The user delegated it. **The answer is no, and it is now
+  proven rather than judged.**
+- **What §4.45 concluded, and why it was wrong.** It measured median
+  |realised/expected| = **14.4** over 19 settled claims and read that as
+  *"`expected_move` is one to two orders of magnitude too small"*. That reading
+  makes raising the gain look obviously correct. The missing piece is the
+  control — what the ratio would be with **no signal at all**:
+
+```
+median |realised / expected|             14.4
+median  own-5d-volatility / expected     15.5   <-- what PURE NOISE produces
+directional hit rate                      0.526  (n=19 — a coin flip)
+```
+
+- **They are indistinguishable.** `expected_move` is the move **attributable to
+  the event**; `realized_move` is the asset's **total** move over five days,
+  which its own volatility dominates. Their ratio measures signal-to-noise, not
+  calibration error.
+- **Why raising the gain would have been actively harmful.** No gain can drive
+  that ratio to 1.0 — only an asset that does nothing except what the event told
+  it to. Reaching 1.0 at the live impact (~0.06) needs a gain above 13, at which
+  point every `expected_move` claims the model predicts the asset's **entire
+  five-day range**. That figure feeds position sizing, the sleeve's risk/reward
+  and stop distances. It would have inflated all three on a 52.6% hit rate.
+- **The honest lever is the other one.** The ratio falls when the event explains
+  MORE of the move — bigger `impact`, which is a **graph-wiring** question — not
+  when the gain is turned up. That points back at the 200 inert assets and 320
+  unreviewed edges, which is unglamorous and correct.
+- **A second defect, visible in the same table.** All **17 equity claims** carry
+  `vol_daily = 0.0200` **exactly**; only BTC (0.0194) and ETH (0.0409) differ,
+  because the crypto path computes its own. `brain/core.py` builds two dicts
+  from one graph read — `_shock_assets` (the fresh shock the event sleeve
+  trades) and `asset_impacts` (the accumulated field) — and `enrich_with_scale`
+  ran on the second only. So the sleeve's `row.get("vol_daily") or 0.02` fell
+  through to the literal on **every claim it has ever opened**: JPM (~1.2%
+  daily) and MP (~5%) sized off one constant. Fixed by enriching both.
+  **Fifth instance of one-of-two-paths-fixed** — §4.14, §4.23, §4.36, §4.49.
+- **Made permanent, not just recorded.** `brain_audit.py` now reports the
+  observed ratio, the noise floor, the hit rate and the conclusion **together**;
+  a test refuses to let the observed ratio be published without its control.
+  That guard exists because mutation testing showed blanking the noise figure
+  broke nothing — the audit could have gone back to printing 14.4 alone, which
+  is the reading this entry exists to kill.
+- **What is NOT claimed.** That the expectation is well calibrated. n=19 with a
+  coin-flip hit rate supports no claim in either direction. What is claimed is
+  narrower and sufficient: **the 14x is not evidence for raising the gain**, and
+  the ceilings stay until there is evidence that is about the gain.
+- **Lesson.** A ratio without its null is not a measurement. §4.6 needed a
+  benchmark before `hit` meant anything; §4.44 needed a control group before
+  "panic rebound" did; this needed a noise floor. Three times now the same
+  correction: **compared with what?**
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2376,7 +2438,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~`prices[key] = 0.0` still means "no data"~~ | **CLOSED 2026-08-21 — removed at the source, not contained at the consumers.** The runner now builds `prices` by OMITTING a symbol with no bar (`{k: b[-1].close for k, b in bars_by_key.items() if b}`), so an absent price arrives as `None`: falsy for the `if not px: continue` decision guards, already handled by `mark_price(None, fallback)` for valuation, and — the point — **impossible to multiply by a quantity**. 0.0 * 100 shares is a plausible-looking $0; `None * 100` raises. Safe because all 44 readers of that dict use `.get()` (verified). THE TRAP THIS ALMOST SHIPPED WITH: `DataGuard.check` iterates `prices.items()`, so omitting keys would have made a blanket feed outage **silent** — the same failure as §4.7 with the opposite sign. The guard now also flags anything present in `bars_by_key` (what the cycle expected) and missing from `prices`. Seven cases in `test_price_absence.py`, including "a total outage is still LOUD". | — |
 | ~~The main book's equity formula can't value a margined leg~~ | **CLOSED 2026-08-21 — fixed, not guarded.** `Portfolio.equity()` now accepts a per-venue equity override (`venue_equity`), exactly as this row said the real fix would be. The routed book values itself as `stock cash + marked stock positions + the crypto venue's OWN equity`, which is correct at ANY leverage and in EITHER direction. Proven in `test_margined_equity.py` against the two configurations the guard existed to refuse: at 2x the old formula overstates by $2,900+, on a short it understates by $11,000+ (the -$4,265 signature), and the blend is exact in both — while agreeing byte-for-byte at 1x long-only, where the old formula was already right. `exposure()` is deliberately NOT reduced by the override: margin distorts equity, not notional. The startup refusal REMAINS, narrowed to the case it is still needed for — a venue that cannot be read at construction, where the book does fall back to the reconstruction. | — |
 | **The formula has never learned anything, and now it is deliberate** | §4.28 recorded `journal.db.outcomes = 0 rows` on 2026-08-17; still 0 on 08-21. θ is bit-identical to the hand-set prior, `fitted: false`, RLS `n=8` with zero movement, and `params` holds 20 identical rows all from 2026-08-04. So BOTH loops in FORMULA.md §4 — ridge walk-forward curation and online RLS — have produced no weight change in the engine's entire life. The saved feature vector is also STALE: 8 features, missing `trend_zscore` (added 08-15) and `regime_persistence` (added 08-18), because the file has not been written since before they existed. | **Deliberate as of 2026-08-21, not merely unfixed.** Re-running `--optimize --save` now would fit θ on a 26-day, single-regime sample whose measurement layer was only just corrected (§4.37) — that is how you get a confidently wrong model. The right sequence is: let clean observations accumulate, THEN re-curate and let the Deflated-Sharpe gate decide. The cost of waiting is that the engine keeps running on priors, which it has done from the start. |
-| **The edge calibrator has issued 0 verdicts — now DELIBERATELY, and the bar is set** (§4.47) | 2026-08-21. It was ~3 days from its first verdicts at `MIN_N = 20`, which sounds adequate until you notice the samples are daily readings of a 5-day forward return: 20 of them carry **~4 independent observations**. 56 relationships were about to cross, 14 would have been graded at once, and 6 HALVED — including `arm->semis`, `xlf->us_financials` and `tsla->ev_supply_chain`. **Decision taken:** `MIN_N` 20 -> 60 for causal `influences` edges (~12 independent observations), and a separate `MIN_N_DEMOTE_MEMBERSHIP = 120` before a structural `member_of` transmission may be demoted. The reasoning is asymmetric priors, not "definitions cannot be wrong": an `influences` edge is someone's guess about a mechanism, while a membership's prior comes from what a thing IS — its weight is still empirical (how much of a sector move reaches the member) but four independent observations cannot overturn structure. Promotion of a membership stays at the ordinary bar; strengthening a structurally grounded prior is the safe direction. Reports now carry `n_independent` and `structural` so no reader re-derives either. | First verdicts now land in ~2 months rather than ~3 days, deliberately. **Still open and unchanged:** `gain` sits at its 2.0 clamp, so the magnitude correction is saturated — see §4.45, where the same saturation was found and half of it fixed. |
+| **The edge calibrator has issued 0 verdicts — now DELIBERATELY, and the bar is set** (§4.47) | 2026-08-21. It was ~3 days from its first verdicts at `MIN_N = 20`, which sounds adequate until you notice the samples are daily readings of a 5-day forward return: 20 of them carry **~4 independent observations**. 56 relationships were about to cross, 14 would have been graded at once, and 6 HALVED — including `arm->semis`, `xlf->us_financials` and `tsla->ev_supply_chain`. **Decision taken:** `MIN_N` 20 -> 60 for causal `influences` edges (~12 independent observations), and a separate `MIN_N_DEMOTE_MEMBERSHIP = 120` before a structural `member_of` transmission may be demoted. The reasoning is asymmetric priors, not "definitions cannot be wrong": an `influences` edge is someone's guess about a mechanism, while a membership's prior comes from what a thing IS — its weight is still empirical (how much of a sector move reaches the member) but four independent observations cannot overturn structure. Promotion of a membership stays at the ordinary bar; strengthening a structurally grounded prior is the safe direction. Reports now carry `n_independent` and `structural` so no reader re-derives either. | First verdicts now land in ~2 months rather than ~3 days, deliberately. **The `gain` ceiling is now a DECIDED hold, not a pending one (§4.51).** It sits at its 2.0 clamp, and it stays there: the 14x that looked like grounds for raising it is indistinguishable from the noise floor (observed 14.4 vs 15.5 for pure volatility, hit rate 0.526). No gain can close that gap, and one large enough to try would make every `expected_move` claim the asset's whole five-day range. Re-open only on evidence that is ABOUT the gain — `brain_audit.py --section learning` prints the ratio beside its control. |
 | **200 assets are inert to every macro shock** | §4.39, §4.50. The placeholder nodes are gone and the curation now has a MECHANISM rather than a sentence (shape refusal + a 30-day collector for vocabulary that never became wiring), but 200 of 464 asset nodes still respond to none of the 81 origin shocks — overwhelmingly LLM-added entity nodes harvested from news copy (`boeing`, `chevron`, `blackrock`, `warner_bros`, `kenya`). They are graph vocabulary that was never wired into the causal field. | Inert nodes are harmless in propagation — they transmit nothing — but they inflate every "the graph knows about N companies" claim, and a tradable among them is scored on the formula leg alone with no causal chain. Triage is curation work: wire the real companies, delete the vocabulary. |
 | **10 live orders rejected `602035`, cause unknown — and the obvious diagnosis is wrong** | On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and HK$34.10; the first two were rejected `602035 Wrong bid size` and the third filled. All three are legal multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34 name, and all three were snapped correctly on the way out. **So this is NOT §4.23 recurring**, and snapping harder would fix nothing. | Unknown cause on a live order path, bounded by the orders being small and by two of three attempts eventually filling. Rather than ship a change that would look like a fix and do nothing, the rejection now carries the tick, the venue reference price and the symbol — the same instrumentation lesson §4.23 taught after eight lost orders, one level deeper. **Next occurrence will say why.** |
 | ~~The suite is green under the project runner and red under pytest~~ (§4.40) | **CLOSED 2026-08-21. Both runners now green: 62 files under `python3 tests/test_x.py`, **645 passed under `pytest engine/tests/`** — and under three random orderings, which is the stricter test.** Two distinct causes, neither cosmetic. (1) `watchdog.main()` called `parse_args()` with no argument, so it read `sys.argv` — which under pytest holds pytest's own flags, exiting 2. Fixed across **all 17 scripts** that had the pattern (`main(argv=None)`), because it is the same defect as the hardcoded data paths one layer up: a function reading global state its caller cannot set is neither testable nor configurable. (2) Six tests in `test_bullshit_layer.py` hit `sqlite3.OperationalError: database is locked` — `_fresh_settings()` DELETED files in one shared directory, and under a single process the sqlite handles production code leaves open accumulate against that path. Per-test directories, the same fix as `test_runner_decisions.py`. Both guarded: an AST check refuses any new script that parses `sys.argv` behind its caller. | — |
@@ -2410,7 +2472,7 @@ automatically, since several of these are judgement calls, not bugs.
 |---|---|---|
 | Declared book basis not yet seen live (§4A) | **The next daily equity mark**, and nothing else. If a mark line lands without a `basis` field, the wiring is not doing what the grep says it does — treat that as a live defect, not a timing artefact. | `tail -1 data/stock_journal.jsonl` and `data/crypto_journal.jsonl`; or `brain_audit.py --section books`, where `basis` must stop reading `(undeclared)`. |
 | Edge calibrator's first verdicts (§4.47) | `MIN_N = 60` at roughly one scoreable day per edge per activation puts the first verdicts about **2 months out (~mid-October 2026)**. When they arrive, read the FIRST batch by hand before trusting the next — a bar chosen on reasoning is still a bar nobody has watched fire. Check `structural` and `n_independent` are populated on every verdict. | `data/edge_calibration.json` → `supported` / `contradicted` leaving 0; `brain_audit.py --section learning`. |
-| The two saturated gain clamps (§4.45, §4.47) | Not data-gated in the usual sense — it is a **sizing decision**, and the cue is having enough settled claims to size on. 19 today. Revisit at **50 settled claims**, or sooner if `abs_ratio` stops moving (which would mean the estimate has converged and the ceiling is the only thing left in the way). | `data/expectations.jsonl` (count `state: settled`); `data/learning_state.json` → `abs_ratio`; `edge_calibration.json` → `gain`, `gain_saturated`. |
+| The two saturated gain clamps (§4.45, §4.47, §4.51) | **Decided 2026-08-22: hold, and the old cue was wrong.** Waiting for 50 settled claims would not have helped — more samples of a signal-to-noise ratio give a better estimate of the NOISE, not a reason to raise the gain. The cue that would actually matter is the ratio falling **below** its noise floor while the hit rate rises, which is a graph-wiring outcome, not a sample-size one. | `data/expectations.jsonl` (count `state: settled`); `data/learning_state.json` → `abs_ratio`; `edge_calibration.json` → `gain`, `gain_saturated`. |
 | ~~Digester edges 35× spec~~ | **NOW SELF-CHECKING** (2026-08-21). `scripts/cue_check.py` + `ai-investing-cue-check.timer` measure LLM edges against the CURRENT curated count daily and notify only on a state change — the cue is no longer dated against a 656 that has since moved, and no longer depends on someone remembering. It had already fired unnoticed at 354 before this was built. | `data/cue_state.json`; Telegram on any flip. |
 | Non-USD live trading off | Not data-gated — this is a deliberate action, not a wait. The cue is choosing to run it: place one small real HK or SG order (e.g. `D05.SI` or `2899.HK`) during HKT/SGT market hours and verify submit → fill → stop → exit, the same proof §5.1 already did for US via `F`. | `docs/status/OPERATIONS.md` → the live-order verification steps used for the US leg; repeat for one non-USD symbol. |
 | Live AAPL position, no venue stop | Fires on its own: the next time a stop-loss placement is attempted for this position, the reason is now journalled (`!! NO VENUE STOP` if it fails again). If the same failure recurs with a tick-legal price, escalate — that would rule out §4.23 a second time and point at something else. | `journal.db orders`, `reason` column, next attempt. |

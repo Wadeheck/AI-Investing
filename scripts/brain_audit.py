@@ -393,6 +393,59 @@ def learning_loops(s) -> dict:
     except (OSError, json.JSONDecodeError) as exc:
         out["edge_calibration"] = {"error": str(exc)}
 
+    # -- expected_move vs the NOISE FLOOR -------------------------------------
+    # The control §4.45 lacked. |realised/expected| looks like a calibration
+    # error and is mostly a signal-to-noise measure: `expected_move` is the move
+    # ATTRIBUTABLE to an event, `realized_move` is the asset's TOTAL move, which
+    # its own volatility dominates. Reporting the observed ratio WITHOUT the
+    # ratio pure noise would produce is how "the model is 14x too small" gets
+    # believed, and how someone reaches for the gain. They are printed together
+    # or not at all.
+    try:
+        import math as _m
+        opens, settled = {}, []
+        for line in (data / "expectations.jsonl").read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("state") == "open":
+                opens[r.get("id")] = r
+            elif r.get("state") == "settled":
+                settled.append(r)
+        obs, noise, hits, flat_vol = [], [], [], 0
+        for st in settled:
+            o = opens.get(st.get("id"))
+            if not o or not st.get("expected_move"):
+                continue
+            vol = float(o.get("vol_daily") or 0.0)
+            h = int(o.get("horizon_days") or 5)
+            exp, real = float(st["expected_move"]), float(st.get("realized_move") or 0.0)
+            obs.append(abs(real / exp))
+            if vol:
+                noise.append(vol * _m.sqrt(h) * 0.7979 / exp)
+            hits.append(1 if real * (o.get("direction") or 1) > 0 else 0)
+            flat_vol += (abs(vol - 0.02) < 1e-9)
+        def _med(xs):
+            xs = sorted(xs)
+            return round(xs[len(xs) // 2], 1) if xs else None
+        out["expected_move"] = {
+            "n_settled": len(obs),
+            "median_observed_ratio": _med(obs),
+            "median_noise_ratio": _med(noise),
+            "hit_rate": round(sum(hits) / len(hits), 3) if hits else None,
+            "ratio_is_indistinguishable_from_noise":
+                bool(obs and noise and abs((_med(obs) or 0) - (_med(noise) or 0))
+                     < 0.5 * (_med(noise) or 1)),
+            "claims_with_the_2pct_default_vol": flat_vol,
+            "note": ("observed ~= noise means the ratio measures signal-to-noise, "
+                     "NOT that expected_move is too small. Raising `gain` cannot "
+                     "close it and would make the model claim the asset's whole "
+                     "range. The honest lever is bigger IMPACT (graph wiring)."),
+        }
+    except (OSError, ZeroDivisionError) as exc:
+        out["expected_move"] = {"error": str(exc)}
+
     # -- per-symbol reliability ----------------------------------------------
     try:
         rel = json.loads((data / "reliability.json").read_text())
