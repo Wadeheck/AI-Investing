@@ -283,12 +283,27 @@ Proposals are applied automatically at capped confidence (≤0.6, below the
 1.0 of curated edges) with `provenance: "llm"`, and surface for periodic
 human review — a bad proposal is damped by the cap, not blocked by a queue.
 
-> **That argument depends on the "≤1 per week" above, and the live digester is
-> not honouring it.** Measured 2026-08-10: 96 edges proposed in 7 days, 35/week
-> over 28 days, 140 of 796 graph edges (18%) self-added and none reviewed. At
-> ≤1/week the cap is ample; at 35/week the backlog grows faster than review
-> clears it and llm wiring overtakes curated wiring on its own. Nothing measured
-> this for the first three weeks it was true — see STATE_OF_THE_SYSTEM §4.22.
+> **That argument depends on the "≤1 per week" above, and the live digester has
+> never honoured it.** Measured 2026-08-10: 96 edges in 7 days, 35/week over 28,
+> 140 of 796 edges (18%) self-added and none reviewed — §4.22. Re-measured
+> **2026-08-21: 88.5/week, 131 in 7 days, 317 of 1,119 edges (28%) self-added,
+> and `reviewed & kept: 0`.** The rate had more than DOUBLED, and the review
+> queue built in §4.22 as the answer to this had never been used once, on any
+> edge, ever.
+>
+> So the cap-not-queue argument above was resting on two things that were both
+> false: that proposals are rare, and that review is a control. **A budget was
+> added instead** (`KnowledgeGraph.daily_proposal_budget`, 6/day ≈ 42/week):
+> review is a control on QUALITY and needs a human, a budget is a control on
+> VOLUME and does not — it holds however noisy the extractor is on a given day,
+> which is the property this section assumed and never had. Budget-refused edges
+> are deferred, not tombstoned: nothing is judged wrong, only postponed, and a
+> genuinely recurring relationship is re-proposed tomorrow. See §4.38.
+>
+> **The "≤1 per week" estimate above should be read as an aspiration that has
+> never once been met, not as a description of behaviour.** Setting the
+> proposal BAR (as opposed to the budget) is still open — it is a judgement
+> about how much self-wiring is wanted, not a bug to be patched quietly.
 >
 > Review is now real rather than notional: `scripts/review_edges.py` shows the
 > queue and the rate, and records keep/reject decisions into the graph. A reject

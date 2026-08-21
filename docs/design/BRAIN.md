@@ -21,7 +21,7 @@ Quick map from vision to code:
 
 | Vision | Where it lives |
 |---|---|
-| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (283 nodes, 562 curated edges as of seed v17; factor nodes carry an `equilibrium` note) |
+| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (seed v39: **802 curated + 317 LLM edges over 602 nodes**; factor nodes carry an `equilibrium` note). Live counts come from `scripts/brain_audit.py --section graph`, never from this table — the figure here was 283/562 and eleven seed versions stale before anyone checked. |
 | News shocks a node and ripples to the others | `KnowledgeGraph.propagate()` — impulse × sign × weight × per-hop decay, with a full traversal trace |
 | Multi-market (Longbridge, not just US) | Asset nodes across US / HK / CN / SG / crypto; `MacroLinkageSignal` bridges Longbridge symbols (700.HK) to canonical ones (0700.HK) |
 | Noise vs real information (manipulation filter) | `brain/events.py` credibility score: source trust × corroboration × manipulation-likelihood × hype-language; sub-threshold events are labeled NOISE, shown but never propagated or traded |
@@ -326,10 +326,28 @@ Known simplifications that remain (the roadmap, in honesty):
   state-dependent edges and crisis convergence bends correlations toward 1 in
   deep risk-off. Per-node response CURVES (10bp ≠ 1/10th of 100bp) are still
   missing.
-- **Hand-set weights.** Addressed in v3: `brain/calibration.py` scores every
-  curated influences-edge against realized forward returns and demotes the
-  contradicted ones. Weights without enough history remain priors — labeled
-  "unproven", not silently trusted.
+- **Hand-set weights.** *Mechanism built in v3, still producing nothing as of
+  2026-08-21.* `brain/calibration.py` scores every curated influences-edge
+  against realized forward returns and is designed to demote the contradicted
+  ones. In production it has issued **0 supported and 0 contradicted verdicts
+  across 643 scored relationships** — `MIN_N = 20` and a typical edge sits at
+  n=16–17, because an edge only scores on days its source node was activated.
+  So every weight in the graph is still the hand-set prior it started as. The
+  "unproven" label is honest and doing its job; the demotion half of the design
+  has never fired. See STATE_OF_THE_SYSTEM §4A.
+- **Expected-move magnitude is saturated.** The global `gain` correcting
+  over/under-shoot is clamped to `[0.25, 2.0]` and sits **at 2.0** — realized
+  moves are at least twice what the graph predicts and the calibrator cannot
+  say how much further. Every `expected_move_pct` the adviser publishes is
+  scaled by that bound, which is what the event sleeve's 32:1 risk/reward
+  argument rests on.
+- **The graph resolves fewer objects than it holds.** 202 distinct response
+  signatures across 462 assets (43.7%); 104 assets are an exact duplicate of a
+  peer because each hangs off one `member_of` edge into a shared theme. For
+  those names the path-sum below has exactly one term and the "cluster" is a
+  sector lookup. Partially compensated (conviction × 1/√group, `brain/adviser.py`
+  `indistinguishable_groups`), not solved — the fix is differentiating wiring.
+  See §4.39.
 - **No belief updating on old events.** A story judged noise is not upgraded
   when a trusted source later confirms it; the confirmation arrives as a NEW
   event instead. Adequate, not elegant.
@@ -414,10 +432,30 @@ evidence loops that keep the offense honest:
    per-source **doom discount**: a source whose fear stories measurably never
    move markets gets its fear-event impulses damped at extraction.
 4. **Emotion calibration** (`brain/emotion_calibration.py`). "Be greedy when
-   others are fearful" is tested, not assumed: mean forward return after
-   panic events vs after euphoria events, t-statted. Honest priors (+0.30 /
-   −0.30) until n≥20 per group, then measured coefficients take over —
-   labeled "prior" vs "measured" in the report.
+   others are fearful" is tested, not assumed — and as of **2026-08-21 the
+   test says no.** Forward EXCESS return after panic events, minus the same
+   statistic for every other non-noise event, Welch's t. Honest priors
+   (+0.30 / −0.30) until n≥20 in both the group and the control, then measured
+   coefficients take over — labeled "prior", "measured", or
+   "measured-contradicted" in the report.
+
+   **What it measured, and what it used to.** The first version compared each
+   emotion group against ZERO, with no benchmark and no control group, and so
+   reported **+1.192% after panic and +1.118% after euphoria** — the same
+   answer, within noise, for opposite emotions — clamping both coefficients to
+   1.0. It had found the window's average forward return. Against a control:
+
+   ```
+   panic_rebound   coef  0.000   lift −0.00038  t −0.24   measured-contradicted
+   euphoria_fade   coef −0.167   lift −0.00115  t −0.50   measured
+   ```
+
+   Panic events return +1.192% against an ordinary event's **+1.230%**. The
+   buy-panic boost was running at its clamped MAXIMUM on a lift of −0.0004; it
+   is now zero. The euphoria fade survives, correctly signed, shrunk from a
+   clamped −1.0 to −0.167. A lift measured OPPOSITE to the hypothesis yields 0,
+   never a backwards coefficient — the composer stops sizing on the claim
+   instead of sizing on its inverse. See STATE_OF_THE_SYSTEM §4.37's family.
 5. **Contrarian composer** (`brain/contrarian.py`). The offense:
    * BUY panic × clean integrity × not-in-a-money-circle × value case
      (value_scanner, or capitulation-deep field as fallback) × stabilization
@@ -468,11 +506,73 @@ strategist's evidence pack includes the contrarian lists, live campaigns,
 per-node crowd emotion, and the reflex-calibration status, so the daily
 challenge sees everything the system knows.
 
+## 4h. Measurement discipline (v5, 2026-08-21) — the layer under everything else
+
+v2 gave the graph direction, v3 scale, v4 offense. v5 fixed the thing all three
+were being *judged* by, after a structural review found that the evidence base
+every previous conclusion rested on was inflated 65-fold. Full write-up in
+`docs/status/BRAIN_REVIEW_2026-08-21.md`; the defects are §4.37–4.40 of the
+failure register. What matters for the design:
+
+1. **The counting unit is (symbol, day), never a row.** `advice_log` is written
+   every cycle, so one standing view was frozen and graded ~126 times against
+   the same forward return: 42,882 rows, 634 real observations. Every row is
+   still written and auditable — `advice_outcomes.is_primary` marks the one that
+   counts. **Anything that computes a hit-rate must filter on it.**
+2. **Overlapping windows are not independent samples.** Daily observations of a
+   5-day forward return share 4/5 of their window, so `n` daily samples carry
+   ~n/5 independent ones. Report both — the gap IS the finding. The one result
+   the review found surviving deduplication (conviction longs, hit 0.622,
+   binomial p=0.026) has **p_effective = 0.48** once the windows are counted.
+3. **A claim graded against zero measures the tape.** `event_outcomes` now
+   carries a benchmark, the same discipline `scorecard.py` adopted for advice.
+4. **A comparative claim needs a control group.** See §4f.4 — the emotion
+   coefficients moved from clamped-maximum to zero on this alone.
+5. **`hit` is Bernoulli; use a binomial test.** A t-test degenerates exactly
+   where evidence is strongest — a symbol that hit 12 of 12 has zero sample
+   variance and drops silently out of any "clears a bar" list.
+
+**Every one of these is now executable rather than remembered:**
+
+```bash
+python3 scripts/brain_audit.py     # reproduces the whole review, read-only
+```
+
+That script exists because the review that found these was written with
+throwaway scripts. A finding you cannot re-measure is a story, not a metric.
+
+## 4i. What the record actually supports, as of 2026-08-21
+
+Stated here because a design document that only describes mechanism invites the
+reader to assume the mechanism works:
+
+- **Fresh positive shocks are the one thing this brain reliably does.**
+  `event_outcomes` impact_sign=+1 hits 0.671 against −1's 0.442, on two
+  independent instruments, corroborated by the event sleeve's +$1,146 realised.
+- **The bearish side is anti-predictive, not merely weak.** Conviction
+  `short_or_avoid` hits 0.383 against non-conviction's 0.493. Three instruments
+  agree. The adviser gate therefore never adds size to a short (it may shrink
+  one), and the calls are not inverted — 0.383 on 47 observations says stop
+  trading it, not trade the other way.
+- **Nothing yet clears a conventional significance bar** once overlapping
+  windows are accounted for. 26 days is 26 days. The design is not disproven;
+  it is unproven, and those are different.
+
 ## 5. Guardrails (don't skip these)
 
-- **LLM-proposed graph edges need periodic review.** An auto-appended relationship
-  can be wrong, stale, or true-in-2025-only. Treat confidence/provenance tags as
-  real — don't let the graph silently calcify around a bad inference.
+- **LLM-proposed graph edges need periodic review — and "a human will review it"
+  is a control only if a human ever does.** Measured 2026-08-21: proposals were
+  arriving at 88.5/week against a spec assuming ≤1, and the review queue built
+  as the control surface reported `reviewed & kept: 0` — never used once, on any
+  edge, ever. Review is a control on QUALITY and needs a person; a **budget** is
+  a control on VOLUME and does not. Both now exist (6/day cap). Check the
+  queue's throughput, not its existence: `scripts/review_edges.py --stats`.
+- **A non-answer is not an entity.** Asked for a counterparty the extractor
+  answers "none", "undisclosed", "multiple banks" — and a node called `none`
+  became the graph's 17th most connected, routing shocks back into TSMC at 0.5
+  through reverse-flowing `owns` edges. Refused by shape now, because a
+  blocklist catches `none` and misses `unnamed_acquirer`.
+  `scripts/review_edges.py --hygiene`.
 - **More signals = more overfitting surface.** The project already gates new
   formula adoption on deflated Sharpe ratio (`learning/walkforward.py`,
   `min_dsr`). `MacroLinkageSignal` goes through that same discipline — it doesn't

@@ -80,6 +80,46 @@ Three safeguards make it *curate, not react*:
 `θ` from RLS lives in the same units as the ridge fit, so the two loops compose: the
 walk-forward run curates a strong starting `θ`, and RLS matures it from live P&L.
 
+### (c) Neither loop has ever run — status 2026-08-21
+
+**This section describes a design, and the design is not operating.** Both
+loops above are implemented and correct; neither has changed a single weight in
+the engine's life. From `data/formula.json` and `journal.db`:
+
+```
+weights   [0.0, 0.02, 0.015, 0.02, 0.03, 0.015, 0.01, 0.008]
+version   1        fitted   false
+rls       n=8, theta bit-identical to the hand-set prior
+outcomes  0 rows          <- the table RLS learns from
+params    20 rows, all identical, all from 2026-08-04
+written   2026-08-13      <- before trend_zscore and regime_persistence existed
+```
+
+Three consequences worth stating plainly:
+
+- **Loop (a) has never been invoked in production.** There is no timer for
+  `--optimize --save` (see §7 Path B), so it runs only when someone types it.
+- **Loop (b) has no input.** `outcomes` is populated from closed trades; it is
+  empty, so RLS has 8 samples and has moved θ by exactly zero.
+- **The saved feature vector is stale.** 8 features — `trend_zscore` (§7) and
+  `regime_persistence` (§8) are computed every cycle and reach `φ`, but are not
+  in the saved model, because the file has not been written since before they
+  were added. Their migration happens on the next save, which has not come.
+
+So the engine trades on hand-set priors and always has. **This is now a
+deliberate hold rather than an oversight** (STATE_OF_THE_SYSTEM §4A): the
+measurement layer those weights would be fitted against was only corrected on
+2026-08-21, and it had been inflating every sample 65-fold. Fitting θ on a
+26-day, single-regime, mis-counted sample is how you get a confidently wrong
+model. The sequence is: let clean observations accumulate, THEN re-curate and
+let the Deflated-Sharpe gate decide. Check with:
+
+```bash
+python3 scripts/brain_audit.py --section learning
+```
+
+which reports `alive` per loop — a loop that has never moved is not a slow loop.
+
 ## 5. Auditability
 Every version of `θ` is written to `data/formula.json` (with RLS state) and logged to
 the `params` table; every learning sample lands in the `outcomes` table. You can

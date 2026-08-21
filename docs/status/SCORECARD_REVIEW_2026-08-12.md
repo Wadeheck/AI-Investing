@@ -1,5 +1,29 @@
 # Scorecard review — first 8 days live (2026-08-04 → 2026-08-12)
 
+> ## ⚠️ SUPERSEDED ON ARITHMETIC — read this first
+>
+> Every `n`, hit-rate and t-statistic below is computed from `advice_outcomes`
+> ROWS. On 2026-08-21 that table was found to hold **~65 rows per real
+> observation**: `advice_log` is written every cycle, so one standing view was
+> frozen and graded ~126 times a day against the same forward return
+> (STATE_OF_THE_SYSTEM §4.37). Sample sizes here are inflated ~65×, and every
+> t-statistic by ~√65 ≈ 8×.
+>
+> **What that changes.** Findings quoted at n in the hundreds or thousands are
+> typically 3–15 distinct observations. Deduplicated, the direction×conviction
+> table reverses back to the 08-12 reading, and the "confirmed working on
+> samples too large to be luck now" list shrinks to two symbols.
+>
+> **What survives.** The method, the per-book P&L pulled apart from its
+> benchmark, the missed-opportunity framing, and most qualitative conclusions —
+> the long side works better than the short side; the event sleeve is the
+> strongest and most fragile result; the flagship book is absence rather than
+> skill. Those were right. The arithmetic under them was not.
+>
+> Current numbers: `python3 scripts/brain_audit.py`. Method:
+> [`../design/AUDITING.md`](../design/AUDITING.md). Superseding review:
+> [`BRAIN_REVIEW_2026-08-21.md`](BRAIN_REVIEW_2026-08-21.md).
+
 First post-mortem of the live books since the 2026-08-04 reset. Source: the
 scorecard's own frozen record on the ProDesk (`data/brain.db`,
 `advice_outcomes` + `event_outcomes`), not a re-simulation. Nothing was

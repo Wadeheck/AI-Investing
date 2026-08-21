@@ -27,24 +27,30 @@ connectivity and nothing more. See §5.1 for exactly what remains unproven.
 
 ## 2. Where it stands today
 
-*Rewritten 2026-08-05. The books were deliberately reset — see §4.15.*
+*Rewritten 2026-08-05; numbers refreshed 2026-08-21 from the live ProDesk state
+via `scripts/brain_audit.py`. **Do not hand-edit these figures** — re-run the
+audit and paste. The previous set had drifted by 182 nodes and 323 edges before
+anyone noticed.*
 
 ```
-GRAPH    420 nodes, 796 curated edges  (seed v37, 2026-08-14, 280 of the nodes
-                                        are assets. STOCK_WATCHLIST and
-                                        CRYPTO_WATCHLIST are both now DERIVED
-                                        from these — 258 tradable stock symbols
-                                        (up from ~80 hand-maintained, §4.25) and
-                                        17 crypto symbols on the ProDesk's
-                                        Gemini feed (up from 13 hand-verified,
-                                        §4.26). Was 372/796 at seed v25, but
-                                        that count included LLM-added edges;
-                                        those are per-instance and not
-                                        re-measured here, see §4.22/§4A)
-BRAIN    6,326 articles, 2,380 events tagged
+GRAPH    602 nodes, 1,119 edges = 802 curated + 317 LLM-proposed  (seed v39)
+                                        462 of the nodes are assets.
+                                        STOCK_WATCHLIST and CRYPTO_WATCHLIST are
+                                        DERIVED from these — 258 tradable stock
+                                        symbols (up from ~80 hand-maintained,
+                                        §4.25) and 17 crypto (§4.26).
+                                        LLM wiring is 28.3% of the graph and now
+                                        capped at 6 new edges/day (§4.38).
+RESOLUTION  202 distinct response signatures across 462 assets = 43.7%.
+                                        198 assets are inert to every macro
+                                        shock; 104 are an exact duplicate of a
+                                        peer. The graph tells apart fewer
+                                        objects than it holds — §4.39.
+BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    36 suites, all green (local AND on the ProDesk AND in CI)
-COMMITS  218
+TESTS    57 files, all green (local AND on the ProDesk) via the project's own
+         `python3 tests/test_x.py` runner — NOT pytest, see §4.40
+COMMITS  285
 
 BOOKS — all four restarted at USD 10,000 on 2026-08-05, by request
   📈 trading   LIVE, routed to a Longbridge PAPER account, $10,000 slice
@@ -140,8 +146,10 @@ The through-line: **almost every failure here was silent, and passed its health
 checks while failing.** Not crashes — wrong answers delivered confidently.
 
 **Index.** §4.1–4.6 predate 2026-08-04. §4.7–4.14 are the phantom-valuation day.
-§4.15–4.21 are the autonomy session. §4.22 is the self-wiring review. §4A is the live
-list of what is still broken — read that one first if something is wrong now.
+§4.15–4.21 are the autonomy session. §4.22 is the self-wiring review.
+**§4.37–4.40 are the 2026-08-21 structural review** — the measurement layer, the
+graph's resolution, and self-wiring's missing control. §4A is the live list of
+what is still broken — read that one first if something is wrong now.
 
 | § | Defect | Root-caused? |
 |---|---|---|
@@ -162,6 +170,10 @@ list of what is still broken — read that one first if something is wrong now.
 | 4.24 | The graph had no way to learn a company exists until a human noticed | ✅ `lists_on` digester path + `graph_gap_scan.py`; still needs a periodic manual sweep (§4A) |
 | 4.25 | The graph and the tradable universe (`STOCK_WATCHLIST`) had silently drifted apart | ✅ `tradable_stock_symbols()`; watchlist now derives from the graph |
 | 4.26 | 9 graph nodes had zero edges; `CRYPTO_WATCHLIST` had the same drift as §4.25 | ✅ all nodes wired; `tradable_crypto_symbols()` added; deployed + verified on the ProDesk |
+| 4.37 | The scorecard counted one standing view 65 times; two reviews drew opposite conclusions from it | ✅ `is_primary` counting unit; both sides of the adviser gate; the reliability EMA |
+| 4.38 | A node called `none` was the graph's 17th most connected node | ✅ refused by shape; 14 found and pruned with tombstones; self-wiring capped at 6/day |
+| 4.39 | The graph resolves 202 objects and holds 462 | ⚠️ **Partial** — conviction discounted by 1/√(group); differentiating wiring is still open curation work |
+| 4.40 | The suite is green under the project runner and red under pytest | ❌ Filed, not fixed — see §4A |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -1740,6 +1752,121 @@ long-only at-risk clause, and the routing refusal — against a stub balance blo
 shaped like the real response, no network. `pytest tests`: 556 passed, the same
 8 pre-existing failures.
 
+### 4.37 The scorecard graded one standing view 65 times, and two reviews drew opposite conclusions from it *(2026-08-21)*
+
+- **What.** `advice_log` is written EVERY CYCLE — ~126 rows/day at a ~10-minute
+  cadence — and `scorecard.score_due()` grades every one of them. So a single
+  standing view ("long NVDA today") was frozen, graded and counted **126 separate
+  times**, against the same forward return, out of the same 5-day window. On the
+  live database: **42,882 graded rows, 634 distinct (symbol, issue-day)
+  observations — 67.6×.**
+- **How found.** Not by a check. By re-deriving the scorecard's own headline
+  table from scratch during a structural review and getting a different answer.
+- **Scale, and it is the whole evidence base.** Every `n` in
+  `SCORECARD_REVIEW_2026-08-12`, `SCORECARD_REVIEW_2026-08-15` and
+  `data/adviser_gate.json` was inflated by this factor; every t-statistic by
+  **√65 ≈ 8×**. The 08-12 review concluded *"the avoid/short side is inverted"*;
+  the 08-15 review reversed that on the "full sample". Deduplicated, the
+  reversal itself reverses — conviction `short_or_avoid` hits 0.383 against
+  non-conviction's 0.493, which is the ORIGINAL finding, intact. It never went
+  away; it was buried under 65× replication of four days of a rising tape.
+- **The near-miss.** `adviser_gate.THRESH["min_n"] = 500` was the
+  anti-overfitting guard on an AUTOMATED control that nudges live position
+  sizing. At 65× it was a bar of **7.7 independent observations**, and
+  `min_days: 30` — the only bar doing real work — was ~15 days from clearing.
+- **The part that should have caught it.** This project had already solved the
+  identical problem ONCE, on the other side of the same comparison:
+  `adviser_gate._formula_short_stats` collapses 56,155 raw decision rows to 359
+  symbol-days and documents the rule it chose. The adviser's own side never got
+  the same treatment. §4.23 and §4.36 have the same shape — a fix applied where
+  the bug was observed and nowhere else.
+- **Fix.** `advice_outcomes` gains `issue_date` + `is_primary`. Every row is
+  still written and auditable; exactly one per (day, symbol) — the FIRST call of
+  that day — may be counted. Migration labels the existing rows in place, never
+  deletes, and runs in 0.1s on the live 194MB database. Both sides of the gate
+  now count observations; `min_n` 500 → 80 in the new unit.
+- **Second-order.** `update_reliability` stepped once per outcome ROW. At 65
+  rows/day and α=0.12 it retained `0.88^65 = 0.00026` of yesterday — a same-day
+  step function, not an EMA. **56 of 122 live symbols sat pinned at a bound**,
+  including `NVDA: r=0.506`, one step off the floor, halving the adviser's
+  conviction on a name the sleeve trades profitably. Now one step per
+  (symbol, day); `reliability.json` re-seeded to neutral, old file retired.
+- **Lesson.** A ledger that never deletes is an audit trail, not a sample. The
+  unit of account has to be declared somewhere, or every consumer invents its
+  own — and two of them will disagree without either noticing.
+
+### 4.38 A node called `none` was the 17th most connected node in the graph *(2026-08-21)*
+
+- **What.** Asked for a counterparty the extractor sometimes has none to give
+  and answers "none". `propose_node` created it. 23 LLM edges accumulated:
+  `skhynix -owns-> none 0.24`, `tsmc 0.50`, `avgo 0.35`,
+  `amazon_alphabet_microsoft` (itself a merged non-entity) `0.50`, `xrp 0.05`.
+- **Why it mattered.** `owns` edges flow **rev** (`EDGE_FLOW`), so any shock
+  landing on `none` flowed back out into TSMC at half strength. A junk collector
+  wired as a transmission hub between semiconductors, megacap tech and XRP.
+- **Scale.** A shape-based filter — not a blocklist, which catches `none` and
+  misses `unnamed_acquirer` — found **14** such nodes carrying 37 edges:
+  `6_unnamed_financial_institutions`, `unnamed_international_bank_syndicate`,
+  `undisclosed_client`, `private_investors`, `multiple_banks`, two Bezos
+  consortia, and the rest.
+- **Fix.** `propose_node` refuses a non-answer by shape;
+  `prune_non_entities()` removes those already admitted and tombstones every
+  edge so the next digest cannot re-add it. Propagation is unchanged
+  (`ai_capex_cycle` still reaches nvda 0.7581, tsmc 0.5858).
+- **And the cause behind it.** Self-wiring was running at **88.5/week — 131 in
+  7 days** — against `DIGESTION_SPEC` §A10's stated assumption of ≤1/week, with
+  `reviewed & kept: 0`. The review queue built in §4.22 as the control surface
+  for exactly this had never been used once, on any edge, ever. So there was no
+  control surface. Review is a control on QUALITY and needs a human; a **budget**
+  is a control on VOLUME and does not. 6/day, and budget-refused edges are
+  deferred rather than tombstoned — nothing was judged wrong, only postponed.
+- **Lesson.** "A human will review it" is a control only if a human ever does.
+  Check the queue's throughput, not its existence.
+
+### 4.39 The graph resolves 202 objects and holds 462 *(2026-08-21)*
+
+- **What.** Probing the live graph with each origin node in turn and grouping
+  assets by their response vector: **202 distinct signatures across 462 assets
+  (43.7%)**. 198 assets are inert to every macro shock. 104 are an EXACT
+  duplicate of a peer — `dbs/ocbc/uob`, `amat/lrcx/klac`, `crwd/panw/cibr`,
+  `nio/xpeng/liauto/gotion/sanhua`, and 13 of 17 crypto alts.
+- **Why.** Each hangs off the same single `member_of` edge into the same theme,
+  so the path-sum BRAIN.md §4d describes has exactly one term and the "cluster"
+  reduces to a sector lookup. The printed causal chain is true of the THEME and
+  carries no per-name information.
+- **What it cost.** `crwd` and `panw` have identical signatures. Over the same
+  window PANW long hit 1.00 (+7.66%) and CRWD short_or_avoid hit 0.00 (+7.16%).
+  Same graph read, opposite calls, opposite outcomes — the differentiation was
+  a coin flip.
+- **Fix (partial, and honest about it).** Field conviction scaled by
+  `1/√(group size)` — the standard correlated-positions adjustment, same
+  reasoning as the fragility dial's √HHI. A view held identically across N names
+  is one view, not N. This does not make the graph smarter; it stops the
+  adviser claiming a precision it does not have. **The real fix is
+  differentiating wiring, and that is curation work, still open.**
+- **What was deliberately NOT done.** FET/BCH/HYPE/ATOM were not added to
+  `CONFIRMED_MISCALIBRATED`. Raw, `FET/USD` long is n=526 at hit 0.00 and looks
+  damning; deduplicated it is **5 distinct days** (BCH 3, HYPE 2, ATOM 13 at
+  p≫0.05). Acting on those would have repeated §4.37 the same day it was fixed.
+  `UNI/USD` stays — 12 days, hit 0.17, binomial p=0.004.
+
+### 4.40 The test suite is green two different ways, and only one of them is checked *(2026-08-21)*
+
+- **What.** All 57 test files pass under the project's own runner
+  (`python3 tests/test_x.py`, each file a fresh process via its `__main__`
+  block). Under `pytest engine/tests/` in one process, **8 fail** — on a clean
+  checkout, unrelated to any recent change.
+- **Cause.** Cross-file state: several tests share a data directory and a
+  module-level `tmp`, and `test_alert_storm.py` asserts against `sys.argv`,
+  which under pytest contains pytest's own arguments.
+- **Why it is filed rather than fixed.** The per-file runner is the project's
+  actual convention and the one CI and the ProDesk use, so nothing is silently
+  broken today. But "all suites green" is stated in two places in this document
+  and it is only true of one runner — and the failing runner is the one a
+  newcomer will reach for first.
+- **Risk.** Low today, but it hides genuine test-isolation debt (§4.21's family)
+  and will mislead the next person who runs pytest and assumes they broke it.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -1748,8 +1875,8 @@ and the register had drifted **13 commits** behind reality.
 
 | Open | Detail | Risk today |
 |---|---|---|
-| **The digester proposes edges 35× faster than the spec assumes** | `DIGESTION_SPEC.md` §A10 justifies applying llm edges automatically because *"a bad proposal is damped by the cap"* and *"Rare: expect ≤1 per week"*. Actual: 96 in 7 days, 35/week over 28. §4.22 built the measurement and the review, which is the symptom; the cause is the digester's proposal bar, and setting it is a judgement about how much self-wiring is wanted — not a bug to be quietly patched. **Unreviewed backlog: 140.** | LLM wiring is 18% of the graph and grows ~35/week against a fixed 656 curated edges. Nothing can grade these (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), so the cap and human review are the whole control surface. Left as it is, self-added wiring outnumbers curated wiring inside a year. |
-| **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested, but no HK/SGX order has ever been placed. The universe stays USD-only until one is, during those market hours. | **Now measured.** Of 33 distinct conviction-long calls (hit 0.742, avg +2.37% over 5d), 21 were never held in any book, averaging +3.01%. The largest were `2899.HK` (+10.6%, +10.0%, +8.5%) and `O39.SI` (+6.0%, +6.0%, +5.2%, +4.1%) — all correct, all blocked by this rule. |
+| **Self-wiring is bounded but still ungraded, and the review queue has never been used** | §4.38, 2026-08-21. The RATE is fixed: a 6/day budget replaced an unbounded stream that had reached **88.5/week — 131 in 7 days**, against §A10's stated ≤1/week. What is NOT fixed: nothing can grade an LLM edge (`calibration.py` skips non-seed edges, and none terminates on a tradable symbol so it could not score them anyway), and `review_edges.py` reports **`reviewed & kept: 0`** — the queue built in §4.22 as the control surface has never been used once, on any edge, ever. Current: **317 LLM edges, 28.3% of the graph, all 317 unreviewed.** | Bounded, not resolved. At 6/day LLM wiring can still reach parity with the 802 curated edges in ~9 months, and the only thing standing between a bad inference and the live field is the 0.6 confidence cap. Deciding the proposal BAR (as opposed to the budget) is still a judgement about how much self-wiring is wanted. |
+| **Non-USD live trading is off** | The FX conversion and HK symbol padding are written and unit-tested. One HK order has now filled (§5); SG, SH and SZ have never had one sent. | **Re-measured 2026-08-21 in the deduplicated unit (§4.37) — the earlier figures on this row were 65× inflated and have been replaced.** Conviction-long hit-rate by market: **KS 0.889 (n=9, +7.4%)**, **T 0.750 (n=4, +4.2%)**, **SI 0.875 (n=8, +1.9%)**, HK 0.562 (n=16), **US 0.551 (n=49, +1.2%)**. The brain's accuracy ranks INVERSELY with its ability to place the order — best in Korea and Tokyo, both unreachable; worst in the US, its only open market. `O39.SI` (7 days, hit 0.86) clears a binomial bar and has never been ordered. Re-run with `scripts/brain_audit.py --section reach`. |
 | **The live position has no venue stop, and nobody knows why** | `place_stop` failed for AAPL on 2026-08-05; the runner recorded only `exchange_stop_unsupported` with no reason and the exception died in a log rotation. The stop price (282.38) was tick-legal, so §4.23 does **not** explain it. Both protective paths now snap to the tick and the reason is journalled + printed as `!! NO VENUE STOP`, so the next attempt will say why — but the current position is still unprotected at the venue. | The one live position relies on the engine's cycle stop, which only fires when a cycle runs — precisely what an overnight gap defeats. Bounded today by the position being a single $307 share. See OPERATIONS → *When the next LIVE order goes out*. |
 | ~~The adviser predicts well; the books do not trade it~~ | **AUTOMATED 2026-08-15** (`brain/adviser_gate.py` + `scripts/adviser_gate_check.py`, daily timer `ai-investing-adviser-gate.timer`). This used to require a human to notice the §4B cue fired and manually decide whether to wire adviser conviction into position sizing. It no longer does: a daily job measures both sides itself (adviser long-side hit-rate vs. formula-engine short/avoid hit-rate, both n≥500 over 30+ days) and writes `data/adviser_gate.json`; `runner.py` reads that cached verdict every cycle and, only once it says `eligible: true`, applies a small BOUNDED nudge (`BLEND_WEIGHT=0.25`, capped at ±1.0 target weight, never an override) via `apply_adviser_gate()`. Checked against real production data on deploy day: **not yet eligible** — adviser n=1,361/hit 0.558/10 days (needs >0.60, 30+ days); formula-engine short n=359/hit 0.415/11 days (needs <0.35, n≥500, 30+ days) — so today it changes nothing, and won't until the evidence, not a person, says so. (Corrected same-day: the first version of this measurement graded formula "short" on the literal "will fall" claim instead of the "avoid"/excess-vs-benchmark rule it should use — same category error the 08-04 fix already corrected for the adviser's own `short_or_avoid` label, see row 6 in the failure register above. Caught before deploy; numbers here are post-fix.) | None today — inert by construction until its own measured thresholds clear, the same anti-overfitting posture as the walk-forward Deflated-Sharpe gate. |
 | ~~`UNI/USD` long was a confirmed defect~~ | **CLOSED 2026-08-15.** n=1,096, hit-rate 6.3%, avg excess −7.1%, worsening not improving — see SCORECARD_REVIEW_2026-08-15. Root cause: no graph node, so none of the causal-chain haircuts (crowding, priced-in, integrity, froth) ever applied. `brain/adviser.py`'s `CONFIRMED_MISCALIBRATED` set now zeroes its score before ranking; deployed and verified on the ProDesk (98a58a6). **Cue to remove the override**: once UNI has a real graph node AND `calibration.py` has scored its edges at n≥20 (`MIN_N`) — see the cues table below. | — |
@@ -1759,6 +1886,11 @@ and the register had drifted **13 commits** behind reality.
 | **7 live-path loaders hardcode `data/`** | `data/{calendar_events,comps,estimates,fundamentals_history,ownership,value_scanner}.py` and `scalp/live.py` build their path from `__file__`, so no caller or test can redirect them (§4.21). All are read-only reference loaders that decide no trade, which is why they were not swept in one change. | A test touching them reads live data and can flip with the market — the §4.21 failure mode. `test_data_path_isolation.py` pins the list so it cannot grow. |
 | **`prices[key] = 0.0` still means "no data"** | The runner encodes a missing bar as zero — a sentinel that means *absent* and reads as *free*. It caused §4.7 and is currently contained by `mark_price()` at every consumer rather than removed at the source. The root fix is to omit the key, which touches every price consumer. | Contained, not gone. A new consumer that forgets `mark_price` reopens §4.7. |
 | **The main book's equity formula can't value a margined leg — it is guarded, not fixed** | §4.36 gave each crypto SLEEVE a venue-read `get_equity()`, because each owns exactly one broker. The main trading book can't do that: `Portfolio.equity(prices)` needs ONE cash figure spanning Longbridge + Binance Futures, and `get_equity()` hands back a finished number with nowhere to blend a marked stock leg into it. So `cash + qty*price` still values the routed book, and it is only true while the crypto leg is 1x and long-only. `RoutingBroker.__init__` now REFUSES anything else (`test_margined_equity.py` pins it), which converts a silent wrong number into a startup failure — it does not make the number right. The real fix is a `Portfolio.equity()` that accepts a per-venue equity override for the legs that have one. | None today: `CRYPTO_FUTURES_LEVERAGE=1`, `RISK_ALLOW_SHORT=false`. The cost is paid the day either needs to change — the engine will refuse to start rather than trade, and shorting crypto from the main book stays blocked until the formula is fixed properly. |
+| **The formula has never learned anything, and now it is deliberate** | §4.28 recorded `journal.db.outcomes = 0 rows` on 2026-08-17; still 0 on 08-21. θ is bit-identical to the hand-set prior, `fitted: false`, RLS `n=8` with zero movement, and `params` holds 20 identical rows all from 2026-08-04. So BOTH loops in FORMULA.md §4 — ridge walk-forward curation and online RLS — have produced no weight change in the engine's entire life. The saved feature vector is also STALE: 8 features, missing `trend_zscore` (added 08-15) and `regime_persistence` (added 08-18), because the file has not been written since before they existed. | **Deliberate as of 2026-08-21, not merely unfixed.** Re-running `--optimize --save` now would fit θ on a 26-day, single-regime sample whose measurement layer was only just corrected (§4.37) — that is how you get a confidently wrong model. The right sequence is: let clean observations accumulate, THEN re-curate and let the Deflated-Sharpe gate decide. The cost of waiting is that the engine keeps running on priors, which it has done from the start. |
+| **The edge calibrator has issued 0 verdicts on 643 relationships, and `gain` is pinned at its ceiling** | `edge_calibration.json`: `supported: 0, contradicted: 0, unproven: 343` (+300 paths). `MIN_N = 20` and a typical edge sits at n=16–17, because an edge only scores on days its source node was activated. BRAIN.md §4d answers the "hand-set weights" limitation by pointing at this module; after 26 days it has demoted nothing and promoted nothing. Separately `gain = 2.0` **is the clamp** (`max(0.25, min(2.0, rm/pm))`), so realized moves are at least 2× the size the graph predicts and the calibrator cannot say how much further — the same blind spot as `RATIO_CLIP` in a different module. | Two-sided. It will start issuing verdicts within days at n=20 — a sample that cannot support the ×1.15/×0.5 adjustments it applies, and one that carries §4.37's overlapping-window problem into `_score_pair`. **Raising `MIN_N` is a judgement call left open rather than made silently.** Meanwhile every `expected_move_pct` the adviser publishes is scaled by a saturated constant, which is exactly what the sleeve's 32:1 risk/reward argument rests on. |
+| **198 assets are inert to every macro shock** | §4.39. The 14 placeholder nodes are gone, but 198 of 462 asset nodes still respond to none of the 81 origin shocks — overwhelmingly LLM-added entity nodes harvested from news copy (`boeing`, `chevron`, `blackrock`, `warner_bros`, `kenya`). They are graph vocabulary that was never wired into the causal field. | Inert nodes are harmless in propagation — they transmit nothing — but they inflate every "the graph knows about N companies" claim, and a tradable among them is scored on the formula leg alone with no causal chain. Triage is curation work: wire the real companies, delete the vocabulary. |
+| **10 live orders rejected `602035`, cause unknown — and the obvious diagnosis is wrong** | On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and HK$34.10; the first two were rejected `602035 Wrong bid size` and the third filled. All three are legal multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34 name, and all three were snapped correctly on the way out. **So this is NOT §4.23 recurring**, and snapping harder would fix nothing. | Unknown cause on a live order path, bounded by the orders being small and by two of three attempts eventually filling. Rather than ship a change that would look like a fix and do nothing, the rejection now carries the tick, the venue reference price and the symbol — the same instrumentation lesson §4.23 taught after eight lost orders, one level deeper. **Next occurrence will say why.** |
+| **The suite is green under the project runner and red under pytest** (§4.40) | All 57 files pass via `python3 tests/test_x.py` (fresh process each). `pytest engine/tests/` in one process fails 8, on a clean checkout. Cause: cross-file state (shared data dir, module-level `tmp`) and `test_alert_storm.py` asserting against `sys.argv`, which under pytest holds pytest's own arguments. | Low today — the per-file runner is what CI and the ProDesk use, so nothing is silently broken. But "all suites green" appears twice in this document and is true of only one runner, and the red one is what a newcomer reaches for first. It also hides real test-isolation debt (§4.21's family). |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
@@ -1786,7 +1918,7 @@ automatically, since several of these are judgement calls, not bugs.
 
 | Open item | Cue to revisit | Where to check |
 |---|---|---|
-| Digester edges 35× spec | LLM-proposed edges cross **328** (half of the 656 curated edges) — at the measured 35/week that's **~2026-09-19**; parity (656) is **~2026-11-26** if the rate holds. | `scripts/review_edges.py --stats` — reports both the backlog and the rate. |
+| ~~Digester edges 35× spec~~ | **NOW SELF-CHECKING** (2026-08-21). `scripts/cue_check.py` + `ai-investing-cue-check.timer` measure LLM edges against the CURRENT curated count daily and notify only on a state change — the cue is no longer dated against a 656 that has since moved, and no longer depends on someone remembering. It had already fired unnoticed at 354 before this was built. | `data/cue_state.json`; Telegram on any flip. |
 | Non-USD live trading off | Not data-gated — this is a deliberate action, not a wait. The cue is choosing to run it: place one small real HK or SG order (e.g. `D05.SI` or `2899.HK`) during HKT/SGT market hours and verify submit → fill → stop → exit, the same proof §5.1 already did for US via `F`. | `docs/status/OPERATIONS.md` → the live-order verification steps used for the US leg; repeat for one non-USD symbol. |
 | Live AAPL position, no venue stop | Fires on its own: the next time a stop-loss placement is attempted for this position, the reason is now journalled (`!! NO VENUE STOP` if it fails again). If the same failure recurs with a tick-legal price, escalate — that would rule out §4.23 a second time and point at something else. | `journal.db orders`, `reason` column, next attempt. |
 | ~~Adviser predicts well; books don't trade it~~ | **No longer a "revisit" row — self-checking.** `ai-investing-adviser-gate.timer` re-measures this exact threshold daily and flips `data/adviser_gate.json`'s `eligible` flag itself; `runner.py` picks up the change on its own next cycle. Nothing for a human to watch for anymore. | `data/adviser_gate.json` (`eligible`, and the measured numbers behind it); Telegram alerts on any flip. |
@@ -1794,7 +1926,7 @@ automatically, since several of these are judgement calls, not bugs.
 | Main book can't value a margined leg | Fires on its own, loudly: the engine refuses to start the moment `CRYPTO_FUTURES_LEVERAGE` leaves 1 or `RISK_ALLOW_SHORT` becomes true while the crypto leg is Binance Futures. Do NOT relax the check to get moving — that is exactly the -$4,265 report coming back on the book the circuit breaker acts on. Teach `Portfolio.equity()` a per-venue equity override instead. | `RoutingBroker._check_equity_is_reconstructable`, and the refusal text in the service log on restart. |
 | `prices[key] = 0.0` sentinel | Not data-gated — schedule as a deliberate one-PR task. **Do it before the non-USD trading gate above is lifted**: a new market multiplies the number of price consumers this sentinel can reach. | `mark_price()` call sites, `git grep "= 0.0"` in `runner.py`. |
 | Main-loop coverage is one smoke test | Same trigger as the sentinel above — **before** the non-USD gate lifts or a new broker adapter (moomoo) goes live. A hot-path change with only a smoke test is exactly how §4.16 shipped a crash loop. | `test_runner_cycle.py` — add scenario coverage before either expansion. |
-| Sleeve's 32:1 risk/reward | Revisit at **whichever comes first**: (a) the sleeve's first 10% stop-out on any single leg — compare that loss against cumulative realised P&L to date (currently +$874.12 across 4 cycles, so a full-size stop ≈ −$349 would dent but not erase it; a second one shortly after would); or (b) **15 completed 2-day cycles** (currently 4) — enough to separate a real edge from a good run. | `data/event_journal.jsonl`, count `event: sell` lines with `reason` starting `clock`. |
+| Sleeve's 32:1 risk/reward | **NOW SELF-CHECKING.** Same two triggers — the first 10% stop-out on any leg, or 15 completed cycles — counted daily by `cue_check.py` instead of by hand. Status 2026-08-21: **16 clock exits, 0 stop-outs, +$1,146.21 realised**. The asymmetry is still completely untested; a good run is not evidence about the tail. | `data/cue_state.json` → `sleeve_risk_reward`; Telegram on the first stop-out. |
 | `RATIO_CLIP` hides severity beyond 3× | Revisit if a **second** freak outcome (`|ratio| > 3`) occurs. One clipped observation (USO) is a design choice protecting against a single freak input; a second starts to matter for whether the calibration gain is seeing the real tail. | `expectations.jsonl`, any row with `ratio_clipped: true`. |
 | Crypto coverage 6/13 is stale | This isn't a "more data" wait — it's just stale arithmetic since §4.26 widened the watchlist 13→17. Re-run the same `no_view` count against the current 17 the next time anyone checks. | `advice()`'s `no_view` list, filtered to `/` symbols. |
 | `trend_zscore` dormant candidate | Re-run `python3 -m ai_investing.backtest.main --optimize --save` periodically (no timer wired for this one, see `docs/design/FORMULA.md` §7 Path B) as real crypto history accumulates past the ~1yr Gemini/ccxt window this was first tested on; flip to trusted only if a future run's Deflated Sharpe clears `settings.learning.min_dsr` (0.60). Path A (online RLS) needs no action — it graduates the weight on its own if the feature turns out predictive. | `data/formula.json` weights, `trend_zscore` entry; `docs/design/FORMULA.md` §7. |
@@ -1813,16 +1945,31 @@ SCORECARD_REVIEW_2026-08-15 §8–9), spelled out with numbers rather than left
 as "needs more data":
 
 - **A genuine down-week for US equities**, defined as a 5-trading-day
-  cumulative SPY return **≤ −3%**. Nothing in the sample since go-live has
-  had one — SPY has been flat-to-up throughout. This is the cue for the
-  long/short conviction asymmetry in SCORECARD_REVIEW §3.
-- **Per-symbol reliability weights**, currently on 11 distinct issuance days
-  (started 2026-07-26). Treat as provisional until **20–30 distinct days**,
-  i.e. roughly **2026-09-04 to 2026-09-14** at the current one-new-day-per-
-  calendar-day pace.
+  cumulative SPY return **≤ −3%**. Still has not happened: the deepest
+  5-day draw since go-live is **−1.77%** (2026-08-21). SPY drifted +0.64%
+  to 08-15 and has fallen −0.77% since. This is the cue for the long/short
+  conviction asymmetry in SCORECARD_REVIEW §3.
+- **Per-symbol reliability weights** — now **17 distinct issuance days** and
+  **634 observations** (2026-08-21; checked daily by `cue_check.py`, fires at
+  20). Two things changed under this cue and both matter: the weights were
+  re-seeded to neutral on 2026-08-21 because the estimator was broken (§4.37),
+  so the clock on *learned* trust restarted; and "observations" now means
+  (symbol, day), not rows — the earlier count was 65× this.
 - **Cross-book correlation for rebalancing**, dated from the 2026-08-05
   reset: a loose read is possible from **~2026-10-05** (2 months), sizing
   capital allocation on it is safe from **~2027-04-05** (8 months).
+
+**How to check any of this without trusting the numbers above:**
+
+```bash
+python3 scripts/brain_audit.py           # every measurement in §4.37–4.39
+python3 scripts/cue_check.py             # which §4B cues have fired
+python3 scripts/review_edges.py --hygiene # placeholder + unwired graph nodes
+```
+
+The first is the important one. Every figure in §2 and §4.37–4.39 came from it,
+and it exists precisely so that the next review does not have to re-derive them
+by hand and get a different answer — which is how §4.37 was found.
 
 ## 5. What is unverified or uncertain
 

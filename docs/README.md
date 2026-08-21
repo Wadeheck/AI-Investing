@@ -31,14 +31,29 @@ python3 scripts/daily_status.py      # every channel, and whether it reaches the
 python3 scripts/breaker.py           # is a book halted, and should it be
 python3 scripts/needs_you.py --show  # what is waiting on you
 python3 scripts/watchdog.py --test   # prove alerts still reach you
-python3 scripts/review_edges.py --stats   # wiring the brain added to itself
 ```
 
-The last one is periodic rather than urgent, and it is the only control over 18%
-of the graph: llm-proposed edges are applied automatically (DIGESTION_SPEC §A10)
-and the evidence calibrator cannot reach them. `--stats` reports the proposal
-**rate** as well as the backlog — the rate is the number that says whether §A10's
-design premise still holds, and it currently does not (§4A).
+**Is the brain still measuring itself honestly?** That is a different question
+from "is it running", and it has its own instrument:
+
+```bash
+python3 scripts/brain_audit.py            # every measurement, read-only
+python3 scripts/cue_check.py              # which §4B cues have fired
+python3 scripts/review_edges.py --stats   # wiring the brain added to itself
+python3 scripts/review_edges.py --hygiene # placeholder + unwired graph nodes
+```
+
+`brain_audit.py` reproduces every number in `BRAIN_REVIEW_2026-08-21` against
+whatever is true today. **Run it before writing or believing any review** —
+[`design/AUDITING.md`](design/AUDITING.md) explains why, and what each of the
+five traps cost this project when it was missed.
+
+`review_edges --stats` is periodic rather than urgent, and it is one of two
+controls over 28% of the graph: llm-proposed edges are applied automatically
+(DIGESTION_SPEC §A10) and the evidence calibrator cannot reach them. The other
+control is a 6/day budget added in §4.38, after the measured rate turned out to
+be 88.5/week against a spec assuming ≤1 — with the review queue reporting
+`reviewed & kept: 0`, never used once.
 
 The two most likely alerts have their own runbook sections in OPERATIONS.md:
 **🛑 CIRCUIT BREAKER** (do not just clear it — cross-check the marks first) and
@@ -51,20 +66,32 @@ The two most likely alerts have their own runbook sections in OPERATIONS.md:
 Kept current. If reality changes, these change with it.
 
 - **STATE_OF_THE_SYSTEM.md** — architecture, the failure register, and the
-  ranked list of what has never been verified.
+  ranked list of what has never been verified. The figures in §2 come from
+  `brain_audit.py`; re-run and paste, never hand-edit.
 - **OPERATIONS.md** — the runbook.
 - **SCORECARD_REVIEW_2026-08-12.md**, **SCORECARD_REVIEW_2026-08-15.md** —
   periodic post-mortems of the live scorecard: is the brain's edge real or
   beta, per-book P&L pulled apart from the market it traded in, missed
   opportunities, what's confirmed working on a large enough sample to trust.
   Read the newest one first; each names what changed since the last.
+- **BRAIN_REVIEW_2026-08-21.md** — ⭐ the structural review: is the brain
+  *modelled* correctly, is there enough evidence to update it, what has it
+  missed. Found that the evidence base both scorecard reviews above rested on
+  was inflated 65×, and that the graph tells apart fewer objects than it holds.
+  **The two scorecard reviews are superseded on every `n` and t-statistic they
+  quote** — their qualitative findings survive, their arithmetic does not.
+  §10 records what was fixed and what was deliberately left alone.
 
 ## `design/` — how the system is built and why
 
 Durable design intent. Changes only when the design changes.
 
 - **BRAIN.md** — knowledge-graph semantics: origin-node tagging, propagation,
-  decay, regime gating.
+  decay, regime gating. §4h/§4i are the honest current status — what the record
+  supports and what it does not.
+- **AUDITING.md** — ⭐ how to measure this system without fooling yourself. The
+  five traps, each with what it cost when it was missed, and the one command
+  that checks all of them. **Read before writing a review.**
 - **LEARNING.md** — the learning spine. Reward/penalty contract, uncertainty as
   the governor, regime conditioning, capital allocation. Read before touching
   anything that adapts.
@@ -78,9 +105,10 @@ Durable design intent. Changes only when the design changes.
 ## `data-pipeline/` — getting the world into the brain
 
 - **SONNET_DIGEST_BRIEF.md** — ⭐ the live operational prompt for the corpus
-  digester, injected verbatim. **v1.5, 128 taggable nodes / 51 themes —
-  verified against seed v25 on 2026-08-03.** If this changes, re-run the
-  golden-set audit (§15) before trusting any output.
+  digester, injected verbatim. **v1.6 (2026-08-18); the graph it describes is
+  now seed v39.** Its own §15 golden-set audit has NOT been re-run since v1.5,
+  which its own rules require — see STATE_OF_THE_SYSTEM §4A. Treat its node
+  coverage as unverified until it is.
 - **DIGESTION_SPEC.md** — the *design* behind digestion: division of labour
   between the tagging AI and the maths. The brief above is what actually runs;
   this is why it looks the way it does.
@@ -116,7 +144,8 @@ today.
 - `HANDOFF_2026-07-31.md`, `HANDOFF_2026-08-02.md` — session snapshots.
 - `UPGRADE_LOG_2026-07-30.md` — one upgrade round.
 - `NODE_GRAPH_GAP_ANALYSIS.md` — drove seed expansion from 173 nodes; the graph
-  is now 321.
+  is now 602 (of which 198 assets are inert to every macro shock, so node COUNT
+  has stopped being the interesting number — see AUDITING.md §4).
 - `TRAINING_RECORD.md` — stops before R22–R37, the rounds that produced the
   current system.
 
