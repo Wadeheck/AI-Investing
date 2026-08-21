@@ -79,6 +79,7 @@ class Runner:
         self._first_cycle = True
         self._cycles = 0
         self._last_mark_day = None      # None = not yet seeded from the journal
+        self._last_mark_basis = None    # ditto: seeded from the file, not memory
         self._run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self._submitted: set[str] = set()      # idempotency: client order IDs sent this run
         self._last_positions: dict[str, float] | None = None
@@ -1579,11 +1580,25 @@ class Runner:
                 if last:
                     # read the SGT `day` field, never ts[:10] — ts is UTC, and
                     # the two disagree for the 8h that SGT is already tomorrow
-                    self._last_mark_day = json.loads(last).get("day", "")
+                    row = json.loads(last)
+                    self._last_mark_day = row.get("day", "")
+                    # Seed the previous BASIS from the file too, for the reason
+                    # this block already gives about the day: an in-memory-only
+                    # value forgets across the nightly poweroff, and forgetting
+                    # it means the one row that should carry `basis_changed`
+                    # silently does not.
+                    self._last_mark_basis = row.get("basis")
             except (OSError, json.JSONDecodeError):
                 self._last_mark_day = ""
         if self._last_mark_day == today:
             return
+        # Read it BEFORE the row is built, so a basis that cannot be read fails
+        # here rather than half-way through writing the line.
+        try:
+            basis = self._book_basis()
+        except Exception:
+            basis = "unknown"     # never take a cycle down for the record's sake
+        prev_basis = getattr(self, "_last_mark_basis", None)
         try:
             with open(path, "a") as fh:
                 fh.write(json.dumps({
@@ -1594,8 +1609,18 @@ class Runner:
                     "stale_marks": state.get("stale_marks"),
                     "trades_learned": self.samples_seen,
                     "halted": bool(halted),
+                    # §4.14, and the fifth journal to get it. `BookBasisMixin`
+                    # gave the four per-book strategies a declared basis; THIS
+                    # curve — the one the watchdog and daily_status read — was
+                    # still inferring. An equity journal is a curve, and a
+                    # change of BOOK looks exactly like a crash to everything
+                    # reading it. Declared, never inferred.
+                    "basis": basis,
+                    **({"basis_changed": {"from": prev_basis, "to": basis}}
+                       if prev_basis is not None and prev_basis != basis else {}),
                 }) + "\n")
             self._last_mark_day = today
+            self._last_mark_basis = basis
         except OSError:
             pass          # the record is never worth failing a cycle over
 

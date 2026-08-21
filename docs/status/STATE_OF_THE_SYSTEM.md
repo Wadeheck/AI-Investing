@@ -48,7 +48,7 @@ RESOLUTION  202 distinct response signatures across 464 assets = 43.5%.
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    66 files / 678 tests, green under BOTH runners (the project's own
+TESTS    65 files / 682 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
          machines, and under random ordering — see §4.40 and §4.46
 COMMITS  304
@@ -211,6 +211,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.49 | A number that is not valid JSON survived every restart, in every state file | ✅ `allow_nan=False` on write, non-finite refused on read, and the 0.0 price sentinel removed from the shadow path too |
 | 4.50 | A cleanup rule I wrote deleted Procter & Gamble from the live graph | ✅ `&` survives normalisation as `and`; node and edge restored; every `is_non_entity` caller must pass a type |
 | 4.51 | "The model under-predicts by 14x" was noise; and every equity claim was sized off one 2% constant | ✅ Gains NOT raised, with the noise floor now audited beside the ratio; `_shock_assets` enriched so vol is the asset's own |
+| 4.52 | The basis cue fired negative: the runner's own equity journal was the fifth path | ✅ `stock_journal.jsonl` marks now declare `basis` + `basis_changed`, seeded from the file |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2418,6 +2419,47 @@ directional hit rate                      0.526  (n=19 — a coin flip)
   "panic rebound" did; this needed a noise floor. Three times now the same
   correction: **compared with what?**
 
+### 4.52 The basis cue fired negative, and it was right to *(2026-08-22)*
+
+- **The cue.** §4A carried the declared book basis as *"wired but not yet
+  observed in production"*, with the cue **"the next daily mark"** and an
+  explicit instruction: *if a mark lands without `basis`, treat that as a live
+  defect, not a timing artefact.*
+- **It landed without one.** First mark after the deploy:
+
+```
+stock_journal.jsonl   ... "event": "mark", "equity": 10001.71 ...      no basis
+invest_journal.jsonl  ... "event": "mark", "basis": "BookBroker:book"  DECLARED
+```
+
+- **What made it a real gap rather than a timing artefact** was the second line.
+  The investing book declared its basis on the *same cycle*, so the mixin
+  demonstrably works — which meant the missing one was a path, not a delay.
+- **Cause.** `BookBasisMixin` was applied to the four per-book strategies.
+  `stock_journal.jsonl` is written by the **runner**, not by a book, and is a
+  fifth journal nobody counted. It is also the one that matters most: the
+  watchdog and `daily_status.py` read that curve. The runner already had
+  `_book_basis()` and was already feeding it to `CircuitBreaker.ensure_basis` —
+  it simply never went into the row.
+- **Sixth instance of one-of-N-paths-fixed**, after §4.14, §4.23, §4.36, §4.49,
+  §4.51. §4.14's own fix was for the runner's breaker; the mixin later covered
+  the four books; between them, the runner's own *journal* was the seam.
+- **Fix.** The mark now carries `basis`, plus `basis_changed` on the row where
+  it moves — which is the load-bearing half: it turns a −50% step in the curve
+  from something to explain into something already explained, at the exact row
+  where it happened. The previous basis is seeded **from the file**, not from
+  memory, for the reason the day-seeding block immediately above it already
+  gives about itself: the nightly poweroff makes restarts a daily event here,
+  and an in-memory value forgets. An unreadable basis degrades to `"unknown"`
+  rather than raising — the record is never worth failing a cycle over.
+- **Three mutations verified.**
+- **Lesson, and it is about the cue rather than the code.** This is the first
+  time a §4B cue has fired **negative** and been believed. The temptation was to
+  read "no basis yet" as "the daily mark has not run", which was true the
+  evening before and false the morning after. **A cue is only worth writing if
+  its negative answer is written down too** — that row said in advance what a
+  missing field would mean, so there was nothing left to argue about.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2454,7 +2496,7 @@ and the register had drifted **13 commits** behind reality.
 | **The 258-symbol watchlist is pushing one LLM endpoint toward its free daily cap** (§4.25) | `vgxfw` hit 40% of its 5M free daily tokens by mid-afternoon on the first day the graph-derived watchlist went live, projected to ~102% by day end. Rotation onto other endpoints is automatic and fails open, so nothing breaks — but if every endpoint in a chain crosses its free tier, calls start costing a small real amount silently. Still climbing as of §4.26's deploy: 50.4% a few hours into that day, before the +4 crypto symbols added any further load — worth actually checking whether it settles or keeps trending, not just noting it again. | Cost, not correctness. Watch `daily_status.py` for a few more days to see if usage settles as caches warm up, or keeps trending toward the cap. |
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
-| **The declared book basis is wired but has not yet appeared in a live mark** | 2026-08-21. `BookBasisMixin` is mixed into all five books and `_basis_fields()` is called at every mark site (verified by grep and by `test_book_basis.py`), but an equity mark is written **once a day**, and the last one on the box (`stock_journal.jsonl`, 2026-08-20T16:01Z) predates the deploy. `brain_audit.py` still reports `basis: (undeclared)` for all five books, and the live state files have no `basis` key yet. | Low, and self-resolving — but it is **unverified in production**, which is a different claim from "fixed", and this document has been burned by that difference before (§4.19, §4.32). Do not mark §4.14's per-book extension proven until a real mark line carries it. **Cue: the next daily mark.** |
+| ~~The declared book basis has not appeared in a live mark~~ | **CLOSED 2026-08-22 — the cue fired NEGATIVE and was right (§4.52).** The investing book declared `"basis": "BookBroker:book"` on the first mark after deploy, proving the mixin works; `stock_journal.jsonl` did not, because it is written by the **runner**, not by a book — a fifth journal nobody counted, and the one the watchdog and `daily_status.py` actually read. Now declared there too, with `basis_changed` on the row where it moves and the previous value seeded from the file rather than memory (the nightly poweroff makes restarts a daily event). Three mutations verified. | — |
 | ~~`shadow.json` held `NaN` cash~~ | **CLOSED 2026-08-21 — and the root cause was not in the shadow book.** `NaN`/`Infinity` are **not valid JSON**, but Python's encoder emits them and its decoder reads them back, so one non-finite number entering ANY state file **persisted across every restart forever** — and silently, because NaN compares false to everything, so `if cash < 0: halt` never fires. Three layers now, each mutation-tested on its own: **WRITE** — `atomic.write_json(allow_nan=False)` refuses it, and because serialisation happens before the file is touched the previous good state survives (verified, not assumed). **READ** — `atomic.read_json` refuses the three non-finite tokens, so a file written by an older build cannot re-admit what the writer now refuses to create. **SOURCE** — `_shadow_fill` used `prices.get(key, 0.0)`, the same sentinel §4A removed from the LIVE path and left here; it now drops an unpriced order. `_load_shadow` also rebuilds rather than inheriting a non-finite cash. Scanned the live box first: **no state file currently holds one**. `test_shadow_arithmetic.py`, 8 cases. | — |
 | ~~`_reconcile_shared()` can latch on a fill that resolves itself~~ (§4.35) | **CLOSED 2026-08-21.** The latch is now re-tested from live data every cycle instead of being cleared only by an operator restart. A drift caused by a pending order mid-settlement clears itself once `resolve_pending()` catches up, and the engine resumes on its own — which is what cost a ~40-minute four-book outage on 2026-08-19. A REAL ownership disagreement keeps failing the re-check and keeps the engine halted, with no timeout and no retry budget, because that is the one thing this check exists to prevent. The re-check is `quiet`: it never re-journals or re-alerts, so a genuinely halted book does not become §4.20's fifteen-pages-in-ninety-minutes. Four cases pinned in `test_shared_drift_latch.py`. | The second half of §4.35 remains: while genuinely halted the book's state file stops being written, so file-based checks (`daily_status.py`, `watchdog.py`) can still report a stale claim. Much smaller now that self-resolving halts end by themselves. |
 
@@ -2470,7 +2512,7 @@ automatically, since several of these are judgement calls, not bugs.
 
 | Open item | Cue to revisit | Where to check |
 |---|---|---|
-| Declared book basis not yet seen live (§4A) | **The next daily equity mark**, and nothing else. If a mark line lands without a `basis` field, the wiring is not doing what the grep says it does — treat that as a live defect, not a timing artefact. | `tail -1 data/stock_journal.jsonl` and `data/crypto_journal.jsonl`; or `brain_audit.py --section books`, where `basis` must stop reading `(undeclared)`. |
+| ~~Declared book basis not yet seen live~~ | **FIRED 2026-08-22, and the answer was NO — §4.52.** The mark landed without `basis`, which this row had said in advance would mean a live defect rather than a delay. It was: the runner's own journal was a fifth path the mixin never covered. Kept here as the first §4B cue to fire negative and be believed — **a cue is only worth writing if its negative answer is written down too.** | — |
 | Edge calibrator's first verdicts (§4.47) | `MIN_N = 60` at roughly one scoreable day per edge per activation puts the first verdicts about **2 months out (~mid-October 2026)**. When they arrive, read the FIRST batch by hand before trusting the next — a bar chosen on reasoning is still a bar nobody has watched fire. Check `structural` and `n_independent` are populated on every verdict. | `data/edge_calibration.json` → `supported` / `contradicted` leaving 0; `brain_audit.py --section learning`. |
 | The two saturated gain clamps (§4.45, §4.47, §4.51) | **Decided 2026-08-22: hold, and the old cue was wrong.** Waiting for 50 settled claims would not have helped — more samples of a signal-to-noise ratio give a better estimate of the NOISE, not a reason to raise the gain. The cue that would actually matter is the ratio falling **below** its noise floor while the hit rate rises, which is a graph-wiring outcome, not a sample-size one. | `data/expectations.jsonl` (count `state: settled`); `data/learning_state.json` → `abs_ratio`; `edge_calibration.json` → `gain`, `gain_saturated`. |
 | ~~Digester edges 35× spec~~ | **NOW SELF-CHECKING** (2026-08-21). `scripts/cue_check.py` + `ai-investing-cue-check.timer` measure LLM edges against the CURRENT curated count daily and notify only on a state change — the cue is no longer dated against a 656 that has since moved, and no longer depends on someone remembering. It had already fired unnoticed at 354 before this was built. | `data/cue_state.json`; Telegram on any flip. |

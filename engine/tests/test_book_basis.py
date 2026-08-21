@@ -106,6 +106,55 @@ def test_all_four_books_carry_the_rule():
         assert issubclass(cls, BookBasisMixin), f"{cls.__name__} has no declared basis"
 
 
+
+# --- the fifth journal: the runner's own equity curve (§4.14, found 2026-08-22) ---
+
+def test_the_runners_own_mark_declares_its_basis():
+    """`BookBasisMixin` gave the four per-book strategies a declared basis and
+    `stock_journal.jsonl` — the curve the watchdog and `daily_status.py`
+    actually read — was still inferring.
+
+    Caught by the §4A cue firing NEGATIVE: the first mark written after the fix
+    deployed carried no `basis`. The investing book's mark on the same cycle
+    did (`"basis": "BookBroker:book"`), which is what made it a real gap rather
+    than a timing artefact — one of five paths, again.
+    """
+    import ast
+    src = Path(__file__).resolve().parents[1] / "ai_investing" / "runner.py"
+    fn = next(n for n in ast.walk(ast.parse(src.read_text()))
+              if isinstance(n, ast.FunctionDef) and "mark" in n.name.lower()
+              and "stock_journal.jsonl" in ast.unparse(n))
+    body = ast.unparse(fn)
+    assert '"basis"' in body or "'basis'" in body, \
+        "the runner's daily mark does not declare which book it belongs to"
+    assert "basis_changed" in body, \
+        ("a change of basis must be marked ON the row where it happens — that "
+         "is what turns a -50% step from something to explain into something "
+         "already explained")
+    assert "_book_basis" in body, "the basis must come from the declaration, not be inferred"
+
+
+def test_the_runners_previous_basis_is_seeded_from_the_file():
+    """An in-memory-only value forgets across the nightly poweroff — which on
+    this box is a DAILY event — and forgetting it means the one row that should
+    carry `basis_changed` silently does not. The same reasoning the day-seeding
+    block right above it already gives for itself."""
+    import ast
+    src = (Path(__file__).resolve().parents[1] / "ai_investing" / "runner.py").read_text()
+    assert 'self._last_mark_basis = row.get("basis")' in src, \
+        "the previous basis is not recovered from the journal on restart"
+
+
+def test_an_unreadable_basis_does_not_take_the_cycle_down():
+    """The record is never worth failing a cycle over — the same rule the
+    surrounding `except OSError: pass` already applies to the write."""
+    src = (Path(__file__).resolve().parents[1] / "ai_investing" / "runner.py").read_text()
+    i = src.index("stock_journal.jsonl")
+    window = src[i:i + 3000]
+    assert 'basis = "unknown"' in window, \
+        "a basis that cannot be read must degrade to 'unknown', not raise"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
