@@ -27,6 +27,36 @@ HORIZON_DAYS = 5           # a directional call is judged against the move over 
 DEADBAND = 0.003           # |move| under 0.3% is noise — excluded, not claimed
 R_MIN, R_MAX, R_ALPHA = 0.5, 1.4, 0.12
 
+# ------------------------------------------------------- the counting unit --
+# WHY THIS EXISTS. `advice_log` is written EVERY CYCLE — ~126 rows/day at a
+# ~10-minute cadence — and this module grades every one of them. So a single
+# standing view ("long NVDA today") was frozen, graded and counted 126 separate
+# times, against the same forward return, out of the same 5-day window. On
+# 2026-08-21 the production table held 38,900 graded rows and **598** distinct
+# (symbol, issue-day) observations: an inflation factor of 65x.
+#
+# Nothing downstream could see it. Two scorecard reviews reached OPPOSITE
+# conclusions about the short side because both read the inflated n; every
+# t-statistic derived from it was ~sqrt(65) = 8x too large; and
+# `adviser_gate.THRESH["min_n"] = 500` — an anti-overfitting guard — was really
+# a bar of 7.7 independent observations.
+#
+# Note this project had already solved the identical problem ONCE, on the other
+# side of the same comparison: `adviser_gate._formula_short_stats` collapses
+# 56,155 raw decision rows to 359 symbol-days and documents the choice of rule.
+# The adviser's own side never got the same treatment. Same shape as §4.23 and
+# §4.36 — a fix applied where the bug was observed and nowhere else.
+#
+# The fix keeps the ledger's promise (nothing is deleted, mistakes stay on the
+# record) and adds the missing unit of account: every row is still written, and
+# exactly one row per (issue-day, symbol) is flagged `is_primary`. Statistics
+# read the primary rows; the audit trail keeps all of them.
+#
+# WHICH row is primary: the FIRST call of the day, by rowid. It is deterministic,
+# it is the earliest point the view was actionable, it cannot be moved by
+# re-issuing the same view later in the day, and it lets a row be graded as soon
+# as it comes due instead of waiting for the day to close.
+
 # --------------------------------------------------------------- benchmarks --
 # WHY THIS EXISTS. Until 2026-08-04 a call was graded on its ABSOLUTE move, and
 # `short_or_avoid` was graded as if it had predicted a fall:
@@ -135,14 +165,45 @@ class Scorecard:
                     "ALTER TABLE advice_outcomes ADD COLUMN excess_ret REAL",
                     "ALTER TABLE advice_outcomes ADD COLUMN hit_abs INTEGER",
                     "ALTER TABLE advice_outcomes ADD COLUMN basis TEXT",
-                    "ALTER TABLE advice_outcomes ADD COLUMN is_conviction INTEGER"):
+                    "ALTER TABLE advice_outcomes ADD COLUMN is_conviction INTEGER",
+                    # v6: the counting unit (see the module header). issue_date is
+                    # the SGT calendar day the call was issued — the same day-key
+                    # the rest of this module uses; is_primary marks the one row
+                    # per (issue_date, symbol) that statistics may count.
+                    "ALTER TABLE advice_outcomes ADD COLUMN issue_date TEXT",
+                    "ALTER TABLE advice_outcomes ADD COLUMN is_primary INTEGER"):
             try:
                 self.conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
         self.conn.execute("UPDATE advice_outcomes SET basis='absolute' WHERE basis IS NULL")
+        self._backfill_primary()
         self.conn.commit()
         self.rel_path = os.path.join(data_dir, "reliability.json")
+
+    def _backfill_primary(self) -> None:
+        """One-time: label the 42,674 rows written before the counting unit
+        existed. Rows are never deleted or re-graded — only labelled."""
+        if not self.conn.execute(
+                "SELECT 1 FROM advice_outcomes WHERE issue_date IS NULL LIMIT 1").fetchone():
+            return
+        # SGT day, matching _today_sgt() and score_due()'s issue_date.
+        self.conn.execute(
+            "UPDATE advice_outcomes SET issue_date = date(ts_issued, '+8 hours') "
+            "WHERE issue_date IS NULL")
+        self.conn.execute("""
+            UPDATE advice_outcomes SET is_primary = 0 WHERE is_primary IS NULL""")
+        self.conn.execute("""
+            UPDATE advice_outcomes SET is_primary = 1 WHERE rowid IN (
+                SELECT MIN(rowid) FROM advice_outcomes GROUP BY issue_date, symbol)""")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outcomes_day "
+            "ON advice_outcomes(issue_date, symbol)")
+        n = self.conn.execute(
+            "SELECT COUNT(*), SUM(is_primary) FROM advice_outcomes").fetchone()
+        print(f"  scorecard: labelled the counting unit — {n[0]} graded rows collapse "
+              f"to {n[1]} distinct (day, symbol) observations "
+              f"({(n[0] / n[1]) if n[1] else 0:.1f}x replication, now excluded from stats)")
 
     def close(self) -> None:
         self.conn.close()
@@ -233,6 +294,12 @@ class Scorecard:
                 bench_ret = (b1 / b0 - 1.0) if (b0 and b1) else None
                 excess = (ret - bench_ret) if bench_ret is not None else None
 
+                # The counting unit (module header): every row is written, but
+                # only the FIRST row per (issue_date, symbol) may be counted.
+                is_primary = int(not self.conn.execute(
+                    "SELECT 1 FROM advice_outcomes WHERE issue_date=? AND symbol=? LIMIT 1",
+                    (issue_date, sym)).fetchone())
+
                 hit = verdict(direction, ret, excess)
                 # absolute verdict kept alongside, so "did it go up" stays visible
                 hit_abs = None
@@ -244,16 +311,17 @@ class Scorecard:
                     "INSERT INTO advice_outcomes"
                     "(advice_id,symbol,direction,ts_issued,horizon_days,realized_ret,hit,"
                     " scored_at,bench_symbol,bench_ret,excess_ret,hit_abs,basis,"
-                    " is_conviction)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " is_conviction,issue_date,is_primary)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (aid, sym, direction, ts, horizon_days, round(ret, 5), hit, now,
                      bench, None if bench_ret is None else round(bench_ret, 5),
                      None if excess is None else round(excess, 5), hit_abs, basis,
-                     int(bool(t.get("_conv")))))
+                     int(bool(t.get("_conv"))), issue_date, is_primary))
                 out.append({"symbol": sym, "direction": direction, "ret": ret, "hit": hit,
                             "bench": bench, "bench_ret": bench_ret, "excess": excess,
                             "hit_abs": hit_abs, "basis": basis,
-                            "conviction": bool(t.get("_conv"))})
+                            "conviction": bool(t.get("_conv")),
+                            "primary": bool(is_primary)})
         self.conn.commit()
         # A benchmark with no price history silently downgrades every call in that
         # market back to absolute grading — the exact failure this change exists to
@@ -271,7 +339,21 @@ class Scorecard:
 
     # ---------------------------------------------------------------- learn --
     def update_reliability(self, outcomes: list[dict]) -> list[str]:
-        """EMA per-symbol trust from scored outcomes. Returns plain-language changes."""
+        """EMA per-symbol trust from scored outcomes. Returns plain-language changes.
+
+        ONE STEP PER (symbol, day) — see the module header on the counting unit.
+        This loop used to step once per outcome ROW, and rows arrived ~65x per
+        symbol-day, so the EMA took 65 steps a day and retained 0.88^65 = 0.00026
+        of yesterday. That is not an exponential moving average; it is a same-day
+        step function that slams to R_MIN or R_MAX on the latest result. It
+        showed: on 2026-08-21, 56 of 122 symbols (46%) sat pinned at a bound, and
+        NVDA — a name the sleeve trades profitably and the graph reaches over 572
+        paths — carried r=0.506, one step off the floor, multiplying the adviser's
+        conviction on it by half.
+
+        With alpha=0.12 and one step per day, r now has a ~5-6 day half-life:
+        long enough to hold a view, short enough to change one.
+        """
         try:
             with open(self.rel_path) as fh:
                 rel = json.load(fh)
@@ -281,6 +363,8 @@ class Scorecard:
         for o in outcomes:
             if o["hit"] is None:
                 continue
+            if not o.get("primary", True):
+                continue          # a re-issue of a view already counted today
             r = rel.get(o["symbol"], {}).get("r", 1.0)
             n = rel.get(o["symbol"], {}).get("n", 0)
             target = R_MAX if o["hit"] else R_MIN
@@ -317,7 +401,10 @@ class Scorecard:
         rows = self.conn.execute(
             "SELECT symbol, direction, realized_ret, hit, excess_ret, bench_symbol, "
             "       COALESCE(basis,'absolute'), COALESCE(is_conviction,1) "
-            "FROM advice_outcomes WHERE scored_at >= ? AND hit IS NOT NULL",
+            "FROM advice_outcomes WHERE scored_at >= ? AND hit IS NOT NULL "
+            # one observation per (day, symbol) — see the module header. Without
+            # this every n here was ~65x the real sample.
+            "  AND COALESCE(is_primary,1)=1",
             (cutoff,)).fetchall()
 
         def rate(sel):

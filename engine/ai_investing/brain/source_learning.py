@@ -27,6 +27,8 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from ai_investing.brain.scorecard import benchmark_for
+
 HORIZON_DAYS = 5
 DEADBAND = 0.003
 MIN_N = 10                 # decided outcomes before learned trust is blended in
@@ -53,6 +55,45 @@ CREATE TABLE IF NOT EXISTS event_outcomes (
   PRIMARY KEY (event_id, symbol));
 """
 
+# v2 columns: benchmark-relative grading. See _migrate() and score_events().
+_V2_COLUMNS = (
+    "ALTER TABLE event_outcomes ADD COLUMN bench_symbol TEXT",
+    "ALTER TABLE event_outcomes ADD COLUMN bench_ret REAL",
+    "ALTER TABLE event_outcomes ADD COLUMN excess_ret REAL",
+    "ALTER TABLE event_outcomes ADD COLUMN hit_abs INTEGER",
+    "ALTER TABLE event_outcomes ADD COLUMN basis TEXT",
+)
+
+
+def _migrate(conn) -> None:
+    """Add the benchmark columns; tag pre-existing rows as absolute-graded.
+
+    WHY. Until 2026-08-21 an event's prediction was graded against ZERO —
+    `hit = 1 if sign * ret > 0`. In a tape with any drift that measures the
+    drift, not the call. `brain/scorecard.py` learned this exact lesson on the
+    advice side in August (see its `_BENCH` comment: a blended 0.404 hit-rate
+    "sat unexplained in the docs for days because of it") and event_outcomes
+    never got the same treatment.
+
+    What it cost: `emotion_calibration.py` reported +1.19% mean return after
+    PANIC events and +1.12% after EUPHORIA events — the same answer, within
+    noise, for opposite emotions — and clamped both coefficients to 1.0. It had
+    found the sample's average forward return and called it an emotion effect.
+
+    The 25,268 rows already scored keep their verdicts and are tagged
+    basis='absolute', so the two eras are reported separately rather than
+    blended — the same discipline the scorecard's v5 migration used.
+    """
+    for ddl in _V2_COLUMNS:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass                           # column already exists
+    try:
+        conn.execute("UPDATE event_outcomes SET basis='absolute' WHERE basis IS NULL")
+    except sqlite3.OperationalError:
+        pass
+
 
 def _trust_path(settings) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(settings.brain.db_path)),
@@ -74,6 +115,7 @@ def score_events(settings, graph, horizon: int = HORIZON_DAYS, batch: int = BATC
     try:
         conn = sqlite3.connect(settings.brain.db_path)
         conn.executescript(_SCHEMA)
+        _migrate(conn)
     except sqlite3.Error:
         return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(days=horizon)).isoformat()
@@ -92,13 +134,14 @@ def score_events(settings, graph, horizon: int = HORIZON_DAYS, batch: int = BATC
         placeholder = False
         if not nodes or abs(pulse) < 0.02:
             placeholder = True             # unscoreable — record so it's not retried
-        scored_syms: list[tuple[str, int, float | None, int | None]] = []
+        scored_syms: list[tuple] = []
         if not placeholder:
             impacts, _, _ = graph.propagate({n: pulse for n in nodes if n in graph.nodes})
             assets = sorted(graph.asset_impacts(impacts).items(),
                             key=lambda kv: -abs(kv[1]["impact"]))[:TOP_ASSETS]
             d0 = str(ts)[:10]
             d1 = (datetime.fromisoformat(d0) + timedelta(days=horizon)).date().isoformat()
+            bench_cache: dict[str, float | None] = {}
             for sym, row in assets:
                 p0 = _price_at(conn, sym, d0)
                 p1 = _price_at(conn, sym, d1)
@@ -106,16 +149,47 @@ def score_events(settings, graph, horizon: int = HORIZON_DAYS, batch: int = BATC
                     continue
                 ret = p1 / p0 - 1.0
                 sign = 1 if row["impact"] > 0 else -1
-                hit = None
+
+                # The market over the SAME window, from the same snapshots.
+                # An event's claim is that the asset moves BECAUSE of the shock;
+                # a name that rose 2% in a tape that rose 6% did not.
+                bench = benchmark_for(sym, row.get("market"))
+                if bench not in bench_cache:
+                    b0 = _price_at(conn, bench, d0) if bench else None
+                    b1 = _price_at(conn, bench, d1) if bench else None
+                    bench_cache[bench] = (b1 / b0 - 1.0) if (b0 and b1) else None
+                bench_ret = bench_cache[bench]
+                excess = (ret - bench_ret) if bench_ret is not None else None
+
+                # hit is the market-relative verdict where one is available;
+                # hit_abs keeps the old "did it move that way at all" answer
+                # visible rather than discarding it.
+                hit_abs = None
                 if abs(ret) >= DEADBAND:
-                    hit = 1 if sign * ret > 0 else 0
-                scored_syms.append((sym, sign, round(ret, 5), hit))
+                    hit_abs = 1 if sign * ret > 0 else 0
+                if excess is None:
+                    hit, basis = hit_abs, "absolute"
+                elif abs(excess) < DEADBAND:
+                    hit, basis = None, "excess"      # inside the noise band
+                else:
+                    hit, basis = (1 if sign * excess > 0 else 0), "excess"
+                scored_syms.append((sym, sign, round(ret, 5), hit, bench,
+                                    None if bench_ret is None else round(bench_ret, 5),
+                                    None if excess is None else round(excess, 5),
+                                    hit_abs, basis))
         if not scored_syms:
-            scored_syms = [("_NONE", 0, None, None)]   # placeholder row = done
-        for sym, sign, ret, hit in scored_syms:
-            conn.execute("INSERT OR IGNORE INTO event_outcomes VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (eid, sym, sign, ret, hit, emotion or "", source or "",
-                          polarity or 0.0, int(bool(is_noise)), now))
+            # placeholder row = "considered, unscoreable, do not retry"
+            scored_syms = [("_NONE", 0, None, None, None, None, None, None, "absolute")]
+        for (sym, sign, ret, hit, bench, bench_ret, excess,
+             hit_abs, basis) in scored_syms:
+            conn.execute(
+                "INSERT OR IGNORE INTO event_outcomes"
+                "(event_id,symbol,impact_sign,realized_ret,hit,emotion,source,polarity,"
+                " is_noise,scored_at,bench_symbol,bench_ret,excess_ret,hit_abs,basis)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (eid, sym, sign, ret, hit, emotion or "", source or "",
+                 polarity or 0.0, int(bool(is_noise)), now,
+                 bench, bench_ret, excess, hit_abs, basis))
             added += 1
     conn.commit()
     conn.close()

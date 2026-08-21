@@ -4,9 +4,14 @@ nudge real position sizing. This is exactly the criterion
 docs/status/STATE_OF_THE_SYSTEM.md §4B already named for the open item "the
 adviser predicts well; the books do not trade it":
 
-    adviser long-side hit-rate   > 0.60   (n >= 500)
-    formula short/avoid hit-rate < 0.35   (n >= 500)
+    adviser long-side hit-rate   > 0.60   (n >= 80)
+    formula short/avoid hit-rate < 0.35   (n >= 80)
     both measured over >= 30 distinct calendar days
+
+`n` counts (symbol, calendar-day) OBSERVATIONS on both sides. Until 2026-08-21
+it counted observations on the formula side and raw table rows on the adviser
+side -- ~65x more of them -- against one shared `min_n` of 500. See THRESH and
+`_adviser_long_stats` below.
 
 The point of this module is that nobody has to notice the cue fired and flip a
 switch by hand. `scripts/adviser_gate_check.py` (systemd timer, daily) calls
@@ -34,8 +39,30 @@ from ai_investing.models import SignalDirection
 THRESH = {
     "adviser_long_hit": 0.60,
     "formula_short_hit": 0.35,
-    "min_n": 500,
+    # min_n is now counted in (symbol, day) OBSERVATIONS, not table rows.
+    #
+    # It was 500 rows. On the adviser side those rows arrived ~65x per real
+    # observation (see brain/scorecard.py's module header), so the guard that
+    # was supposed to stop the gate opening on a thin sample was really a bar of
+    # 7.7 independent observations -- and the formula side, already deduped,
+    # could never reach 500 at all. One number, two units, neither doing its job.
+    #
+    # 80 is chosen against what the record can actually deliver, not upward from
+    # the old figure: at ~35 graded symbol-days per calendar day, 80 is roughly
+    # a fortnight of evidence and is comfortably reachable inside the 30-day
+    # window `min_days` already requires -- so `min_days` stays the binding
+    # constraint (as it has been in practice) and `min_n` guards against a
+    # 30-day window that happened to be nearly empty. It is deliberately NOT
+    # tuned to whatever number would flip the gate today.
+    "min_n": 80,
     "min_days": 30,
+    # Overlapping-window honesty. Consecutive symbol-days share 4/5 of a 5-day
+    # forward window, so even deduped observations are not independent; the
+    # usual correction deflates a t-statistic by ~sqrt(HORIZON_DAYS). Applied to
+    # the 2026-08-21 record the adviser's long side goes t=2.39 -> ~1.07. The
+    # gate does not test a t directly (it tests a hit-rate over a fixed window),
+    # but the bar below is set knowing the effective sample is ~1/5 of `min_n`.
+    "effective_n_divisor": HORIZON_DAYS,
 }
 # -- how big may the tilt be? ------------------------------------------------
 # BLEND_WEIGHT used to be a hand-set 0.25 with nothing behind it. Two things
@@ -128,12 +155,52 @@ def _gate_path(settings) -> str:
 
 
 def _adviser_long_stats(brain_db_path: str) -> dict:
+    """One graded call per (symbol, calendar day) — the same unit
+    `_formula_short_stats` below has always used.
+
+    This side never had it. It counted advice_outcomes rows directly, and the
+    scorecard writes one row per advice_log entry (~126/day), so the same
+    standing view was counted ~65 times: 38,900 raw rows against 598 real
+    observations on the production record of 2026-08-21. The two sides of the
+    SAME eligibility comparison were therefore measured in different units and
+    checked against one shared `min_n`. See `brain/scorecard.py`'s module header.
+
+    `is_primary` is written by the scorecard (and backfilled when it opens the
+    database). Where the column does not exist yet, dedupe here instead of
+    silently counting rows — the whole point is that the raw row count must
+    never reach the threshold comparison, in any code path.
+    """
     try:
         con = sqlite3.connect(brain_db_path)
         cur = con.cursor()
-        cur.execute(
-            "select count(*), avg(hit), count(distinct date(ts_issued)) from advice_outcomes "
-            "where direction='long' and is_conviction=1 and hit is not null")
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(advice_outcomes)")}
+        if not cols:
+            con.close()
+            return {"n": 0, "hit": 0.0, "days": 0}
+        keep = "direction='long' and is_conviction=1 and hit is not null"
+        if "is_primary" in cols:
+            cur.execute(
+                "select count(*), avg(hit), count(distinct date(ts_issued,'+8 hours')) "
+                f"from advice_outcomes where is_primary=1 and {keep}")
+        else:
+            # Same unit and the same "first call of the day" rule the scorecard
+            # applies, computed on the fly rather than read off is_primary.
+            #
+            # The partition runs over EVERY row, then the direction filter is
+            # applied to the survivors — not the other way round. Filtering first
+            # would pick "the first conviction-long of the day", so a symbol whose
+            # day opened with an `avoid` and turned long later would contribute an
+            # observation that is_primary excludes. Measured on the production
+            # record that ordering was worth 8 observations out of 90, i.e. the
+            # two paths silently disagreed. One unit, one rule, both paths.
+            cur.execute(
+                "select count(*), avg(hit), count(distinct day) from ("
+                "  select date(ts_issued,'+8 hours') as day, hit, direction,"
+                "         is_conviction,"
+                "         row_number() over (partition by symbol,"
+                "             date(ts_issued,'+8 hours') order by advice_id) as rn"
+                "  from advice_outcomes"
+                f") where rn = 1 and {keep}")
         n, hit, days = cur.fetchone()
         con.close()
     except sqlite3.OperationalError:

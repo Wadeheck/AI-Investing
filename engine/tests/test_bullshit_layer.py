@@ -150,7 +150,12 @@ def test_doom_discount_for_fear_mongers():
         rows.append((100 + i, "SPY", -1, 0.001, None, "fear", "doombot.com", -0.8, 0, "t"))
     for i in range(8):     # the market DOES move on real news elsewhere
         rows.append((200 + i, "SPY", 1, 0.03, 1, "neutral", "reuters", 0.5, 0, "t"))
-    conn.executemany("INSERT INTO event_outcomes VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.executemany(
+        # columns named explicitly: event_outcomes grew benchmark columns
+        # (source_learning._migrate) and a positional insert breaks on any
+        # schema addition, in whichever test happens to run after a migration
+        "INSERT INTO event_outcomes(event_id,symbol,impact_sign,realized_ret,hit,"
+        " emotion,source,polarity,is_noise,scored_at) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
     conn.close()
     learned = source_learning.learn(s)
@@ -169,7 +174,12 @@ def test_emotion_calibration_measures_overshoot():
         rows.append((i, "AAA", -1, 0.02 + 0.001 * (i % 3), 0, "panic", "x", -0.5, 0, "t"))
     for i in range(25):    # after euphoria, prices bleed (-1.5%): chasing costs
         rows.append((100 + i, "BBB", 1, -0.015 - 0.001 * (i % 3), 0, "euphoria", "x", 0.5, 0, "t"))
-    conn.executemany("INSERT INTO event_outcomes VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.executemany(
+        # columns named explicitly: event_outcomes grew benchmark columns
+        # (source_learning._migrate) and a positional insert breaks on any
+        # schema addition, in whichever test happens to run after a migration
+        "INSERT INTO event_outcomes(event_id,symbol,impact_sign,realized_ret,hit,"
+        " emotion,source,polarity,is_noise,scored_at) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
     conn.close()
     rep = emotion_calibration.calibrate(s)

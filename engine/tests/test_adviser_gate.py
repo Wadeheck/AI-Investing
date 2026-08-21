@@ -72,6 +72,33 @@ def test_adviser_long_stats_counts_only_conviction_long_hits():
     assert stats["days"] == 2
 
 
+def test_adviser_long_stats_counts_symbol_days_not_rows():
+    """The 65x defect, pinned.
+
+    `advice_log` is written every cycle, so the scorecard freezes one graded row
+    per cycle for the SAME standing view against the SAME forward return. On the
+    production record that was 38,900 rows against 598 real observations. This
+    side of the gate counted rows while `_formula_short_stats` counted
+    (symbol, day) observations -- two units, one shared `min_n`.
+
+    130 rows of one view on one day is one observation, and the hit-rate must be
+    that of the FIRST call of the day, not of whichever re-issue happened to
+    land last.
+    """
+    tmp = tempfile.mkdtemp()
+    # all within 00:00-15:00 UTC, so +8h keeps every row on the same SGT day
+    rows = [(1, "NVDA", "long", "2026-08-01T00:10:00", 1, 1)]     # first call: a hit
+    rows += [(i, "NVDA", "long", f"2026-08-01T{i % 16:02d}:30:00", 0, 1)
+             for i in range(2, 131)]                              # 129 re-issues, all misses
+    _make_brain_db(os.path.join(tmp, "brain.db"), rows, [])
+    stats = ag._adviser_long_stats(os.path.join(tmp, "brain.db"))
+    assert stats["n"] == 1, "130 re-issues of one view is one observation"
+    assert stats["hit"] == 1.0, "the first call of the day is the graded one"
+    assert stats["days"] == 1
+    # and the whole point: this can never reach the threshold on volume alone
+    assert stats["n"] < ag.THRESH["min_n"]
+
+
 def test_formula_short_stats_dedupes_and_grades_against_benchmark():
     tmp = tempfile.mkdtemp()
     day = "2026-08-01"
@@ -134,11 +161,22 @@ def test_evaluate_flips_eligible_once_all_four_conditions_clear():
     calendar = [(start + timedelta(days=i)).date().isoformat() for i in range(45)]
     days = calendar[:31]   # the 31 days actually used as decision/advice days
 
+    # n counts (symbol, day) observations on BOTH sides now, so the adviser
+    # fixture needs real breadth rather than volume: 4 symbols x 31 days = 124
+    # observations, above min_n=80. The `+ many re-issues of each` below is
+    # deliberate — it is the shape that used to inflate n to 65x and must not
+    # move the number.
     advice_rows = []
-    for i in range(560):
-        d = days[i % len(days)]
-        hit = 1 if i % 10 != 0 else 0   # 90% hit rate, well above 0.60
-        advice_rows.append((i, "GLD", "long", f"{d}T00:00:00", hit, 1))
+    adv_symbols = ["GLD", "O39.SI", "2899.HK", "AMD"]
+    aid = 0
+    for d in days:
+        for k, sym in enumerate(adv_symbols):
+            hit = 1 if (k + days.index(d)) % 10 != 0 else 0   # ~90%, well above 0.60
+            aid += 1
+            advice_rows.append((aid, sym, "long", f"{d}T00:00:00", hit, 1))
+            for _ in range(9):        # 9 re-issues of the same view, same day
+                aid += 1
+                advice_rows.append((aid, sym, "long", f"{d}T12:00:00", hit, 1))
 
     symbols = [f"SYM{k}" for k in range(20)]   # 20 symbols x 31 days = 620 graded (symbol, day) calls
     price_rows = [(d, "SPY", 100.0) for d in calendar]   # benchmark flat throughout
@@ -155,10 +193,12 @@ def test_evaluate_flips_eligible_once_all_four_conditions_clear():
 
     settings = FakeSettings(tmp)
     result = ag.evaluate(settings)
-    assert result["adviser_long"]["n"] >= 500
+    # 4 symbols x 31 days = 124 observations, NOT the 1,240 rows that were written
+    assert result["adviser_long"]["n"] == len(adv_symbols) * len(days)
+    assert result["adviser_long"]["n"] >= ag.THRESH["min_n"]
     assert result["adviser_long"]["days"] >= 30
     assert result["adviser_long"]["hit"] > 0.60
-    assert result["formula_short"]["n"] >= 500
+    assert result["formula_short"]["n"] >= ag.THRESH["min_n"]
     assert result["formula_short"]["days"] >= 30
     assert result["formula_short"]["hit"] < 0.35    # AAPL rose every time -> shorts all wrong
     assert result["eligible"] is True
