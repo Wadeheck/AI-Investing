@@ -137,6 +137,44 @@ systemctl --user restart ai-investing         # after a code change — ONCE, se
 .venv/bin/python scripts/breaker.py           # is the book halted, and should it be
 ```
 
+### Auditing the brain — a different question from "is it running"
+
+`daily_status.py` answers *is every channel alive*. It cannot answer *is the
+brain still measuring itself honestly*, and on 2026-08-21 the answer to the
+second was no while every channel was green (§4.37).
+
+```bash
+.venv/bin/python scripts/brain_audit.py              # every measurement, read-only
+.venv/bin/python scripts/brain_audit.py --json       # machine-readable
+.venv/bin/python scripts/cue_check.py                # which §4B cues have fired
+.venv/bin/python scripts/review_edges.py --stats     # self-added wiring: rate + backlog
+.venv/bin/python scripts/review_edges.py --hygiene   # placeholder + unwired nodes
+```
+
+**Run `brain_audit.py` before writing or believing any review.** It reproduces
+every number in `BRAIN_REVIEW_2026-08-21` against whatever is true today;
+[`../design/AUDITING.md`](../design/AUDITING.md) explains the five traps it
+guards and what each one cost when it was missed.
+
+Two of these run themselves, so nothing depends on remembering:
+
+| Timer | Cadence | What it does |
+|---|---|---|
+| `ai-investing-cue-check.timer` | daily 09:40 SGT | Evaluates the §4B cues that are pure arithmetic. **Notifies only on a state change**, never decides anything — a fired cue is a prompt to make a decision. `data/cue_state.json`. |
+| `ai-investing-brain-audit.timer` | Sunday 09:45 SGT | Appends a compact record to `data/brain_audit_history.jsonl`. One audit says where the brain is; a series says which way it is going. |
+
+The history file is one line a week and is meant to be skimmed:
+
+```bash
+tail -5 data/brain_audit_history.jsonl | .venv/bin/python -m json.tool --json-lines
+```
+
+Watch `resolution_pct` (is curation making the graph differentiate more?),
+`llm_share_pct` (is self-wiring still climbing under its budget?),
+`counting_unit_ok` (has any write path started bypassing the counting rule?),
+and `formula_alive` / `calibrator_alive` (has either learning loop ever
+started?). As of 2026-08-21 both are `false` — see §4A, it is a deliberate hold.
+
 ### If you get a 🛑 CIRCUIT BREAKER alert
 
 The engine halts and stays halted — deliberately. You now get the alert **once**,

@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekly — one audit says where the brain is, a series says which way it is going
+[Timer]
+# Sunday 09:45 SGT, after the daily cue check, before anyone reads the week.
+OnCalendar=Sun *-*-* 01:45:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target

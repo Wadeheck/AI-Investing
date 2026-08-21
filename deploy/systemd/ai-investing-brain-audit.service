@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekly brain audit snapshot — a time series of the brain's own health
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/brain_audit.py --snapshot --json
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/brain_audit_runs.log
+StandardError=inherit

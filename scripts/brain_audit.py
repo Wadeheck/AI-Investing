@@ -542,6 +542,53 @@ def _render(name: str, payload) -> None:
     print(json.dumps(payload, indent=1, default=str))
 
 
+def _snapshot(s, report: dict) -> None:
+    """Append the handful of numbers worth a TIME SERIES.
+
+    A single audit says where the brain is. A series says which way it is
+    going, which is the question every one of these numbers actually raises —
+    is resolution improving as wiring is curated? is llm share still climbing
+    under the budget? did the learning loops ever start? Today those questions
+    can only be answered by finding an old review and trusting its arithmetic,
+    which is precisely what went wrong (§4.37).
+
+    Deliberately compact: a dozen scalars, not the whole report. A history file
+    nobody can skim is a history file nobody reads.
+    """
+    def sec(name: str) -> dict:
+        """A section that was not run (or failed) contributes nulls, never a
+        crash -- --snapshot must survive `--section` being narrowed."""
+        v = report.get(name)
+        return v if isinstance(v, dict) else {}
+
+    g, c, lrn = sec("graph"), sec("counting_unit"), sec("learning")
+    row = {
+        "ts": report.get("generated"),
+        "nodes": g.get("nodes"), "edges": g.get("edges"),
+        "llm_share_pct": g.get("llm_share_pct"),
+        "llm_last_7d": g.get("llm_proposed_last_7d"),
+        "resolution_pct": g.get("resolution_pct"),
+        "inert_assets": g.get("inert_assets"),
+        "duplicate_assets": g.get("assets_duplicating_a_peer"),
+        "observations": c.get("observations"),
+        "replication": c.get("replication"),
+        "counting_unit_ok": c.get("label_agrees"),
+        "formula_alive": (lrn.get("formula") or {}).get("alive"),
+        "calibrator_alive": (lrn.get("edge_calibration") or {}).get("alive"),
+        "calibrator_gain_saturated": (lrn.get("edge_calibration") or {}).get("gain_saturated"),
+        "reliability_pinned_pct": (lrn.get("reliability") or {}).get("pinned_pct"),
+        "gate_eligible": (lrn.get("adviser_gate") or {}).get("eligible"),
+        "long_conv": sec("directional").get("long/conv=1"),
+    }
+    path = Path(s.brain.db_path).parent / "brain_audit_history.jsonl"
+    try:
+        with open(path, "a") as fh:
+            fh.write(json.dumps(row, default=str) + "\n")
+        print(f"  snapshot appended to {path}")
+    except OSError as exc:
+        print(f"  (snapshot failed: {exc})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="audit the brain — read-only, no market calls")
     ap.add_argument("--json", action="store_true", help="machine-readable, all sections")
@@ -549,6 +596,8 @@ def main() -> int:
                     help="run only this section (repeatable)")
     ap.add_argument("--horizon", type=int, default=None,
                     help="forward-return horizon in days (default: the scorecard's)")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="append a compact record to data/brain_audit_history.jsonl")
     args = ap.parse_args()
 
     from ai_investing.brain.scorecard import HORIZON_DAYS
@@ -557,16 +606,23 @@ def main() -> int:
     horizon = args.horizon or HORIZON_DAYS
 
     wanted = args.section or list(SECTIONS)
+    # NOTE the key names: metadata must not collide with a SECTION name.
+    # `graph` did, so `report["graph"]` was the graph's file path whenever the
+    # graph section had not been run -- and --snapshot then tried to read
+    # `.get("nodes")` off a string.
     report = {"generated": datetime.now(timezone.utc).isoformat(),
               "horizon_days": horizon,
-              "brain_db": settings.brain.db_path,
-              "graph": settings.brain.graph_path}
+              "brain_db_path": settings.brain.db_path,
+              "graph_path": settings.brain.graph_path}
     for name in wanted:
         fn = SECTIONS[name]
         try:
             report[name] = fn(settings, horizon) if name in _NEEDS_HORIZON else fn(settings)
         except Exception as exc:      # one broken section must not hide the rest
             report[name] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    if args.snapshot:
+        _snapshot(settings, report)
 
     if args.json:
         print(json.dumps(report, indent=1, default=str))
