@@ -215,7 +215,7 @@ def main(argv=None) -> int:
 
     if args.hygiene or args.prune:
         victims = [nid for nid in graph.nodes
-                   if KnowledgeGraph.is_non_entity(nid)
+                   if KnowledgeGraph.is_non_entity(nid, graph.nodes[nid].type)
                    and str(graph.nodes[nid].state or "").startswith("llm-proposed")]
         deg = {}
         for e in graph.edges:

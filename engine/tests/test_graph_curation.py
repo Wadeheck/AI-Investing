@@ -204,6 +204,33 @@ def test_a_malformed_timestamp_collects_nothing():
     assert "databricks" in g.nodes
 
 
+def test_no_caller_asks_is_non_entity_without_a_type():
+    """Three separate callers got this wrong the same way, so it is pinned.
+
+    `is_non_entity(nid)` defaults to "asset". The seed's own theme nodes
+    (`uk_banks`, `sg_banks`, `china_property_stocks`) are categories, which is
+    correct for a theme and junk for an asset — so every type-blind caller
+    reported three curated nodes as placeholders. `test_graph_hygiene`,
+    `brain_audit.py --section graph` and `review_edges.py --hygiene` each did.
+    """
+    import ast
+    root = Path(__file__).resolve().parents[2]
+    offenders = []
+    for path in sorted((root / "scripts").glob("*.py")) + \
+            sorted((root / "engine" / "ai_investing").rglob("*.py")):
+        if path.name == "graph.py":
+            continue                      # the definition itself
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "is_non_entity"
+                    and len(node.args) < 2):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "these callers judge every node as an asset, so a curated THEME node "
+        f"naming a category reads as junk: {offenders}")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

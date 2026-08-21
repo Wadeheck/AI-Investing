@@ -304,7 +304,11 @@ def graph_resolution(s) -> dict:
 
     llm = [e for e in g.edges if e.provenance == "llm"]
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    placeholders = [n for n in g.nodes if KnowledgeGraph.is_non_entity(n)]
+    # Judged by each node's OWN type: a THEME node naming a category
+    # (`uk_banks`) is the definition, not a placeholder. Passing the bare id
+    # defaults to "asset" and reported three curated seeds as junk.
+    placeholders = [n.id for n in g.nodes.values()
+                    if KnowledgeGraph.is_non_entity(n.id, n.type)]
 
     # a worked example, so the number is legible rather than abstract
     example = indistinguishable_groups(
