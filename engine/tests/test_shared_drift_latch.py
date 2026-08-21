@@ -105,6 +105,45 @@ def test_the_re_check_never_re_alerts():
     assert r.journal.events == [], "nor re-journal the same drift"
 
 
+def test_quiet_actually_suppresses_on_the_REAL_reconcile_shared():
+    """Wiring, not contract. The tests above stub `_reconcile_shared`, so they
+    verify that `quiet=True` is PASSED but never that it does anything —
+    mutation-testing this file proved it: forcing the real method to journal and
+    alert unconditionally left every test green.
+
+    This drives the real method, with a drift it cannot resolve, and asserts the
+    §4.20 property directly: refuse, but say nothing the second time.
+    """
+    import types
+    from ai_investing.runner import Runner
+    import ai_investing.brokers.shared as shared_mod
+
+    r = object.__new__(Runner)
+    r.journal, r.notifier = _Journal(), _Notifier()
+    r.settings = types.SimpleNamespace(
+        live=True, base_currency="USD", shared_stock_account=True,
+        state_path="/nonexistent/state.json",
+        alerts=types.SimpleNamespace(on_error=True))
+    r.lots = None
+    r.book = types.SimpleNamespace(working_positions=lambda: {"stock:USO": 2.0})
+    r.broker = types.SimpleNamespace(stock=types.SimpleNamespace(
+        get_positions=lambda: {}))
+    r._shared_drift = None
+
+    real = shared_mod.reconcile_claims
+    shared_mod.reconcile_claims = lambda claims, held, **kw: ["USO: claimed 2, held 0"]
+    try:
+        assert r._reconcile_shared(quiet=False) is False
+        loud_events, loud_alerts = len(r.journal.events), len(r.notifier.sent)
+        assert loud_events == 1 and loud_alerts == 1, "the FIRST report must be loud"
+
+        assert r._reconcile_shared(quiet=True) is False, "still refuses"
+        assert len(r.journal.events) == loud_events, "quiet must not re-journal"
+        assert len(r.notifier.sent) == loud_alerts, "quiet must not re-alert"
+    finally:
+        shared_mod.reconcile_claims = real
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -177,6 +177,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.41 | The crypto book could not afford its own mandate; 100% cash for a day, silently | ✅ Trade floors derived from the book, never hardcoded; unfilled buys logged; `held` reconciled |
 | 4.42 | 40% of the strategist's thesis capacity spent on shorts the venue refuses | ✅ The rule follows execution; ingestion downgrades short → avoid |
 | 4.43 | I read two trading books as frozen that were trading normally | ✅ The audit reads the authoritative source per book |
+| 4.44 | Three tests written to close a defect passed with the bug put back | ✅ Mutation-tested; all now fail on re-introduction |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -1981,6 +1982,37 @@ investigating §4.41 — and because the instrument had inherited it.
   of mine** — both resolved by going to the authoritative source rather than
   reasoning from a state file. The two real ones were found the same way.
 
+### 4.44 Three new tests passed with the bug put back *(2026-08-21)*
+
+- **What.** After closing §4.7's root cause, §4.35 and §4.41–4.42, I
+  mutation-tested the new suites: re-introduce each bug, confirm the tests go
+  red. **Three of eight did not.**
+- **The three, and they are one pattern — testing the helper, not the wiring:**
+  - `test_a_total_feed_outage_does_not_collapse_equity` asserted the OUTCOME,
+    which `mark_price()` already guarantees at every consumer. Restoring the
+    `0.0` sentinel left it green. It now also asserts the REPRESENTATION —
+    that a missing bar produces no key — which is the thing the fix changed.
+  - `test_the_re_check_never_re_alerts` stubbed `_reconcile_shared`, so it
+    verified `quiet=True` was PASSED but never that it suppressed anything.
+    Forcing the real method to alert unconditionally left it green.
+  - `test_stale_held_metadata_is_reconciled` called `_reconcile_held` directly,
+    so deleting the call site from `cycle()` left it green.
+- **And one worse:** `test_a_smaller_book_can_still_reach_its_own_mandate` set
+  `broker.cash`, but `PaperBroker` keeps cash in `_cash` — so the assignment
+  created a new attribute, every small-book case ran at `START_CASH`, and the
+  test that exists to prove §4.41 could not see §4.41. Fixtures now assert they
+  took effect (`_assert_holding`, an explicit `get_cash()` check).
+- **Same shape in the new runner suite:** the first draft's positions opened at
+  a $100 cost basis against synthetic prices near $250, so the first cycle took
+  +149% profit and sold everything — leaving the outage tests with nothing to
+  value. Green, and vacuous.
+- **Lesson.** A green test is evidence only if it can go red. This project's
+  register is full of checks that passed while the thing they checked was
+  broken (§4.3's liveness check that matched itself, §4.6's scorecard that
+  never ran, §4.16's 27 green suites); a test that cannot fail is the same
+  defect in the place you would least look for it. **Mutation-test anything
+  written to close a register entry.**
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2006,7 +2038,7 @@ and the register had drifted **13 commits** behind reality.
 | **10 live orders rejected `602035`, cause unknown — and the obvious diagnosis is wrong** | On 2026-08-20 three `1024.HK` orders went out at HK$34.05, HK$34.15 and HK$34.10; the first two were rejected `602035 Wrong bid size` and the third filled. All three are legal multiples of the HK$0.05 spread `tick_size()` correctly returns for a HK$34 name, and all three were snapped correctly on the way out. **So this is NOT §4.23 recurring**, and snapping harder would fix nothing. | Unknown cause on a live order path, bounded by the orders being small and by two of three attempts eventually filling. Rather than ship a change that would look like a fix and do nothing, the rejection now carries the tick, the venue reference price and the symbol — the same instrumentation lesson §4.23 taught after eight lost orders, one level deeper. **Next occurrence will say why.** |
 | **The suite is green under the project runner and red under pytest** (§4.40) | All 57 files pass via `python3 tests/test_x.py` (fresh process each). `pytest engine/tests/` in one process fails 8, on a clean checkout. Cause: cross-file state (shared data dir, module-level `tmp`) and `test_alert_storm.py` asserting against `sys.argv`, which under pytest holds pytest's own arguments. | Low today — the per-file runner is what CI and the ProDesk use, so nothing is silently broken. But "all suites green" appears twice in this document and is true of only one runner, and the red one is what a newcomer reaches for first. It also hides real test-isolation debt (§4.21's family). |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
-| **Main-loop coverage is one smoke test** | `test_runner_cycle.py` proves a cycle executes; it does not verify what the cycle DECIDES. Everything between "runs" and "correct" is still uncovered. | The largest untested surface in the repo. |
+| ~~Main-loop coverage is one smoke test~~ | **CLOSED 2026-08-21.** `test_runner_decisions.py` drives a real `Runner` and asserts what the cycle CONCLUDES, not merely that it runs: a total feed outage does not collapse equity and places no orders (§4.7), an outage is still reported (the regression the price-key fix could have shipped), a flagged symbol is excluded from decisions but still valued (§4.5), equity is stable across cycles and reconciles with cash+holdings (§4.10/§4.36), a drift latch halts the next cycle and can clear itself (§4.35), and no position is grown past the weight cap. Plus `test_price_absence.py`, `test_shared_drift_latch.py`, `test_strategist_stance.py`. **Every one was mutation-tested** — the bug is re-introduced and the suite must go red. Three did not, first time round, and were strengthened; see §4.44. | — |
 | **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
 | **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |

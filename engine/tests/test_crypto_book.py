@@ -70,7 +70,12 @@ def test_a_smaller_book_can_still_reach_its_own_mandate():
     for cash in (2_000.0, 4_999.89, 5_000.0, 10_000.0, 50_000.0):
         with tempfile.TemporaryDirectory() as tmp:
             book = cb.CryptoBook(_settings(tmp))
-            book.broker.cash = cash
+            # PaperBroker keeps cash in `_cash`. Assigning `.cash` silently
+            # created a NEW attribute and left the book at START_CASH, so every
+            # small-book case here was vacuous — caught by mutation-testing this
+            # file: restoring the hardcoded $500 floor left it green.
+            book.broker._cash = cash
+            assert book.broker.get_cash() == cash, "fixture: the book must be this size"
             r = book.cycle({}, BARS, PRICES)
             core = sum(n for _, k, n in r["opened"] if k == "hodl")
             assert core > 0, f"a ${cash:,.0f} book could not build its core at all"
@@ -106,6 +111,19 @@ def test_stale_held_metadata_is_reconciled_against_the_venue():
         assert not book.broker.get_positions(), "fixture: venue holds nothing"
         book._reconcile_held(book._state["held"])
         assert book._state["held"] == {}, "metadata for absent positions is dropped"
+
+
+def test_the_reconcile_runs_inside_the_cycle_not_just_as_a_method():
+    """Wiring, not existence. `test_stale_held_metadata_is_reconciled_against_
+    the_venue` calls `_reconcile_held` directly, so it stays green even if the
+    call site is deleted — mutation-testing this file proved exactly that."""
+    with tempfile.TemporaryDirectory() as tmp:
+        book = cb.CryptoBook(_settings(tmp))
+        book._state["held"] = {"BTC/USD": {"kind": "hodl", "day": "2026-08-18"},
+                               "DOGE/USD": {"kind": "tact", "day": "2026-08-18"}}
+        book.cycle({}, BARS, PRICES)
+        assert "DOGE/USD" not in book._state["held"], (
+            "a cycle must clear metadata for a position the venue does not have")
 
 
 def test_a_venue_we_cannot_read_changes_nothing():
