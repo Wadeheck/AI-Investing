@@ -20,6 +20,24 @@ class DataGuard:
         messages: list[str] = []
         now = datetime.now(timezone.utc)
 
+        # ABSENT IS AS BAD AS ZERO, AND MUST BE AS LOUD.
+        #
+        # The runner used to write a missing bar as `prices[k] = 0.0`, so this
+        # loop saw it and flagged "non-positive price". Now the runner omits the
+        # key instead (§4.7's root cause, removed 2026-08-21) — which is the
+        # right representation, but it would make a blanket feed outage
+        # INVISIBLE here: no key, no iteration, no message. That is the same
+        # failure this guard exists to catch, wearing the opposite sign.
+        #
+        # `bars_by_key` carries every asset the cycle asked for, with an empty
+        # list where the feed returned nothing, so it is the record of what was
+        # EXPECTED. Anything expected and missing is flagged exactly as a
+        # non-positive price was.
+        for key in (bars_by_key or {}):
+            if key not in prices:
+                bad.add(key)
+                messages.append(f"{key}: no price this cycle (feed returned no bars)")
+
         for key, px in prices.items():
             if px is None or px <= 0:
                 bad.add(key)

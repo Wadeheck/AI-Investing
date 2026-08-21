@@ -545,7 +545,26 @@ class Runner:
         self.user_views = UserViews.load(self.settings.user_views_path)   # live edits take effect
         self.engine.user_views = self.user_views
         bars_by_key = {a.key: self.provider.get_bars(a, limit=250) for a in self.assets}
-        prices = {k: (b[-1].close if b else 0.0) for k, b in bars_by_key.items()}
+        # A MISSING PRICE IS AN ABSENT KEY, NOT A ZERO (§4A, closing §4.7's root).
+        #
+        # This used to read `b[-1].close if b else 0.0`. That sentinel means
+        # "absent" and reads as "free": a feed outage wrote 0.0 for every symbol,
+        # and 0.0 is a perfectly good number to multiply by. On 2026-08-03 it
+        # valued the whole book at zero — equity read $116,027 against a real
+        # $129k — and on 2026-08-04 it faked a 13.8% crash and flattened a
+        # healthy book. The containment since then has been `mark_price()` at
+        # every consumer, which works only for as long as every NEW consumer
+        # remembers; §4B's instruction was to remove it at the source before the
+        # non-USD gate lifts, because a new market multiplies the consumers it
+        # can reach.
+        #
+        # Omitting the key is safe here because every reader of this dict uses
+        # `.get()` — verified across all 44 call sites — so an absent price
+        # arrives as `None`, which is falsy for the `if not px: continue`
+        # decision guards and is already handled by `mark_price(None, fallback)`
+        # for valuation. The difference that matters: `None` cannot be quietly
+        # multiplied by a quantity, and 0.0 can.
+        prices = {k: b[-1].close for k, b in bars_by_key.items() if b}
         self._mark_crypto_to_spot(prices)
         self._stats = build_market_stats(bars_by_key, lookback=20)
         self._last_prices = prices
@@ -685,8 +704,11 @@ class Runner:
             try:
                 from ai_investing.brain.scorecard import Scorecard
                 sc = Scorecard(self.settings)
+                # volume genuinely may be absent (legacy rows are NULL by
+                # design, see §4g.2) — but say so with None, not with a 0 that
+                # reads as "nothing traded".
                 vol_by_sym = {a.symbol: (bars_by_key[a.key][-1].volume
-                                         if bars_by_key.get(a.key) else 0.0)
+                                         if bars_by_key.get(a.key) else None)
                               for a in self.assets}
                 sc.snapshot_prices(px_by_sym, vol_by_sym)
                 outcomes = sc.score_due()
