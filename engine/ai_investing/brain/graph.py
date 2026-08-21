@@ -670,13 +670,53 @@ class KnowledgeGraph:
                            "consortium", "multiple_", "several_", "various_",
                            "_led_investor", "_and_others", "unidentified")
 
+    # A SECOND kind of non-entity, found 2026-08-21 among the unwired nodes:
+    # not "we do not know who", but "this is not ONE thing". The digester had
+    # created `amazon_alphabet_microsoft` (three companies in one node),
+    # `uk_domestic_chip_startups` (a category) and `fenway_sports__liverpool_fc`
+    # (two entities joined by a separator). A node that is three companies
+    # cannot have a coherent response signature — it is guaranteed to be either
+    # inert or wrong, and it inflates the node count either way.
+    _CATEGORY_SUFFIXES = ("_startups", "_companies", "_firms", "_makers",
+                          "_producers", "_miners", "_banks", "_lenders",
+                          "_retailers", "_suppliers", "_stocks", "_names",
+                          "_players", "_operators", "_manufacturers")
+
     @classmethod
-    def is_non_entity(cls, node_id: str) -> bool:
-        """True when an id is a placeholder for 'no named counterparty'."""
+    def is_non_entity(cls, node_id: str, node_type: str = "asset") -> bool:
+        """True when an id cannot be the thing its TYPE says it is.
+
+        Two families, failing for different reasons:
+          PLACEHOLDER    "no named counterparty" — `none`, `undisclosed_buyer`.
+                         Wrong for every node type.
+          NOT-ONE-THING  several entities in one id, or a category standing
+                         where a member of one belongs. Wrong for an ASSET and
+                         perfectly right for a theme.
+
+        `node_type` is load-bearing, and the seed taught it. A first version
+        applied the category rule to every id and flagged three CURATED nodes —
+        `uk_banks`, `sg_banks`, `china_property_stocks`. Those are theme nodes,
+        and a theme node naming a category is not a defect, it is the
+        definition. `propose_node` only ever mints assets, so the strict rule
+        still covers the path that actually admits junk.
+        """
         nid = (node_id or "").strip().lower()
         if not nid or nid in cls._NON_ENTITY_IDS:
             return True
-        return any(m in nid for m in cls._NON_ENTITY_MARKERS)
+        if any(m in nid for m in cls._NON_ENTITY_MARKERS):
+            return True
+        # "X / Y" survives id-normalisation as a DOUBLE underscore: two entities
+        # joined by a separator, never one company's own name. True of any type.
+        if "__" in nid:
+            return True
+        if node_type != "asset":
+            return False
+        # A plural category standing where a company belongs. Deliberately NOT
+        # a rule: a bare `_and_`, because `larsen_and_toubro` and
+        # `johnson_and_johnson` are single companies whose own names contain it.
+        # A false positive here refuses a real company permanently, so every
+        # rule has to be one that cannot fire on a legitimate name.
+        return any(nid.endswith(sfx) for sfx in cls._CATEGORY_SUFFIXES)
 
     def propose_node(self, node_id: str, label: str, aliases: list[str] | None = None,
                      proposed_by: str = "", ts: str = "", symbol: str = "",
@@ -832,7 +872,8 @@ class KnowledgeGraph:
         Returns {"nodes": [...], "edges": n} for the caller to report.
         """
         victims = [nid for nid, n in self.nodes.items()
-                   if self.is_non_entity(nid) and str(n.state or "").startswith("llm-proposed")]
+                   if self.is_non_entity(nid, n.type)
+                   and str(n.state or "").startswith("llm-proposed")]
         removed_edges = 0
         for nid in victims:
             for e in [e for e in self.edges if e.src == nid or e.dst == nid]:
@@ -858,6 +899,51 @@ class KnowledgeGraph:
         wired = {e.src for e in self.edges} | {e.dst for e in self.edges}
         return sorted(nid for nid, n in self.nodes.items()
                       if nid not in wired and str(n.state or "").startswith("llm-proposed"))
+
+    def prune_stale_orphans(self, ts: str, min_age_days: int = 30) -> list[str]:
+        """Delete LLM-proposed nodes that never acquired a single edge.
+
+        `orphan_nodes()` has been able to NAME these since §4.26; nothing ever
+        removed them, so they accumulated — 31 of them by 2026-08-21, against
+        609 nodes. They are the residue of the digester meeting a company name
+        in a sentence and minting a node for it that no later story ever wired
+        to anything.
+
+        Why age and not shape: a node proposed today may be wired tomorrow by
+        the next story about it, so deleting on sight would fight the digester.
+        A node that has sat unwired for a MONTH is not waiting for wiring, it is
+        vocabulary. That is a measurement, not a judgement about the name — the
+        thing the review queue keeps failing to supply.
+
+        Deliberately NOT tombstoned. A tombstone records a rejected CLAIM, and
+        no claim was made here — nothing was ever asserted about these nodes.
+        If the same company appears in a real relationship later, it should be
+        free to come back with that relationship attached.
+
+        Curated nodes are never touched: an unwired seed node is a gap to FILL
+        (`scripts/graph_gap_scan.py`), which is the opposite problem.
+        """
+        import datetime as _dt
+        try:
+            now = _dt.date.fromisoformat(str(ts)[:10])
+        except ValueError:
+            return []
+        removed = []
+        for nid in self.orphan_nodes():
+            m = re.search(r"llm-proposed (\d{4}-\d{2}-\d{2})", str(self.nodes[nid].state or ""))
+            if not m:
+                continue                      # no date to age against — leave it
+            try:
+                born = _dt.date.fromisoformat(m.group(1))
+            except ValueError:
+                continue
+            if (now - born).days >= min_age_days:
+                self.nodes.pop(nid, None)
+                removed.append(nid)
+        if removed:
+            self._adj = None
+            self._alias_index = None
+        return sorted(removed)
 
     def contested_rejections(self, min_suppressed: int = 3) -> list[dict]:
         """Tombstones the world keeps arguing with, most-argued first. A rejection

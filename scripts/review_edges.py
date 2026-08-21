@@ -176,6 +176,11 @@ def _print_stats(graph: KnowledgeGraph) -> None:
         print(f"\n  {len(contested)} rejection(s) being re-argued — see --contested")
 
 
+# An unwired node minted TODAY may be wired by tomorrow's story about the same
+# company; one that has sat unwired for a month is not waiting, it is
+# vocabulary. 30 days is the line between the two.
+ORPHAN_MAX_AGE_DAYS = 30
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="review llm-proposed graph edges")
     ap.add_argument("--show", type=int, metavar="N", default=None,
@@ -226,11 +231,29 @@ def main(argv=None) -> int:
         else:
             print("  placeholder nodes:  none")
         orphans = graph.orphan_nodes()
+        # Age them, because "31 unwired nodes" and "31 nodes that have SAT
+        # unwired" are different findings with different fixes. Measured
+        # 2026-08-21 the oldest was 17 days: this is CHURN, not an
+        # accumulation — the digester mints ~2/day and wiring lags.
+        import datetime as _dt
+        import re as _re
+        today = _dt.date.fromisoformat(ts[:10])
+        aged = []
+        for nid in orphans:
+            m = _re.search(r"llm-proposed (\d{4}-\d{2}-\d{2})",
+                           str(graph.nodes[nid].state or ""))
+            age = (today - _dt.date.fromisoformat(m.group(1))).days if m else None
+            aged.append((nid, age))
+        stale = [n for n, a in aged if a is not None and a >= ORPHAN_MAX_AGE_DAYS]
         print(f"\n  UNWIRED llm nodes ({len(orphans)}) — vocabulary, not wiring:")
-        for nid in orphans[:30]:
-            print(f"    {nid:<34} {graph.nodes[nid].label}")
+        for nid, age in aged[:30]:
+            flag = "  <-- collectable" if age is not None and age >= ORPHAN_MAX_AGE_DAYS else ""
+            print(f"    {nid:<34} {str(age) + 'd' if age is not None else '  ?':>5}  "
+                  f"{graph.nodes[nid].label}{flag}")
         if len(orphans) > 30:
             print(f"    ... and {len(orphans) - 30} more")
+        print(f"\n  of those, {len(stale)} have sat unwired for "
+              f">= {ORPHAN_MAX_AGE_DAYS} days and are collectable.")
         if not args.prune:
             print("\n  (nothing written — re-run with --prune to remove the "
                   "placeholder nodes)")
@@ -240,9 +263,20 @@ def main(argv=None) -> int:
         print(f"\n  PRUNED {len(out['nodes'])} node(s) and {out['edges']} edge(s); "
               f"each edge tombstoned so the next digest cannot re-add it.")
         print(f"  graph is now {len(graph.nodes)} nodes / {len(graph.edges)} edges.")
-        print("  Unwired nodes were NOT removed — an unwired node is inert but "
-              "harmless,\n  and some are real companies awaiting wiring "
-              "(see graph_gap_scan.py).")
+        collected = graph.prune_stale_orphans(ts, ORPHAN_MAX_AGE_DAYS)
+        if collected:
+            graph.save(path)
+            print(f"  COLLECTED {len(collected)} node(s) that never acquired an "
+                  f"edge in {ORPHAN_MAX_AGE_DAYS}+ days: {', '.join(collected)}")
+            print("  No tombstone: nothing was ever ASSERTED about these, so if "
+                  "one turns up\n  later inside a real relationship it may come "
+                  "back with that relationship.")
+        else:
+            print(f"  No unwired node has yet sat {ORPHAN_MAX_AGE_DAYS}+ days; "
+                  "none collected.\n  A young unwired node may be wired by "
+                  "tomorrow's story — collecting on sight\n  would fight the "
+                  "digester and re-open §4.24 from the other side.")
+        print(f"  graph is now {len(graph.nodes)} nodes / {len(graph.edges)} edges.")
         return 0
 
     if args.keep or args.reject or args.batch:

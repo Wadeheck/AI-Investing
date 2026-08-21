@@ -127,7 +127,12 @@ def test_the_live_seed_still_loads_and_propagates():
     """A guard that none of the above broke the real graph."""
     g = KnowledgeGraph.seeded()
     assert len(g.nodes) > 400 and len(g.edges) > 700
-    assert not [nid for nid in g.nodes if KnowledgeGraph.is_non_entity(nid)], \
+    # Each node judged by its OWN type. Passing the id alone defaults to
+    # "asset", which flags `uk_banks`/`sg_banks`/`china_property_stocks` —
+    # curated THEME nodes, for which naming a category is the definition, not
+    # a defect. See test_graph_curation.py.
+    assert not [n.id for n in g.nodes.values()
+                if KnowledgeGraph.is_non_entity(n.id, n.type)], \
         "the curated seed must not itself contain a placeholder id"
     impacts, _, _ = g.propagate({"fed_rate": 0.6}, max_hops=3)
     assert impacts, "seeded graph still transmits a shock"
