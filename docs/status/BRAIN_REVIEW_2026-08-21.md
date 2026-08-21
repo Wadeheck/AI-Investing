@@ -847,3 +847,123 @@ that would have looked like a fix and done nothing.
   (wire the real companies, delete the news vocabulary) is curation work, not a
   code change.
 - **`O39.SI` still has no order.** That one is a decision, not a wait.
+
+---
+
+## 11. Making this repeatable — the second pass
+
+*Added the same day, after the fixes. The review above was produced with
+throwaway scripts; this section is about the fact that that was itself a
+defect.*
+
+A finding you cannot re-measure is a story, not a metric. Every number in §1–§5
+was derived by hand, once, and would have to be re-derived by hand next time —
+which is precisely how §1 happened, since the two scorecard reviews it
+supersedes each re-derived their own arithmetic and got different answers.
+
+### 11.1 `scripts/brain_audit.py`
+
+One command, read-only, no market calls and no LLM, reproducing every
+measurement above against whatever the live state says today. Eight sections:
+counting unit, directional record, symbol record, event record, graph
+resolution, learning-loop liveness, reach, books.
+
+It encodes the traps as *checks* rather than as advice:
+
+| Trap | Damage when it was missed | Now |
+|---|---|---|
+| Counting rows, not observations | Two reviews, opposite conclusions; a live sizing gate ~15 days from opening on 7.7 real observations | `counting_unit.label_agrees` |
+| Overlapping windows | The one surviving result read as significant | `p` **and** `p_effective`, always both |
+| No benchmark | A 0.404 hit-rate that "sat unexplained in the docs for days" — twice, in two modules | `events.warning` when no row is market-relative |
+| No control group | Buy-panic ran at its clamped maximum on a lift of −0.0004 | `has_control_group`, `baseline_n` |
+| A t-test on a 0/1 outcome | — | binomial; see below |
+
+**The fifth trap was found by building the instrument.** The first draft used a
+t-test on `hit`, which degenerates exactly where evidence is strongest: a symbol
+that hit 12 of 12 has zero sample variance, so its t is undefined and it drops
+*silently* out of any "clears a bar" list. That draft lost four of the nine
+pairs §3 reports, including a perfect run. Now an exact two-sided binomial.
+
+The overlap correction moved with it — deflate the *sample size* to `n/h` rather
+than a finished statistic by `√h`. Correct for a binomial, and easier to say out
+loud. It makes §1.2's conclusion unmistakable:
+
+```
+long / conviction=1    n=90  hit 0.622   p=0.026   n_eff=18   p_effective=0.481
+```
+
+**The instrument also caught a live discrepancy on its first run**, which is the
+whole point: `label_agrees: false`. The labelling was correct — my *check* was
+comparing unlike things. The 22-row gap turned out to be real information worth
+keeping: 62 symbol-days lose their claim to the deadband, and a day whose first
+call fell inside it must not be back-filled from a later re-issue that happened
+to land outside. That is selection on the outcome.
+
+### 11.2 A memory, not just a snapshot
+
+`--snapshot` appends ~16 scalars to `data/brain_audit_history.jsonl`, weekly by
+timer. One audit says where the brain is; a series says which way it is going —
+is curation making the graph differentiate more, is self-wiring still climbing
+under its budget, did either learning loop ever start. Today's line:
+
+```
+nodes 602  edges 1119  llm_share 28.3%  resolution 43.7%  inert 198
+duplicates 104  observations 634  counting_unit_ok true
+formula_alive false  calibrator_alive false  calibrator_gain_saturated true
+reliability_pinned 0.0%  gate_eligible false
+long_conv {n 90, hit 0.622, p 0.026, n_eff 18, p_effective 0.481}
+```
+
+### 11.3 `docs/design/AUDITING.md`
+
+The discipline existed only as scar tissue in individual commit messages. It is
+now one document: the five traps with what each cost, how to read every audit
+section, how to write a review, and the rule for what may change without
+evidence — **facts may, weights may not**. A human "this seems right" can add a
+node; only a machine-recheckable measurement can move a weight. That rule was
+already implicit in four separate gates (Deflated Sharpe, `calibration.py`,
+`emotion_calibration.py`, `adviser_gate.py`) and in
+`graph.Edge.reviewed_at`'s refusal to raise confidence on human approval. It is
+now stated once, in one place.
+
+### 11.4 Docs corrected
+
+The review found the code wrong in four places and the docs wrong in more —
+several load-bearing claims described designs that are implemented and correct
+but have never produced an output.
+
+```
+STATE_OF_THE_SYSTEM §2   420 nodes / 796 edges    ->  602 / 1,119
+                         6,326 articles           ->  45,991
+                         2,380 events             ->  36,376
+BRAIN.md §2              283 nodes / 562 edges    ->  802 curated + 317 llm
+                                                      (eleven seed versions stale)
+docs/README.md           "18% of the graph"       ->  28.3%
+                         "the graph is now 321"   ->  602
+DIGESTION_SPEC §A10      "35/week"                ->  88.5/week
+```
+
+Three claims were not merely stale but wrong: BRAIN.md §4d said calibration
+"demotes the contradicted" edges (0 verdicts in 643); §4f.4 said the contrarian
+premise was tested (it now is, and the answer is no); FORMULA.md §4 describes
+two learning loops, neither of which has changed a weight. Each now carries its
+own status with the evidence, and §4.37–4.40 are in the failure register.
+
+Both superseded scorecard reviews carry a banner naming what survives (method,
+per-book P&L, the qualitative findings) and what does not (every `n` and
+t-statistic) — marked, never silently deleted, per this project's own
+convention.
+
+### 11.5 What is now self-checking
+
+| | Cadence | Behaviour |
+|---|---|---|
+| `ai-investing-adviser-gate.timer` | daily | Measures its own eligibility and flips itself |
+| `ai-investing-cue-check.timer` | daily 09:40 | Four §4B cues; notifies only on a state change |
+| `ai-investing-brain-audit.timer` | Sunday 09:45 | Appends the weekly health line |
+
+Before this, the only cue that had never been missed was the one that watched
+itself. The LLM-edge cue had already fired unnoticed, at nearly triple the rate
+its own due-date was calculated from.
+
+None of them decides anything. A fired cue is a prompt to make a decision.
