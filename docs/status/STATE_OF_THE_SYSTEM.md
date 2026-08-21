@@ -174,6 +174,9 @@ what is still broken — read that one first if something is wrong now.
 | 4.38 | A node called `none` was the graph's 17th most connected node | ✅ refused by shape; 14 found and pruned with tombstones; self-wiring capped at 6/day |
 | 4.39 | The graph resolves 202 objects and holds 462 | ⚠️ **Partial** — conviction discounted by 1/√(group); differentiating wiring is still open curation work |
 | 4.40 | The suite is green under the project runner and red under pytest | ❌ Filed, not fixed — see §4A |
+| 4.41 | The crypto book could not afford its own mandate; 100% cash for a day, silently | ✅ Trade floors derived from the book, never hardcoded; unfilled buys logged; `held` reconciled |
+| 4.42 | 40% of the strategist's thesis capacity spent on shorts the venue refuses | ✅ The rule follows execution; ingestion downgrades short → avoid |
+| 4.43 | I read two trading books as frozen that were trading normally | ✅ The audit reads the authoritative source per book |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -1866,6 +1869,98 @@ shaped like the real response, no network. `pytest tests`: 556 passed, the same
   newcomer will reach for first.
 - **Risk.** Low today, but it hides genuine test-isolation debt (§4.21's family)
   and will mislead the next person who runs pytest and assumes they broke it.
+
+### 4.41 The crypto book could not afford its own mandate *(2026-08-21)*
+
+- **What.** Both trade gates used a hardcoded $500 floor — `gap > max(500.0,
+  0.02*eq)` for the HODL core, `if notional < 500` for the tactical sleeve —
+  tuned on a $10,000 book, where $500 is 5%. On 2026-08-20 the book moved to a
+  Binance Futures testnet account holding **$5,000**, and the core targets
+  `HODL_FRAC/3` = 6.67% per major:
+
+```
+per-major target   0.20 x 4,999.89 / 3  =  $333.33
+minimum trade      max(500, 2% of eq)   =  $500.00
+333.33 > 500.00                         =  False
+```
+
+- **Effect.** The book could not buy the thing it is mandated to hold. It sat
+  **100% cash for a day**, placed zero orders, and said nothing — a gate that
+  never opens logs nothing. Break-even is **$7,500** of equity; below that the
+  mandate is unreachable by construction.
+- **How found.** Not by a check. By asking "why do four books place zero buys"
+  and working each one back to its cause.
+- **Family.** §4.14 — logic calibrated to a book size, surviving a change of
+  book size. The declared-basis fix from that entry made the equity STEP
+  legible; it did nothing about thresholds calibrated to the old size, which is
+  the other half of the same hazard.
+- **Fix.** `min_trade_usd(equity, target)`. Keeps both things a floor is
+  legitimately for — venue/fee cost (absolute) and churn (relative) — and adds
+  the guard that makes deadlock structurally impossible: **a rebalance
+  threshold may never exceed a quarter of the target it is rebalancing
+  toward.** `0.05 x equity` reproduces the old $500 exactly at the $10,000 book
+  the constants were set on.
+- **Two more, found alongside.** A skipped or unfilled buy left no trace at all
+  (`if o.filled_qty:` with no `else`), which is why a frozen book looked
+  identical to a quiet one — now logged once per symbol per day. And `held`
+  still claimed BTC/ETH/SOL the venue does not have, carried across the broker
+  migration, so every diagnostic lied about the book while it sat frozen; now
+  reconciled against the venue, and never when the venue is unreadable (§4.7).
+- **Verified live.** On deploy the book logged `held_reconciled` (dropping the
+  three phantoms) and immediately bought BTC/ETH/SOL at $333.33 each — its full
+  20% core, after a day frozen.
+- **Lesson.** A book must always be able to reach its own mandate. Any
+  threshold expressed as an absolute against a book whose size can change is a
+  latent deadlock, and it will present as silence.
+
+### 4.42 40% of the strategist's capacity was spent on positions that cannot open *(2026-08-21)*
+
+- **What.** `strategist._PROMPT` stated *"Shorting overvalued/bubble names is a
+  valid thesis when valuations support it"* — while `SHARED_STOCK_ACCOUNT`
+  refuses every stock short at the venue (`brokers/shared.SHORTS_REFUSED`).
+- **Scale.** Of 5 live theses (`MAX_THESES = 5`), **two were shorts**:
+  `short-tech-bubble` → TSLA and `short-energy-stress` → JKS. Both had been
+  re-submitted and rejected **every cycle since 2026-08-19**, and the investing
+  book sat 57% cash. Two of five slots produced a daily rejection and never a
+  position.
+- **Fix.** The rule is now computed from what execution accepts
+  (`stock_shorts_available`), and — because a prompt instruction is not a
+  control — ingestion downgrades a stock `short` to `avoid` when shorts cannot
+  execute. An `avoid` is not a watered-down short: it is the claim this system
+  can act on, the claim the scorecard already grades correctly against a
+  benchmark, and per `research/SHORT_STRATEGY.md` (shorts have failed six
+  independent tests here) the better claim anyway. Crypto is untouched — the
+  event sleeve genuinely can short perpetual futures.
+- **Lesson.** An idea the system cannot express is not a cautious idea, it is a
+  wasted slot. Constraints that live in the execution layer have to reach the
+  layer that generates ideas, or capacity leaks silently.
+
+### 4.43 I read two books as frozen that were trading normally *(2026-08-21)*
+
+Recorded because the measurement error was mine, in this session, while
+investigating §4.41 — and because the instrument had inherited it.
+
+- **What.** The trading book was reported as "0 buys, 0 positions". It had **24
+  filled buys and ~$4,800 across ten names.** Two wrong sources:
+  `stock_journal.jsonl` carries ONE DAILY EQUITY MARK by design
+  (`runner._append_stock_journal`) and has never carried fills; and
+  `state.json.broker.positions` is empty for the routed book because its
+  holdings live in the `BookLedger` (`live_book.json`) — the shared Longbridge
+  account holds the shares, the ledger records this book's claim on them.
+- **Also wrong in the same pass:** `qty < 1 share` rejects were presented as a
+  live leak. All 21 are on or before 2026-08-12, and commit `baa6de0` fixed the
+  sub-share loop at 22:47 that same day. Zero since.
+- **And a third, caught before shipping:** the first version of the corrected
+  audit reported the crypto book as `idle 100%` minutes after it bought its
+  entire mandate — on a 1x futures account a position is collateralised, not
+  paid for, so wallet cash stays whole. §4.36's accounting trap in a new hat.
+- **Fix.** `brain_audit.py`'s `books` section reads the authoritative source per
+  book, takes order flow from `journal.db.orders`, and reports `idle_pct` as
+  null for margined books.
+- **Lesson.** An instrument that encodes the analyst's error is worse than no
+  instrument, because it launders a guess into a number. Every "this book is
+  doing nothing" claim needs the source named — and per-book state files are
+  not interchangeable.
 
 ## 4A. Open defects — known, NOT fixed
 

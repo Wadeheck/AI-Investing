@@ -500,6 +500,10 @@ def reach(s, horizon: int) -> dict:
                 never, key=lambda r: -r["avg_excess_pct"] * r["days"])}
 
 
+# Books whose venue margins positions rather than debiting cash for them.
+_MARGINED_BOOKS = {"crypto", "crypto_event"}
+
+
 def books(s) -> dict:
     """Per-book equity, deployment, and the declared basis it belongs to.
 
@@ -571,16 +575,26 @@ def books(s) -> dict:
         out[label] = {
             "equity": eq, "cash": cash, "positions": n_pos,
             "positions_source": source,
+            # MARGINED BOOKS DO NOT SPEND CASH. On the 1x futures accounts a
+            # position is collateralised, not paid for, so wallet cash stays
+            # whole and cash/equity reads ~100% on a fully deployed book. That
+            # is the §4.36 accounting trap wearing a different hat: reporting it
+            # as "idle" would have said the crypto book was still frozen minutes
+            # after it bought its entire mandate. Only meaningful where cash is
+            # actually consumed by a position.
             "idle_pct": (round(100 * cash / eq, 1)
-                         if isinstance(eq, (int, float)) and eq and isinstance(cash, (int, float))
+                         if (isinstance(eq, (int, float)) and eq
+                             and isinstance(cash, (int, float))
+                             and label not in _MARGINED_BOOKS)
                          else None),
+            "cash_is_collateral": label in _MARGINED_BOOKS,
             "basis": d.get("basis", "(undeclared)"),
             "ts": d.get("ts"), "halted": d.get("halted"),
         }
     out["_order_flow"] = fills
-    out["_note"] = ("idle_pct high WITH positions>0 is a sizing question; "
-                    "idle_pct ~100 WITH positions 0 and no recent fill is a "
-                    "frozen book — check the trade floors (§4.41)")
+    out["_note"] = ("positions 0 AND no recent fill = a frozen book; check the "
+                    "trade floors (§4.41). idle_pct is null for margined books "
+                    "because their cash is collateral, not spending money.")
     return out
 
 
