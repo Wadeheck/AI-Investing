@@ -27,12 +27,8 @@ FOMC = {
 
 
 def _cache_path(settings=None) -> str:
-    if settings is not None:
-        return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)),
-                            "earnings_calendar.json")
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))))
-    return os.path.join(root, "data", "earnings_calendar.json")
+    from ai_investing.data.paths import data_path
+    return data_path("earnings_calendar.json", settings)
 
 
 def next_earnings_date(symbol: str, settings=None) -> str | None:

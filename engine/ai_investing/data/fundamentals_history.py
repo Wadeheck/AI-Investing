@@ -55,12 +55,8 @@ _ROWS = {
 
 
 def _cache_path(settings=None) -> str:
-    if settings is not None:
-        return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)),
-                            "fundamentals_history.json")
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))))
-    return os.path.join(root, "data", "fundamentals_history.json")
+    from ai_investing.data.paths import data_path
+    return data_path("fundamentals_history.json", settings)
 
 
 def load_cache(settings=None) -> dict:

@@ -39,11 +39,8 @@ CACHE_MAX_AGE = 6 * 3600
 
 
 def _data_dir(settings=None) -> str:
-    if settings is not None:
-        return os.path.dirname(os.path.abspath(settings.state_path))
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))))
-    return os.path.join(root, "data")
+    from ai_investing.data.paths import data_dir
+    return data_dir(settings)
 
 
 # ------------------------------------------------------------- intrinsic ----

@@ -23,9 +23,8 @@ import sys
 
 
 def _snap(settings=None) -> dict:
-    base = (os.path.dirname(os.path.abspath(settings.state_path)) if settings is not None
-            else os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__))))), "data"))
+    from ai_investing.data.paths import data_dir
+    base = data_dir(settings)
     try:
         with open(os.path.join(base, "fundamentals.json")) as fh:
             return json.load(fh)

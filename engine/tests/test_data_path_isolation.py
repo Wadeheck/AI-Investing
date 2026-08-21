@@ -26,22 +26,24 @@ PKG = Path(__file__).resolve().parents[1] / "ai_investing"
 
 EXEMPT_DIRS = {"research"}
 
-# The live-path modules that still do this, from the §4.21 sweep. They are
-# read-only reference loaders (fundamentals, comps, ownership, estimates,
-# calendars, the value scanner) rather than anything that decides a trade, so
-# they are recorded in STATE §4A rather than swept in one risky change.
+# EMPTY, as of 2026-08-21 — and it must stay that way.
+#
+# This held seven read-only reference loaders (fundamentals, comps, ownership,
+# estimates, calendars, the value scanner, the scalp runner) recorded in STATE
+# §4A rather than swept in one risky change. §4B said to fix all seven in one
+# pass the next time any of them was touched, rather than let the count grow.
+# They were: each took `settings` and used it correctly, but FELL BACK to a
+# path built from `__file__` when it got none — walking up to the repo's real
+# data directory, so a caller that forgot to pass settings silently read live
+# production data instead of failing.
+#
+# `data/paths.py` replaced that fallback with one derived from `Settings()`,
+# which honours `STATE_PATH`. The fallback is still there; it is simply
+# configurable now, which is the whole of the rule.
 #
 # This list may SHRINK, never grow. A new entry means a new module reads data
 # its caller cannot redirect -- exactly how §4.21 shipped.
-KNOWN = {
-    "data/calendar_events.py",
-    "data/comps.py",
-    "data/estimates.py",
-    "data/fundamentals_history.py",
-    "data/ownership.py",
-    "data/value_scanner.py",
-    "scalp/live.py",
-}
+KNOWN: set[str] = set()
 
 
 def _offenders() -> set:
@@ -76,6 +78,58 @@ def test_the_known_list_is_not_stale():
     list of things nobody checks any more."""
     stale = KNOWN - _offenders()
     assert not stale, f"fixed — delete from KNOWN: {sorted(stale)}"
+
+
+def test_the_fallback_follows_the_environment_not_the_repo():
+    """The half the AST guard cannot see.
+
+    Removing `__file__` is necessary and not sufficient: the fallback has to
+    land somewhere the caller CHOSE. Six of these loaders took `settings` and
+    used it correctly; the bug was only ever what happened when they got none,
+    and an AST check cannot tell a configurable default from a hardcoded one.
+    """
+    import os
+    import tempfile
+    from ai_investing.data import paths
+
+    tmp = tempfile.mkdtemp()
+    prev = os.environ.get("STATE_PATH")
+    os.environ["STATE_PATH"] = os.path.join(tmp, "state.json")
+    paths.reset_cache()
+    try:
+        assert paths.data_dir() == tmp, (
+            f"with no settings the fallback must follow STATE_PATH, got "
+            f"{paths.data_dir()}")
+        assert paths.data_path("estimates.json") == os.path.join(tmp, "estimates.json")
+
+        # and every loader that used to hardcode it now agrees
+        from ai_investing.data import (calendar_events, estimates,  # noqa: F401
+                                       fundamentals_history, ownership, value_scanner)
+        for fn, name in ((calendar_events._cache_path, "earnings_calendar.json"),
+                         (estimates._cache_path, "estimates.json"),
+                         (fundamentals_history._cache_path, "fundamentals_history.json"),
+                         (ownership._cache_path, "ownership.json")):
+            assert fn() == os.path.join(tmp, name), f"{name} escaped the redirect"
+        assert value_scanner._data_dir() == tmp
+    finally:
+        if prev is None:
+            os.environ.pop("STATE_PATH", None)
+        else:
+            os.environ["STATE_PATH"] = prev
+        paths.reset_cache()
+
+
+def test_settings_still_wins_over_the_environment():
+    """An explicit `settings` must keep overriding the default — that path was
+    always correct and must not regress."""
+    import os
+    import tempfile
+    import types
+    from ai_investing.data import paths
+
+    tmp = tempfile.mkdtemp()
+    s = types.SimpleNamespace(state_path=os.path.join(tmp, "state.json"))
+    assert paths.data_dir(s) == tmp
 
 
 def test_crypto_book_reads_history_through_settings():

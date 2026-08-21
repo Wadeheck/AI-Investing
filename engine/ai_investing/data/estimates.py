@@ -24,10 +24,8 @@ FETCH_BUDGET = 30
 
 
 def _cache_path(settings=None) -> str:
-    base = (os.path.dirname(os.path.abspath(settings.state_path)) if settings is not None
-            else os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__))))), "data"))
-    return os.path.join(base, "estimates.json")
+    from ai_investing.data.paths import data_path
+    return data_path("estimates.json", settings)
 
 
 def _load(settings=None) -> dict:

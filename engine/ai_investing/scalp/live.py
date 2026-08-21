@@ -27,9 +27,25 @@ from . import engine as eng
 from . import indicators as ind
 from . import strategies as st
 
-DATA = Path(__file__).resolve().parents[3] / "data"
-STATE = DATA / "scalp_state.json"
-BOOK = DATA / "scalp_book.json"
+def _data() -> Path:
+    """Resolved on USE, not at import.
+
+    These were module constants built from `__file__`, which walks up to the
+    repo's real data directory no matter what the caller configured — §4.21's
+    defect, and the last of the seven §4A listed. Resolving lazily through the
+    shared resolver means `STATE_PATH` redirects this module like everything
+    else, and it costs one cached lookup.
+    """
+    from ai_investing.data.paths import data_dir
+    return Path(data_dir())
+
+
+def _state_file() -> Path:
+    return _data() / "scalp_state.json"
+
+
+def _book_file() -> Path:
+    return _data() / "scalp_book.json"
 SYMS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 LOOP_SECS = 60
 BARS_1M = 900          # 15h of context per refresh
@@ -47,9 +63,9 @@ def fetch_1m(ex, sym: str) -> pd.DataFrame:
 
 def load_book() -> eng.Book:
     bk = eng.Book()
-    if BOOK.exists():
+    if _book_file().exists():
         try:
-            d = json.loads(BOOK.read_text())
+            d = json.loads(_book_file().read_text())
             bk.equity = d.get("equity", bk.equity)
             bk.positions = d.get("positions", [])
             bk.pending = d.get("pending", [])
@@ -61,14 +77,14 @@ def load_book() -> eng.Book:
 
 
 def save_book(bk: eng.Book) -> None:
-    BOOK.write_text(json.dumps({"equity": bk.equity, "positions": bk.positions,
+    _book_file().write_text(json.dumps({"equity": bk.equity, "positions": bk.positions,
                                 "pending": bk.pending, "trades": bk.trades[-500:],
                                 "curve": bk.curve[-2000:]}, indent=0))
 
 
 def backtest_verdicts() -> dict:
     try:
-        rep = json.loads((DATA / "scalp_backtest.json").read_text())
+        rep = json.loads((_data() / "scalp_backtest.json").read_text())
         return {f: v.get("ships", False) for f, v in rep.get("families", {}).items()}
     except (json.JSONDecodeError, OSError):
         return {}
@@ -128,7 +144,7 @@ def main() -> None:
         state["pending"] = bk.pending
         state["trades"] = bk.trades[-50:]
         state["curve"] = bk.curve[-500:]
-        STATE.write_text(json.dumps(state, indent=0))
+        _state_file().write_text(json.dumps(state, indent=0))
         save_book(bk)
         time.sleep(LOOP_SECS)
 
