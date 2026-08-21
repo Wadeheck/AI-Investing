@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily — the §4B cues that need no human to EVALUATE, only to act on
+[Timer]
+# 09:40 SGT — five minutes after the adviser gate, on the same day's data,
+# and after the calibrator has written its report inside the engine cycle.
+OnCalendar=*-*-* 01:40:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
