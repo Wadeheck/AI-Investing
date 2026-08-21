@@ -290,10 +290,10 @@ def collect() -> list[dict]:
     return asks
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true", help="print only, never send")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     asks = collect()
     if args.show:

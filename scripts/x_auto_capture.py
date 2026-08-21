@@ -143,5 +143,5 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=3)
     ap.add_argument("--feed-only", action="store_true")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     sys.exit(run(a.days, a.feed_only))

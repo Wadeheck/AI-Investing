@@ -63,10 +63,10 @@ def mark_done(name: str) -> None:
     SENTINEL.write_text(json.dumps(blob, indent=1))
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     settings = Settings()
     rates = fx.rates(settings, force=True)

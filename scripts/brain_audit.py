@@ -664,7 +664,7 @@ def _snapshot(s, report: dict) -> None:
         print(f"  (snapshot failed: {exc})")
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="audit the brain — read-only, no market calls")
     ap.add_argument("--json", action="store_true", help="machine-readable, all sections")
     ap.add_argument("--section", choices=sorted(SECTIONS), action="append",
@@ -673,7 +673,7 @@ def main() -> int:
                     help="forward-return horizon in days (default: the scorecard's)")
     ap.add_argument("--snapshot", action="store_true",
                     help="append a compact record to data/brain_audit_history.jsonl")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     from ai_investing.brain.scorecard import HORIZON_DAYS
     from ai_investing.config import Settings

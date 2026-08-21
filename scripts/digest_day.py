@@ -153,13 +153,13 @@ def derive_impulses() -> None:
               f"events are written; impulses stay at their last good state")
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("date", nargs="?", default="")
     ap.add_argument("--catch-up", type=int, default=0,
                     help="digest any undigested day within the last N days")
     ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     settings = Settings()
     graph = KnowledgeGraph.load(settings.brain.graph_path)

@@ -270,7 +270,7 @@ def scan(days: int, min_mentions: int, min_sources: int) -> list[dict]:
     return out, seen_rows
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30, help="lookback window")
     ap.add_argument("--min-mentions", type=int, default=3,
@@ -278,7 +278,7 @@ def main() -> int:
     ap.add_argument("--min-sources", type=int, default=2,
                      help="minimum distinct source domains")
     ap.add_argument("--top", type=int, default=25)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     results, seen_rows = scan(args.days, args.min_mentions, args.min_sources)
 

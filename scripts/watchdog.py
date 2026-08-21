@@ -121,10 +121,10 @@ def check_health() -> list[tuple[str, str]]:
             for row in rows if not row.get("ok")]
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--test", action="store_true", help="send a test alert and exit")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     from ai_investing.alerts import get_notifier
     from ai_investing.config import Settings

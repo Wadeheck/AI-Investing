@@ -167,12 +167,12 @@ def digest_day(date: str, settings, graph, dry: bool) -> bool:
     return True
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true",
                     help="digest pending days even below the batch threshold")
     ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     # Refresh staging first — idempotent, folds newly crawled GDELT days in.
     subprocess.run([sys.executable, str(CAMPAIGN / "_stage.py")],

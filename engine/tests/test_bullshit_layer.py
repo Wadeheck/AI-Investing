@@ -11,14 +11,38 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-tmp = tempfile.mkdtemp()
-for var, name in [("BRAIN_GRAPH_PATH", "g.json"), ("BRAIN_REGIME_PATH", "r.json"),
-                  ("BRAIN_SCENARIOS_PATH", "s.json"), ("BRAIN_STATE_PATH", "b.json"),
-                  ("BRAIN_MACRO_CACHE_PATH", "m.json"), ("BRAIN_FIELD_PATH", "f.json"),
-                  ("BRAIN_DB_PATH", "brain.db"), ("BRAIN_FEED_CACHE_PATH", "fc.json"),
-                  ("BRAIN_ADVICE_PATH", "adv.json"), ("BRAIN_SENTIMENT_CACHE_PATH", "sc.json"),
-                  ("STATE_PATH", "state.json")]:
-    os.environ[var] = os.path.join(tmp, name)
+_PATH_VARS = [("BRAIN_GRAPH_PATH", "g.json"), ("BRAIN_REGIME_PATH", "r.json"),
+              ("BRAIN_SCENARIOS_PATH", "s.json"), ("BRAIN_STATE_PATH", "b.json"),
+              ("BRAIN_MACRO_CACHE_PATH", "m.json"), ("BRAIN_FIELD_PATH", "f.json"),
+              ("BRAIN_DB_PATH", "brain.db"), ("BRAIN_FEED_CACHE_PATH", "fc.json"),
+              ("BRAIN_ADVICE_PATH", "adv.json"), ("BRAIN_SENTIMENT_CACHE_PATH", "sc.json"),
+              ("STATE_PATH", "state.json")]
+
+
+def _isolate() -> str:
+    """A private directory per test, not per module.
+
+    `_fresh_settings()` used to DELETE files inside one shared directory. Under
+    the project's own runner that is fine — each test file is a fresh process,
+    so any sqlite handle left open by production code dies with it. Under pytest
+    every file shares one process, those handles accumulate against the same
+    path, and deleting the file underneath them produced
+
+        sqlite3.OperationalError: database is locked
+
+    on six tests here — green file-by-file, red in the suite, which is §4.40.
+    A new directory sidesteps it entirely: a leaked handle points at a path
+    nothing will use again.
+    """
+    global tmp
+    tmp = tempfile.mkdtemp()
+    for var, name in _PATH_VARS:
+        os.environ[var] = os.path.join(tmp, name)
+    return tmp
+
+
+tmp = ""
+_isolate()
 
 from ai_investing.brain.graph import KnowledgeGraph  # noqa: E402
 from ai_investing.config import Settings  # noqa: E402
@@ -27,13 +51,9 @@ NOW = datetime.now(timezone.utc)
 
 
 def _fresh_settings():
-    s = Settings()
-    for f in ("brain.db", "emotion_field.json", "campaigns.json", "contrarian.json",
-              "learned_trust.json", "emotion_calibration.json", "integrity_flags.json"):
-        p = os.path.join(tmp, f)
-        if os.path.exists(p):
-            os.remove(p)
-    return s
+    """A genuinely fresh state, in a directory of its own."""
+    _isolate()
+    return Settings()
 
 
 def _seed_prices(s, series_by_symbol, days=20):

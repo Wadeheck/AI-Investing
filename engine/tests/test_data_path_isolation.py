@@ -132,6 +132,36 @@ def test_settings_still_wins_over_the_environment():
     assert paths.data_dir(s) == tmp
 
 
+def test_no_script_main_reads_sys_argv_behind_its_caller():
+    """§4.40. A `main()` that calls `parse_args()` with no argument reads
+    `sys.argv` — which under pytest holds pytest's own flags, so the script
+    exits 2 and any test driving it fails for a reason that has nothing to do
+    with the code. `scripts/watchdog.py` did exactly that, and two tests were
+    red under pytest and green under the project runner for it.
+
+    Same defect as the hardcoded data paths above, one layer up: a function that
+    reads global state its caller cannot set is neither testable nor
+    configurable, and those are the same defect.
+    """
+    import ast
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    offenders = []
+    for path in sorted(scripts.glob("*.py")):
+        src = path.read_text()
+        if "parse_args()" not in src:
+            continue
+        for node in ast.walk(ast.parse(src)):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "parse_args"
+                    and not node.args):
+                offenders.append(path.name)
+                break
+    assert not offenders, (
+        "these scripts parse sys.argv with no way for a caller to pass its own, "
+        f"so a test cannot drive them: {sorted(set(offenders))}")
+
+
 def test_crypto_book_reads_history_through_settings():
     """The specific regression: the bear signals must follow state_path."""
     import inspect

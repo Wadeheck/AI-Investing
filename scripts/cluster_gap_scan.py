@@ -226,7 +226,7 @@ def _cotagged_pairs(db_path: str, min_count: int, min_lift: float) -> list[tuple
     return out
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--min-dist", type=int, default=3,
@@ -236,7 +236,7 @@ def main() -> None:
     ap.add_argument("--min-lift", type=float, default=3.0,
                     help="minimum lift over random co-occurrence to flag (default 3.0)")
     ap.add_argument("--json", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     graph = KnowledgeGraph.load(settings.brain.graph_path)
     cluster_gaps = _cluster_gaps(graph, args.min_dist)

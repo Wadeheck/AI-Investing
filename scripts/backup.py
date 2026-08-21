@@ -47,10 +47,10 @@ PATTERNS = [
 ]
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     DEST.mkdir(parents=True, exist_ok=True)
     if args.list:

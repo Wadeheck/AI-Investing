@@ -87,10 +87,10 @@ def _stated_counts(text: str) -> dict[str, int]:
     return out
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--quiet", action="store_true", help="only report problems")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     from ai_investing.brain.graph import KnowledgeGraph
     from ai_investing.config import Settings

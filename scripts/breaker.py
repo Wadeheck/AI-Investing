@@ -190,13 +190,13 @@ def clear(s: dict, yes: bool) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repair-marks", action="store_true")
     ap.add_argument("--clear", action="store_true")
     ap.add_argument("--status", action="store_true", help="default action")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     s = load()
     if a.repair_marks:
         return repair(s)

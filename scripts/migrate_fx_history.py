@@ -42,10 +42,10 @@ KEY = "price_history_usd"
 CUTOVER = "2026-08-03"        # the day live prices started arriving in USD
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     try:
         done = KEY in json.loads(SENTINEL.read_text()).get("migrated", [])

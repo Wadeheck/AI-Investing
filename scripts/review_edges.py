@@ -176,7 +176,7 @@ def _print_stats(graph: KnowledgeGraph) -> None:
         print(f"\n  {len(contested)} rejection(s) being re-argued — see --contested")
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="review llm-proposed graph edges")
     ap.add_argument("--show", type=int, metavar="N", default=None,
                     help="list the N oldest pending edges (default: all)")
@@ -193,7 +193,7 @@ def main() -> int:
                     help="report placeholder ('none') nodes and unwired llm nodes")
     ap.add_argument("--prune", action="store_true",
                     help="remove placeholder nodes + their edges (writes the graph)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     settings = Settings()
     path = settings.brain.graph_path

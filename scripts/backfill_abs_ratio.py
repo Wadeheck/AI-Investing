@@ -41,10 +41,10 @@ from ai_investing.config import Settings                       # noqa: E402
 from ai_investing.learning.spine import MAG_CLIP               # noqa: E402
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dry-run", action="store_true", help="report, write nothing")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     settings = Settings()
     data = Path(os.path.dirname(os.path.abspath(settings.state_path)))

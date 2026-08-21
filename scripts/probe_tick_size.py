@@ -36,10 +36,10 @@ SYMBOL = "AAPL.US"
 BELOW = 0.10          # place the resting bid 10% under the last trade
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--send", action="store_true", help="place the probe orders")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     # Importing config is what loads .env (`_load_dotenv` runs at import time),
     # and the credentials live there rather than in the ambient environment.

@@ -86,7 +86,7 @@ def _model_label(settings) -> str:
     return settings.local_llm_model_fast
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch", type=int, default=50)
     ap.add_argument("--json", action="store_true", help="machine-readable result")
@@ -94,7 +94,7 @@ def main() -> int:
     ap.add_argument("--headline-batch", type=int, default=0,
                     help="headlines per LLM call; _BATCH exists because qwen3:8b "
                          "collapses above ~10, a limit a stronger model may not share")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     gold = [json.loads(l) for l in GOLD.read_text().splitlines() if l.strip()]
     settings = Settings()

@@ -182,7 +182,7 @@ def test_watchdog_keys_on_identity_not_wording():
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             for _ in range(8):
-                wd.main()
+                wd.main([])
     finally:
         p.undo()
     assert len(sent) == 1, \
@@ -196,9 +196,9 @@ def test_watchdog_alerts_on_a_genuinely_new_issue():
     p.attr(wd, "check_services", lambda: list(issues))
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            wd.main()
+            wd.main([])
             issues.append(("disk", "disk 4% free"))
-            wd.main()
+            wd.main([])
     finally:
         p.undo()
     assert len(sent) == 2, "a new, different issue must still page"
