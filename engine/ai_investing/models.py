@@ -155,6 +155,23 @@ def mark_price(raw, fallback: float) -> float:
 class Portfolio:
     cash: float
     positions: dict[str, Position] = field(default_factory=dict)
+    # {AssetClass: that venue's OWN equity}. §4.36's real fix.
+    #
+    # `cash + sum(qty * price)` is only this account's equity when opening a
+    # position EXCHANGES cash for the position's value. On a margined venue it
+    # LOCKS cash instead, so the formula adds back a notional it never deducted
+    # (leverage > 1) or subtracts it twice (a short) — the -$4,265-on-a-flat-book
+    # signature. The venue always knows its own equity; it just could not be
+    # blended into a book that also holds a marked stock leg.
+    #
+    # So: for every asset class named here, the venue's figure replaces both its
+    # cash and its mark-to-market. `cash` must exclude those venues' cash — the
+    # broker that supplies this is responsible for that split (see
+    # BrokerAdapter.portfolio and RoutingBroker.venue_equity_parts).
+    venue_equity: dict = field(default_factory=dict)
+
+    def _overridden(self, key: str, pos: Position) -> bool:
+        return bool(self.venue_equity) and pos.asset.asset_class in self.venue_equity
 
     def _px(self, key: str, pos: Position, prices: dict[str, float]) -> float:
         """The price to value `pos` at, or its cost basis if there isn't one.
@@ -189,12 +206,26 @@ class Portfolio:
         return px
 
     def equity(self, prices: dict[str, float]) -> float:
-        total = self.cash
+        """cash + marks, with any venue that reports its own equity substituted in.
+
+        Without `venue_equity` this is byte-for-byte the old formula, so every
+        book that has no margined leg is unaffected.
+        """
+        total = self.cash + sum(float(v) for v in self.venue_equity.values())
         for key, pos in self.positions.items():
+            if self._overridden(key, pos):
+                continue          # already inside that venue's own equity figure
             total += pos.market_value(self._px(key, pos, prices))
         return total
 
     def exposure(self, prices: dict[str, float]) -> float:
-        """Gross exposure = sum of |position value|."""
+        """Gross exposure = sum of |position value|.
+
+        NOT reduced by `venue_equity`: a margined position's exposure is its
+        NOTIONAL, which is exactly what `qty * price` gives and exactly what the
+        risk layer needs. Equity is what margin distorts; exposure is not.
+        A long-only margined book whose exposure was hidden here is §4.36's
+        third defect (`/assets` under-reporting).
+        """
         return sum(abs(pos.market_value(self._px(key, pos, prices)))
                    for key, pos in self.positions.items())

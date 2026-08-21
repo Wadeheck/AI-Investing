@@ -174,6 +174,80 @@ def test_the_default_adapter_still_says_it_has_no_venue_equity():
         "returning the crypto leg's equity here would drop the stock book"
 
 
+# ---------------------------------------------------------------------------
+# §4.36's REAL fix: Portfolio.equity() blending a venue's own equity with a
+# marked stock leg, so leverage and direction stop corrupting the number.
+# Until 2026-08-21 this was a startup REFUSAL, not a fix.
+# ---------------------------------------------------------------------------
+def _blend_case(leverage, wallet, qty, entry, price, stock_cash, stock_qty, stock_px):
+    """Build a RoutingBroker-shaped book and value it both ways."""
+    from ai_investing.models import Asset, AssetClass, Portfolio, Position
+
+    positions = {
+        "crypto:BTC/USD": Position(Asset("BTC/USD", AssetClass.CRYPTO), qty, entry),
+        "stock:AAPL": Position(Asset("AAPL", AssetClass.STOCK), stock_qty, 100.0),
+    }
+    prices = {"crypto:BTC/USD": price, "stock:AAPL": stock_px}
+
+    # what the VENUE says its equity is: wallet + unrealized on the position
+    venue_equity = wallet + (price - entry) * qty
+    truth = stock_cash + stock_qty * stock_px + venue_equity
+
+    # OLD: one cash figure spanning both venues, everything marked. On a
+    # margined venue the initial margin is already locked out of the wallet.
+    margin = abs(qty) * entry / leverage
+    old = Portfolio(stock_cash + (wallet - margin), positions).equity(prices)
+    # NEW: the crypto leg valued by its own venue, its cash excluded from `cash`
+    new = Portfolio(stock_cash, positions,
+                    venue_equity={AssetClass.CRYPTO: venue_equity}).equity(prices)
+    return truth, old, new
+
+
+def test_the_blend_agrees_where_the_old_formula_happened_to_be_right():
+    """1x long-only — the ONE configuration the startup guard permitted. The
+    blend must agree with it, or the fix would move a number that was correct."""
+    truth, old, new = _blend_case(leverage=1, wallet=5000.0, qty=0.1, entry=60000.0,
+                                  price=66000.0, stock_cash=2000.0, stock_qty=10,
+                                  stock_px=110.0)
+    assert abs(old - truth) < 1e-6, "fixture: the old formula IS right at 1x long"
+    assert abs(new - truth) < 1e-6, "and the blend must not move it"
+
+
+def test_the_blend_is_right_where_leverage_broke_the_old_formula():
+    """At 2x, half the notional is added back that was never deducted."""
+    truth, old, new = _blend_case(leverage=2, wallet=5000.0, qty=0.1, entry=60000.0,
+                                  price=66000.0, stock_cash=2000.0, stock_qty=10,
+                                  stock_px=110.0)
+    assert abs(new - truth) < 1e-6, "the blend is correct at 2x"
+    assert old - truth > 2_900, f"fixture: old overstates by {old - truth:,.0f}"
+
+
+def test_the_blend_is_right_on_a_short_the_old_formula_double_counted():
+    """The -$4,265-on-a-flat-book signature: margin locked (cash down) AND
+    qty*price negative, so the notional is subtracted twice."""
+    truth, old, new = _blend_case(leverage=1, wallet=5000.0, qty=-0.1, entry=60000.0,
+                                  price=57000.0, stock_cash=2000.0, stock_qty=10,
+                                  stock_px=110.0)
+    assert abs(new - truth) < 1e-6, "the blend is correct on a short"
+    assert truth - old > 11_000, f"fixture: old understates by {truth - old:,.0f}"
+
+
+def test_exposure_is_not_reduced_by_the_override():
+    """Equity is what margin distorts; exposure is not. A margined position's
+    exposure is its NOTIONAL, which is what the risk layer needs — hiding it is
+    §4.36's third defect (`/assets` under-reporting a long-only margined book)."""
+    from ai_investing.models import Asset, AssetClass, Portfolio, Position
+    pos = {"crypto:BTC/USD": Position(Asset("BTC/USD", AssetClass.CRYPTO), 0.1, 60000.0)}
+    p = Portfolio(0.0, pos, venue_equity={AssetClass.CRYPTO: 5000.0})
+    assert abs(p.exposure({"crypto:BTC/USD": 66000.0}) - 6600.0) < 1e-6
+
+
+def test_a_book_with_no_margined_leg_values_exactly_as_before():
+    from ai_investing.models import Asset, AssetClass, Portfolio, Position
+    pos = {"stock:AAPL": Position(Asset("AAPL", AssetClass.STOCK), 10, 100.0)}
+    assert Portfolio(2000.0, pos).equity({"stock:AAPL": 110.0}) == 3100.0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

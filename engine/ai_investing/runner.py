@@ -1002,10 +1002,33 @@ class Runner:
         (external trade, async/partial fill, rejected order we assumed filled) means our
         world model is wrong — halt in live mode rather than trade on bad state."""
         if self._shared_drift:
-            print(f"!! SHARED ACCOUNT DRIFT (unresolved): {self._shared_drift}")
-            print("   Refusing to trade until the books and the account agree. "
-                  "Fix, then restart.")
-            return False
+            # RE-ASK BEFORE REFUSING (§4.35). This used to halt unconditionally
+            # until an operator restarted, on the reasoning that "a disagreement
+            # about who owns which shares does not resolve itself". Mostly true —
+            # but the commonest cause is a pending order caught mid-settlement,
+            # and `resolve_pending()` fixes exactly that within the same or the
+            # very next cycle. On 2026-08-19 a late USO fill halted all four
+            # books for ~40 minutes for a condition that had already cleared.
+            #
+            # So: re-run the same check. A drift that is genuinely still there
+            # halts exactly as before — the safety property is unchanged, and it
+            # is re-established from live data rather than from a remembered
+            # string. A drift that has resolved lets the engine resume on its
+            # own, which is what it should have done in the first place.
+            #
+            # Deliberately NOT a timeout or a retry count: those would eventually
+            # resume on a drift that never cleared, which is the one thing this
+            # check exists to prevent.
+            stale = self._shared_drift
+            self._shared_drift = None          # cleared only so the re-check can set it again
+            if self._reconcile_shared(quiet=True):
+                print(f"  [reconcile] shared-account drift cleared on re-check "
+                      f"(was: {stale[:120]}) — resuming")
+                self.journal.record_event("shared_claim_drift_cleared", stale[:500])
+            else:
+                print(f"!! SHARED ACCOUNT DRIFT (still unresolved): {self._shared_drift}")
+                print("   Refusing to trade until the books and the account agree.")
+                return False
         current = {k: p.qty for k, p in portfolio.positions.items()}
         if self._last_positions is None:
             self._last_positions = current
@@ -1038,7 +1061,7 @@ class Runner:
         self._last_positions = current
         return True
 
-    def _reconcile_shared(self) -> bool:
+    def _reconcile_shared(self, quiet: bool = False) -> bool:
         """Do all the books' claims add up to what the account actually holds?
 
         `_reconcile()` above asks a different and now-insufficient question: "did
@@ -1101,19 +1124,32 @@ class Runner:
         if not drift:
             return True
         detail = "; ".join(drift)
-        self.journal.record_event("shared_claim_drift", detail[:500])
-        print(f"!! SHARED ACCOUNT DRIFT: {detail}")
-        if self.settings.alerts.on_error:
-            self.notifier.send(f"⚠️ *SHARED ACCOUNT DRIFT* — the books and the "
-                               f"account disagree:\n{detail}")
+        # `quiet` is the RE-CHECK of an already-reported drift (see _reconcile).
+        # It must not journal or alert again: the condition is the same one, and
+        # re-announcing it every cycle is precisely §4.20 — fifteen pages in
+        # ninety minutes for a single condition. The refusal still happens; only
+        # the noise is suppressed.
+        if not quiet:
+            self.journal.record_event("shared_claim_drift", detail[:500])
+            print(f"!! SHARED ACCOUNT DRIFT: {detail}")
+            if self.settings.alerts.on_error:
+                self.notifier.send(f"⚠️ *SHARED ACCOUNT DRIFT* — the books and the "
+                                   f"account disagree:\n{detail}")
         if self.settings.live:
             # This check runs late in the cycle — after every book has traded —
             # so it cannot stop the cycle it detected the drift in. It stops the
             # NEXT one, which is checked at the top of `run_cycle` alongside the
-            # per-book reconciliation. Cleared only by an operator: a disagreement
-            # about who owns which shares does not resolve itself.
+            # per-book reconciliation.
+            #
+            # The latch is re-tested from live data on every subsequent cycle
+            # (see `_reconcile`), NOT cleared by a restart. A drift caused by a
+            # pending order mid-settlement clears itself once `resolve_pending()`
+            # catches up; a real ownership disagreement keeps failing the
+            # re-check and keeps the engine halted, which is the whole point.
             self._shared_drift = detail
-            print("   Live mode — halting the next cycle for manual review.")
+            if not quiet:
+                print("   Live mode — halting the next cycle; it will re-test "
+                      "each cycle and resume by itself if the claim settles.")
         return False
 
     # -- learning -----------------------------------------------------------

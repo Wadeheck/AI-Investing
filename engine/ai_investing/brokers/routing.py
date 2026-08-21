@@ -44,6 +44,14 @@ class RoutingBroker(BrokerAdapter):
         """
         if not getattr(self.crypto, "margined", False):
             return
+        # The blend is available: the crypto leg is valued by its own venue
+        # (`venue_equity_parts`), so leverage and direction no longer corrupt
+        # the number and neither condition below is load-bearing any more.
+        # The guard stays for the case where the venue cannot be read at
+        # startup, because then the book really does fall back to
+        # `cash + qty*price` and both conditions bite again.
+        if self.venue_equity_parts() is not None:
+            return
         why = []
         if int(getattr(self.crypto, "leverage", 1) or 1) != 1:
             why.append(f"leverage is {self.crypto.leverage}x, not 1x "
@@ -59,10 +67,37 @@ class RoutingBroker(BrokerAdapter):
                 "venue's own equity with a marked stock leg, not relaxing this check.")
 
     def get_equity(self) -> float | None:
-        """None on purpose — see `_check_equity_is_reconstructable`. There is no
-        single venue to ask, and returning the crypto leg's own equity here
-        would drop the entire stock book out of the number."""
+        """None on purpose. There is no single venue to ask, and returning the
+        crypto leg's own equity here would drop the entire stock book out of the
+        number. The blend happens in `Portfolio.equity` via
+        `venue_equity_parts()` below, which is the §4.36 fix proper."""
         return None
+
+    def venue_equity_parts(self):
+        """Split this book so a margined crypto leg is valued by its own venue.
+
+            equity = stock cash + marked stock positions + crypto venue equity
+
+        The crypto term is the venue's own figure (wallet + unrealized), which
+        is correct at ANY leverage and in EITHER direction — so the two
+        conditions `_check_equity_is_reconstructable` used to enforce stop being
+        load-bearing once this is available.
+
+        Returns None when the crypto leg is not margined (nothing to blend, keep
+        the old formula) or when the venue cannot be read — in which case the
+        caller falls back to the reconstruction, and the startup guard is what
+        keeps that fallback honest.
+        """
+        if not getattr(self.crypto, "margined", False):
+            return None
+        try:
+            eq = self.crypto.get_equity()
+        except Exception:
+            return None
+        if eq is None:
+            return None
+        from ai_investing.models import AssetClass
+        return float(self.stock.get_cash()), {AssetClass.CRYPTO: float(eq)}
 
     def _for(self, asset: Asset) -> BrokerAdapter:
         return self.crypto if asset.asset_class is AssetClass.CRYPTO else self.stock

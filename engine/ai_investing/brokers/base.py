@@ -133,8 +133,23 @@ class BrokerAdapter(ABC):
         order.reason = f"{order.reason or ''} [unconfirmed after {attempts} checks]".strip()
         return order
 
+    def venue_equity_parts(self) -> tuple[float, dict] | None:
+        """`(cash_excluding_those_venues, {AssetClass: venue equity})`, or None.
+
+        Override on an adapter that spans several venues where at least one
+        reports its OWN equity — a margined leg, typically. Returning None keeps
+        the plain `cash + qty*price` reconstruction, which is right for every
+        adapter whose cash is exchanged for positions rather than locked
+        against them. See Portfolio.venue_equity and failure register §4.36.
+        """
+        return None
+
     def portfolio(self) -> Portfolio:
-        return Portfolio(self.get_cash(), self.get_positions())
+        parts = self.venue_equity_parts()
+        if parts is None:
+            return Portfolio(self.get_cash(), self.get_positions())
+        cash, venue_equity = parts
+        return Portfolio(cash, self.get_positions(), venue_equity=venue_equity)
 
     # True only for adapters whose get_cash() is a MARGIN balance — i.e. where
     # opening a position locks cash instead of exchanging it for the position's
