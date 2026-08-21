@@ -48,7 +48,7 @@ RESOLUTION  202 distinct response signatures across 469 assets = 43.1%.
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    62 files / 647 tests, green under BOTH runners (the project's own
+TESTS    63 files / 655 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
          machines, and under random ordering — see §4.40 and §4.46
 COMMITS  304
@@ -208,6 +208,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.46 | The suite was green here and 17 red on the ProDesk, under the same commit | ✅ `.env` detection now fires at collection time (`sys.modules` check), not test-start |
 | 4.47 | The calibrator was three days from halving six relationships on four observations | ✅ `MIN_N` 20→60 for causal edges, 120 to demote a membership; deliberate, not yet graded (§4A) |
 | 4.48 | §4.40's own fix killed the X capture channel, and its own guard blessed it | ✅ Real `main(argv=None)`; guards now check the name is BOUND and that every argparse script still starts |
+| 4.49 | A number that is not valid JSON survived every restart, in every state file | ✅ `allow_nan=False` on write, non-finite refused on read, and the 0.0 price sentinel removed from the shadow path too |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2262,6 +2263,47 @@ NameError: name 'argv' is not defined
   still RUN, not only that they no longer match the old pattern. Two AST guards
   and 645 passing tests did not notice a script that could not start.
 
+### 4.49 A number that is not valid JSON survived every restart, in every state file *(2026-08-21)*
+
+- **What.** §4A carried *"`shadow.json` held `NaN` cash"* as a small dormant row
+  about one file. It was neither small nor about one file.
+- **The mechanism.** `NaN` and `Infinity` are **not valid JSON**. Python's
+  encoder emits them anyway and its decoder reads them back, so a non-finite
+  number entering **any** state file round-trips forever:
+
+```
+>>> json.loads(json.dumps({"cash": float("nan")}))
+{'cash': nan}          # not an error. not a warning. every restart, forever.
+```
+
+- **And it is invisible to every guard, because a guard is a comparison.** NaN
+  compares false to everything. `if cash < 0: halt` does not fire. `max(0, cash)`
+  returns NaN. The circuit breaker, the drift latch and the data guard would all
+  have passed a book whose cash was NaN — they are all comparisons.
+  **Permanent and silent is the worst pair a corruption can have.**
+- **Scope.** `atomic.write_json` backs **28 call sites** — every book's state,
+  the learning ledger, the calibration reports. The row said "shadow book".
+- **Fix, in three layers, because any one of them alone would have prevented the
+  incident and all three must fail to repeat it:**
+
+| Layer | What it does |
+|---|---|
+| **WRITE** | `write_json(..., allow_nan=False)`. Serialisation already happened *before* the file is touched, so a refusal leaves the previous good state on disk — the property the docstring already promised, now applied to the one class of value slipping through it. |
+| **READ** | `read_json` refuses the three non-finite tokens via `parse_constant`. Without this the writer's fix does nothing for the file already on disk, and the corruption outlives the fix. |
+| **SOURCE** | `_shadow_fill` used `prices.get(key, 0.0)` — the identical sentinel §4A removed from the LIVE path and left here. It now drops an unpriced order. `_load_shadow` reads through `atomic.read_json` and rebuilds rather than inheriting a non-finite cash. |
+
+- **Checked before changing anything:** all 99 live state files scanned on the
+  box. The only `NaN`/`Infinity` hits are inside scraped news TEXT, not values —
+  so turning the writer strict could not break a legitimate write today.
+- **Four mutations verified**, one per layer.
+- **This is the fourth instance today of the same meta-defect** — §4.14, §4.23,
+  §4.36 and now §4A's own sentinel row: **a defect fixed where it was observed
+  and nowhere else.** The 0.0 price sentinel was removed from the live path this
+  morning and left standing in the shadow path eight hours later, in the same
+  file.
+- **Lesson.** When a row names one file, ask what WROTE it. The shadow book was
+  where the symptom appeared; `json.dumps` was where the defect lived.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2299,7 +2341,7 @@ and the register had drifted **13 commits** behind reality.
 | ~~The leaked Gemini key~~ | **CLOSED 2026-08-05 — the user revoked it at Gemini.** `.env.example` deleted, docs redacted, and every tracked file now scanned. | — |
 | **Git history still contains the revoked string** | `git filter-repo`/BFG could purge it, at the cost of rewriting every commit hash and breaking any clone. Unnecessary now the key is dead. | None. A revoked key is just a string. |
 | **The declared book basis is wired but has not yet appeared in a live mark** | 2026-08-21. `BookBasisMixin` is mixed into all five books and `_basis_fields()` is called at every mark site (verified by grep and by `test_book_basis.py`), but an equity mark is written **once a day**, and the last one on the box (`stock_journal.jsonl`, 2026-08-20T16:01Z) predates the deploy. `brain_audit.py` still reports `basis: (undeclared)` for all five books, and the live state files have no `basis` key yet. | Low, and self-resolving — but it is **unverified in production**, which is a different claim from "fixed", and this document has been burned by that difference before (§4.19, §4.32). Do not mark §4.14's per-book extension proven until a real mark line carries it. **Cue: the next daily mark.** |
-| **`shadow.json` held `NaN` cash** | Retired in the reset, so it rebuilds clean — but nothing prevents it recurring, and no test covers the shadow book's arithmetic. | The A/B baseline can silently corrupt again. |
+| ~~`shadow.json` held `NaN` cash~~ | **CLOSED 2026-08-21 — and the root cause was not in the shadow book.** `NaN`/`Infinity` are **not valid JSON**, but Python's encoder emits them and its decoder reads them back, so one non-finite number entering ANY state file **persisted across every restart forever** — and silently, because NaN compares false to everything, so `if cash < 0: halt` never fires. Three layers now, each mutation-tested on its own: **WRITE** — `atomic.write_json(allow_nan=False)` refuses it, and because serialisation happens before the file is touched the previous good state survives (verified, not assumed). **READ** — `atomic.read_json` refuses the three non-finite tokens, so a file written by an older build cannot re-admit what the writer now refuses to create. **SOURCE** — `_shadow_fill` used `prices.get(key, 0.0)`, the same sentinel §4A removed from the LIVE path and left here; it now drops an unpriced order. `_load_shadow` also rebuilds rather than inheriting a non-finite cash. Scanned the live box first: **no state file currently holds one**. `test_shadow_arithmetic.py`, 8 cases. | — |
 | ~~`_reconcile_shared()` can latch on a fill that resolves itself~~ (§4.35) | **CLOSED 2026-08-21.** The latch is now re-tested from live data every cycle instead of being cleared only by an operator restart. A drift caused by a pending order mid-settlement clears itself once `resolve_pending()` catches up, and the engine resumes on its own — which is what cost a ~40-minute four-book outage on 2026-08-19. A REAL ownership disagreement keeps failing the re-check and keeps the engine halted, with no timeout and no retry budget, because that is the one thing this check exists to prevent. The re-check is `quiet`: it never re-journals or re-alerts, so a genuinely halted book does not become §4.20's fifteen-pages-in-ninety-minutes. Four cases pinned in `test_shared_drift_latch.py`. | The second half of §4.35 remains: while genuinely halted the book's state file stops being written, so file-based checks (`daily_status.py`, `watchdog.py`) can still report a stale claim. Much smaller now that self-resolving halts end by themselves. |
 
 ## 4B. Cues — when each open item in §4A is actually ready to act on
@@ -2334,7 +2376,7 @@ automatically, since several of these are judgement calls, not bugs.
 | `SONNET_DIGEST_BRIEF.md` golden-set audit not re-run since v1.6 | Not data-gated — a deliberate action, before the next material change to the brief compounds on top of an unverified one. Run the §15 golden-set audit (50 hand-tagged examples) against v1.6, including the 12 newly-added nodes specifically. | `docs/data-pipeline/SONNET_DIGEST_BRIEF.md` §15; the brief's own v1.6 changelog entry names what changed. |
 | New-company discovery's manual step | **Monthly**, next due **~2026-09-14** (one month after the §4.26 sweep), or immediately if a market-moving China/HK/SG headline seems suspiciously absent from the graph. Re-run `graph_gap_scan.py` first each time — if it starts catching real names on its own, the manual step can retire. | `scripts/graph_gap_scan.py`, then manual "biggest HK/CN IPOs" search as a cross-check. |
 | LLM endpoint nearing its free daily cap | If `vgxfw` closes **3 consecutive days above 90%** of its projected daily use, that's the trigger to either trim per-cycle scoring frequency or add a second paid endpoint to the chain. | `daily_status.py` → "LLM free allowance" line, checked daily. |
-| `shadow.json` NaN cash | Currently retired, so dormant — but the missing arithmetic test must be written **before** the A/B shadow baseline is reactivated, not after. | Add coverage to whatever test file exercises the shadow book, before flipping it back on. |
+| ~~`shadow.json` NaN cash~~ | **CUE DISCHARGED 2026-08-21.** The test the cue asked for exists (`test_shadow_arithmetic.py`) and the defect is fixed at the source rather than in the shadow book — so the A/B baseline can be reactivated without the precondition this row was holding it against. | — |
 | CRWV avoid/short call | The `ai_circularity → crwv` edge needs **n≥60** realised-return observations (raised from 20 by §4.47 — it is a causal `influences` edge, so it takes the causal bar) following an `ai_circularity` activation before `calibration.py` can issue a verdict (`MIN_N = 20`) — currently below that. Re-run the calibrator periodically; a "contradicted" verdict there would be the trigger to demote the edge the same way TAO/FET's `crypto_majors` membership already was. | `python3 -m ai_investing.brain.calibration`, look for an `ai_circularity`→`crwv` row. |
 | `UNI/USD`'s override (now zeroed in code) | Remove `CONFIRMED_MISCALIBRATED` once **both** hold: (a) UNI has a real graph node, and (b) `calibration.py` has scored its edges at n≥60 (`MIN_N`, raised from 20 by §4.47). Removing it before either is true would just re-admit the same miscalibrated formula-only score. | `brain/adviser.py`, `data/knowledge_graph.json` for a `uni`/`uniswap` node, then the calibration report. |
 | PRX.AS (investing book, not a bug today) | Revisit if it crosses **−8.5%** (1.5pp from the 10% hard stop), or when `investor.py`'s `daily_manage` drops it from `strat.theses` on its own — whichever comes first. | `data/invest_state.json` position P&L; `data/invest_journal.jsonl` for an automatic exit. |

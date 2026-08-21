@@ -379,11 +379,20 @@ class Runner:
         # Persist in ALL modes: the paper track record (and its formula-only
         # A/B twin) must survive restarts — the brain REMEMBERS what it holds.
         # Fresh start = delete data/shadow.json + data/paper_state.json.
-        try:
-            with open(self._shadow_path) as fh:
-                return PaperBroker.from_state(json.load(fh), allow_short=self.settings.risk.allow_short)
-        except (OSError, json.JSONDecodeError, KeyError):
-            pass
+        # `atomic.read_json` rather than `json.load`: it refuses NaN/Infinity,
+        # which plain `json.load` accepts. Without that, a shadow book that
+        # once held NaN cash reloads it on every restart forever, and the A/B
+        # baseline silently compares against nothing (§4A).
+        state = atomic.read_json(self._shadow_path)
+        if isinstance(state, dict):
+            try:
+                b = PaperBroker.from_state(state, allow_short=self.settings.risk.allow_short)
+                cash = getattr(b, "_cash", None)
+                if cash is None or cash != cash or cash in (float("inf"), float("-inf")):
+                    raise ValueError(f"shadow book reloaded a non-finite cash: {cash!r}")
+                return b
+            except (KeyError, ValueError, TypeError) as exc:
+                print(f"!! SHADOW BOOK rebuilt from scratch: {exc}")
         return PaperBroker(starting_cash, allow_short=self.settings.risk.allow_short)
 
     def _live_universe(self) -> set[str]:
@@ -1222,7 +1231,14 @@ class Runner:
             pass
 
     def _shadow_fill(self, order: Order, prices: dict[str, float]) -> None:
-        mid = prices.get(order.asset.key, 0.0)
+        # No price = no fill. This was `prices.get(key, 0.0)`, the same sentinel
+        # removed from the live path — and left here, which is the §4.14/§4.23/
+        # §4.36 pattern of fixing a defect where it was OBSERVED and nowhere
+        # else. A 0.0 mid feeds `effective_price`, and the resulting cash
+        # arithmetic is how `shadow.json` came to hold NaN (§4A).
+        mid = prices.get(order.asset.key)
+        if not mid or mid != mid:          # absent, zero, or NaN
+            return
         ms = self._stats.get(order.asset.key)
         eff = self._costs_for(order.asset).effective_price(order.side, mid, order.qty,
                                                            ms.adv if ms else None, ms.vol if ms else None)

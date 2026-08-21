@@ -43,18 +43,43 @@ def write_json(path: str, obj: Any, indent: int | None = None) -> None:
 
     Serialisation happens BEFORE the file is touched: an object that fails to
     encode leaves the previous good state untouched rather than truncated.
+
+    `allow_nan=False` is the point of this function as much as the atomic
+    rename is. `NaN` and `Infinity` are NOT valid JSON, but Python's encoder
+    emits them anyway and its decoder reads them back — so a single non-finite
+    number entering any state file **persists across every restart forever**,
+    and nothing notices, because NaN compares false to everything. A guard
+    like `if cash < 0: halt` does not fire on NaN. That is how `shadow.json`
+    came to hold `NaN` cash (§4A).
+
+    Refusing here means a bad value raises at the moment it is produced, with
+    the previous good state still on disk — exactly the property the docstring
+    above already promised, applied to the one class of value that was slipping
+    through it.
     """
-    write_text(path, json.dumps(obj, indent=indent))
+    write_text(path, json.dumps(obj, indent=indent, allow_nan=False))
+
+
+def _refuse_non_finite(token: str) -> Any:
+    """`json.load`'s hook for the three tokens that are not legal JSON.
+
+    Without this, a file written by an older build (or by hand) re-admits the
+    very value `write_json` now refuses to create, and the corruption survives
+    the fix.
+    """
+    raise ValueError(f"{token} is not valid JSON and must not enter a state file")
 
 
 def read_json(path: str, default: Any = None) -> Any:
     """Read JSON, tolerating absence and corruption.
 
     A file damaged by a pre-atomic-write crash should not take the engine down
-    on startup; the caller gets the default and rebuilds.
+    on startup; the caller gets the default and rebuilds. A file holding
+    `NaN`/`Infinity` counts as corrupt for exactly the same reason — see
+    `write_json` — so it is rebuilt rather than inherited.
     """
     try:
         with open(path) as fh:
-            return json.load(fh)
+            return json.load(fh, parse_constant=_refuse_non_finite)
     except (OSError, json.JSONDecodeError, ValueError):
         return default
