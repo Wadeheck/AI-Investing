@@ -162,6 +162,104 @@ def test_no_script_main_reads_sys_argv_behind_its_caller():
         f"so a test cannot drive them: {sorted(set(offenders))}")
 
 
+def test_every_parse_args_argument_is_actually_bound():
+    """The guard above checks for a SHAPE and that is not enough.
+
+    The §4.40 pass rewrote `parse_args()` -> `parse_args(argv)` across 17
+    scripts. Sixteen had a `main(argv=None)` for that name to come from.
+    `x_auto_capture.py` parsed its arguments at module level inside
+    `if __name__ == "__main__":`, so the rewrite left it referring to a name
+    that does not exist:
+
+        NameError: name 'argv' is not defined
+
+    It crashed in 50ms on every run for two hours before anyone looked, and the
+    test above **passed the whole time** — `parse_args(argv)` is exactly the
+    shape it was asked to enforce. A guard that checks the shape of a fix
+    without checking that the result still runs will bless a broken script,
+    which is worse than not having the guard: it is a green light on red.
+
+    So: any NAME passed to `parse_args` must be a parameter of the function it
+    sits in. A module-level call has no enclosing function and therefore no way
+    to be given one.
+    """
+    import ast
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    offenders = []
+    for path in sorted(scripts.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        # name -> the parameters in scope wherever it is called
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+            if fn.args.vararg:
+                params.add(fn.args.vararg.arg)
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "parse_args"
+                        and node.args
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id not in params):
+                    offenders.append(f"{path.name}:{node.lineno} ({node.args[0].id})")
+        # the module-level case, which is the one that actually shipped
+        in_fn = {id(n) for fn in ast.walk(tree)
+                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 for n in ast.walk(fn)}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "parse_args"
+                    and node.args
+                    and isinstance(node.args[0], ast.Name)
+                    and id(node) not in in_fn):
+                offenders.append(
+                    f"{path.name}:{node.lineno} ({node.args[0].id} at module level)")
+    assert not offenders, (
+        "these scripts pass a name to parse_args() that is not bound where they "
+        f"call it — they raise NameError the moment they run: {sorted(set(offenders))}")
+
+
+def test_every_argparse_script_still_starts():
+    """The cheapest check that the AST guards above did not break anything:
+    every script that builds an ArgumentParser must survive `--help`.
+
+    This is deliberately shallow. It is the one check that would have caught
+    `x_auto_capture.py` in the same commit that broke it, where neither AST
+    guard did.
+
+    ONLY argparse scripts, and that restriction is load-bearing rather than
+    tidiness. The first version ran `--help` against all 32 scripts and hung for
+    two minutes on `accumulate_once.py`, which has no argparse and therefore
+    treated `--help` as "go and do the real thing" — it started fetching feeds.
+    A test that executes production scripts to see whether they parse is a
+    worse defect than the one it is checking for. An argparse script prints its
+    help and exits; a non-argparse script does its job.
+    """
+    import subprocess
+    import sys as _sys
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    broken = []
+    for path in sorted(scripts.glob("*.py")):
+        if "ArgumentParser" not in path.read_text():
+            continue
+        try:
+            r = subprocess.run([_sys.executable, str(path), "--help"],
+                               capture_output=True, text=True, timeout=30,
+                               cwd=str(path.parents[1]))
+        except subprocess.TimeoutExpired:
+            broken.append(f"{path.name}: --help did not return in 30s")
+            continue
+        # A script may exit non-zero for its own reasons (a missing key, say).
+        # A NameError or a SyntaxError never is one of those reasons.
+        for fatal in ("NameError", "SyntaxError", "ImportError"):
+            if fatal in r.stderr and "Traceback" in r.stderr:
+                broken.append(f"{path.name}: {fatal}")
+                break
+    assert not broken, f"these scripts cannot even start: {sorted(set(broken))}"
+
+
 def test_a_test_process_never_loads_the_machines_dotenv():
     """§4.19, and the gap that survived it.
 

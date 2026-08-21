@@ -495,3 +495,72 @@ exactly as §7 lists them. The one addition: whoever writes the next
 "still open, N → M" summary should pull §4A's row count directly (or read
 this section) rather than recall it — that is the specific mistake this pass
 exists to record.
+
+---
+
+## 10. Second follow-up — a regression this session introduced, found live
+
+§9 was register hygiene. This one is a **defect**, filed as **§4.48**, and it
+was mine.
+
+### 10.1 What happened
+
+§4.40's fix rewrote `parse_args()` → `parse_args(argv)` across 17 scripts.
+Sixteen had a `main(argv=None)` for that name to come from.
+`scripts/x_auto_capture.py` parsed its arguments at **module level**, inside
+`if __name__ == "__main__":` — so the rewrite left it naming something that does
+not exist:
+
+```
+NameError: name 'argv' is not defined
+```
+
+The X harvest died in ~50ms on every timer firing from the deploy (18:50) until
+it was found (23:10). **Two scheduled runs, one channel dark.**
+
+### 10.2 How it was found, and how it was NOT found
+
+Found by eye, running `systemctl --user list-units` while checking something
+else. Not by a test. Not by the watchdog. Not by the 645-test suite.
+
+**And its own guard passed for the entire outage.** The §4.40 commit added
+`test_no_script_main_reads_sys_argv_behind_its_caller`, which looks for
+`parse_args()` **with no argument**. The broken script calls `parse_args(argv)`
+— *precisely the shape the guard exists to enforce*.
+
+> **A guard that checks the shape of a fix without checking that the result
+> still runs will bless a broken script. That is worse than having no guard: it
+> is a green light on red.**
+
+This belongs next to §3's list. It is the eighth false-green of the day, and the
+first one that reached production rather than being caught at the desk.
+
+### 10.3 Fixes
+
+| Change | What it now catches |
+|---|---|
+| `x_auto_capture.py` gets a real `main(argv=None)` | The outage itself. Verified with `--help`. |
+| `test_every_parse_args_argument_is_actually_bound` | Any NAME passed to `parse_args` must be a parameter of the function it sits in. A module-level call has no enclosing function and so no way to be given one. |
+| `test_every_argparse_script_still_starts` | Every script that builds an `ArgumentParser` must survive `--help`. Shallow on purpose — it is the one check that would have caught this in the commit that broke it. |
+
+Both new guards were **mutation-tested against the exact bug that shipped**: put
+the old `__main__` block back, and both go red.
+
+**The smoke test needed a fix of its own before it was safe to keep.** The first
+version ran `--help` against all 32 scripts and hung for two minutes on
+`accumulate_once.py`, which has no argparse and so read `--help` as *"go and do
+the real thing"* — it started fetching feeds. **A test that executes production
+scripts to find out whether they parse is a worse defect than the one it checks
+for.** Restricted to the 17 argparse scripts, which is exactly the population
+the refactor touched.
+
+### 10.4 What this changes about §7
+
+Nothing on the open list. But it adds a standing rule worth more than any row on
+it:
+
+> **A blanket refactor across N files needs a check that the N files still RUN,
+> not merely that they no longer match the old pattern.** Two AST guards and 645
+> passing tests did not notice a script that could not start.
+
+Suite is now **647** under both runners.

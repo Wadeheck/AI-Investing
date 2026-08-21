@@ -139,9 +139,13 @@ def run(days: int, feed_only: bool) -> int:
     return r.returncode
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=3)
     ap.add_argument("--feed-only", action="store_true")
     a = ap.parse_args(argv)
-    sys.exit(run(a.days, a.feed_only))
+    return run(a.days, a.feed_only)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -48,7 +48,7 @@ RESOLUTION  202 distinct response signatures across 469 assets = 43.1%.
                                         objects than it holds — §4.39.
 BRAIN    45,991 articles, 36,376 events tagged
 TAGGER   0% unsigned across recent events              (was 57%)
-TESTS    62 files / 645 tests, green under BOTH runners (the project's own
+TESTS    62 files / 647 tests, green under BOTH runners (the project's own
          `python3 tests/test_x.py` and `pytest engine/tests/`), on both
          machines, and under random ordering — see §4.40 and §4.46
 COMMITS  304
@@ -207,6 +207,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.45 | The expectation calibrator shrank an expectation that was 14x too small | ✅ Signed average for drift, magnitude average for the gain; true ratio journalled |
 | 4.46 | The suite was green here and 17 red on the ProDesk, under the same commit | ✅ `.env` detection now fires at collection time (`sys.modules` check), not test-start |
 | 4.47 | The calibrator was three days from halving six relationships on four observations | ✅ `MIN_N` 20→60 for causal edges, 120 to demote a membership; deliberate, not yet graded (§4A) |
+| 4.48 | §4.40's own fix killed the X capture channel, and its own guard blessed it | ✅ Real `main(argv=None)`; guards now check the name is BOUND and that every argparse script still starts |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2218,6 +2219,48 @@ assert structural_bar >= 2 * causal    # structure needs more than a guess
   output" are different diagnoses with opposite fixes, and only measurement
   tells them apart. The dangerous version of this module was not the silent one
   — it was the one three days from speaking confidently.
+
+### 4.48 The fix for §4.40 killed the X capture channel, and its own guard blessed it *(2026-08-21)*
+
+- **What.** §4.40 rewrote `parse_args()` -> `parse_args(argv)` across 17
+  scripts. Sixteen had a `main(argv=None)` for that name to come from.
+  `x_auto_capture.py` parsed its arguments at module level, inside
+  `if __name__ == "__main__":`, so the rewrite left it naming something that
+  does not exist:
+
+```
+NameError: name 'argv' is not defined
+```
+
+- **Cost.** The X harvest died in ~50ms on every timer firing from the deploy
+  (18:50) until it was found (23:10) — **two scheduled runs, one channel dark**.
+  Found by running `systemctl --user list-units` while checking something else,
+  not by any test and not by the watchdog.
+- **Why the guard did not catch it, which is the real defect.**
+  `test_no_script_main_reads_sys_argv_behind_its_caller` checks for
+  `parse_args()` **with no argument**. The broken script calls
+  `parse_args(argv)` — *exactly the shape the guard was written to enforce*. It
+  passed for the whole outage. **A guard that checks the shape of a fix without
+  checking that the result still runs will bless a broken script, which is
+  worse than having no guard: it is a green light on red.**
+- **Fix.** `x_auto_capture.py` gets a real `main(argv=None)` like the other 16,
+  plus two new guards, both mutation-tested against the exact bug that shipped:
+  1. `test_every_parse_args_argument_is_actually_bound` — any NAME passed to
+     `parse_args` must be a parameter of the function it sits in. A
+     module-level call has no enclosing function and so no way to be given one.
+  2. `test_every_argparse_script_still_starts` — every script that builds an
+     `ArgumentParser` must survive `--help`. Shallow on purpose; it is the one
+     check that would have caught this in the commit that broke it.
+- **And the smoke test needed a fix of its own before it was safe.** The first
+  version ran `--help` against all 32 scripts and hung on `accumulate_once.py`,
+  which has no argparse and so read `--help` as *"go and do the real thing"* —
+  it started fetching feeds. **A test that executes production scripts to find
+  out whether they parse is a worse defect than the one it checks for.**
+  Restricted to the 17 argparse scripts, which is exactly the population the
+  refactor touched.
+- **Lesson.** A blanket refactor across N files needs a check that the N files
+  still RUN, not only that they no longer match the old pattern. Two AST guards
+  and 645 passing tests did not notice a script that could not start.
 
 ## 4A. Open defects — known, NOT fixed
 
