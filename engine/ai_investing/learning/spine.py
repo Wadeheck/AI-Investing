@@ -26,7 +26,23 @@ N_HALF = 12.0             # sample count at which evidence carries half weight
 EDGE_GAIN = 0.8           # how hard proven edge moves size
 SIZE_BOUNDS = (0.5, 1.4)  # a bad policy shrinks; a good one cannot run away
 GAIN_BOUNDS = (0.25, 3.0)  # expectation-scaling limits
-RATIO_CLIP = 3.0          # one freak outcome must not rewrite the model
+RATIO_CLIP = 3.0          # one freak outcome must not rewrite the SCORE
+# MAGNITUDE is a separate question from score, and needs a separate bound.
+#
+# RATIO_CLIP exists so a single freak outcome cannot dominate the direction
+# penalty, and for that job 3.0 is right — beyond it the penalty has already
+# reached its floor, so more range buys nothing. But `calibration_gain` reads
+# the same number to answer "how far off is expected_move", and there 3.0
+# destroys the signal it needs. Measured on the live record 2026-08-21:
+#
+#     settled claims                        19
+#     clipped at +/-3.0                     15  (79%)
+#     median |true ratio|                 14.4
+#     max                                106.4   (000660.KS: exp 0.11%, real 11.4%)
+#
+# expected_move is systematically one to two ORDERS OF MAGNITUDE too small, and
+# every observation that says so was recorded as "3.0".
+MAG_CLIP = 50.0           # magnitude evidence: wide enough to see, bounded enough to survive
 # Severity of a loss, on top of the direction/conviction penalty. Referenced to the
 # risk budget: a loss that used the whole per-position allowance is the worst case
 # the design permits, so it earns the full extra cost and no more.
@@ -151,7 +167,8 @@ class LearningSpine:
             return None
         exp = max(1e-6, float(claim["expected_move"]))
         signed = realized_move * (1 if claim["direction"] > 0 else -1)
-        ratio = max(-RATIO_CLIP, min(RATIO_CLIP, signed / exp))
+        ratio_true = signed / exp
+        ratio = max(-RATIO_CLIP, min(RATIO_CLIP, ratio_true))
 
         # SCORE (docs/design/LEARNING.md §3): direction is the only true mistake, and
         # conviction makes being wrong worse. Costs must be cleared to count.
@@ -187,7 +204,14 @@ class LearningSpine:
         out = {"id": claim["id"], "ts": _now().isoformat(), "state": "settled",
                "policy": policy, "symbol": symbol, "regime": claim.get("regime", "neutral"),
                "expected_move": round(exp, 5), "realized_move": round(signed, 5),
-               "ratio": round(ratio, 3), "score": round(score, 3), "won": won,
+               "ratio": round(ratio, 3),
+               # the UNCLIPPED ratio, so the record shows how far off the
+               # expectation really was. §4A carried "RATIO_CLIP hides severity
+               # beyond 3x" for exactly this: 15 of 19 settled claims recorded
+               # a magnitude of "3.0" for true ratios spanning 4.8 to 106.
+               "ratio_true": round(ratio_true, 3),
+               "ratio_clipped": abs(ratio_true) > RATIO_CLIP,
+               "score": round(score, 3), "won": won,
                "held_days": held_days, "exit_reason": exit_reason,
                "driver": claim.get("driver", "")}
         opened = claim["id"].split(":", 2)[-1]
@@ -198,7 +222,7 @@ class LearningSpine:
             return out
         self._append(out)
         self._update(policy, claim.get("driver", ""), claim.get("regime", "neutral"),
-                     ratio, score, won)
+                     ratio, score, won, ratio_true)
         self._save()
         return out
 
@@ -222,7 +246,21 @@ class LearningSpine:
             key, {"n": 0, "wins": 0, "ratio": None, "score": None, "recent": []})
 
     def _update(self, policy: str, driver: str, regime: str,
-                ratio: float, score: float, won: bool) -> None:
+                ratio: float, score: float, won: bool,
+                ratio_true: float | None = None) -> None:
+        # TWO AVERAGES, because `ratio` was serving two jobs with opposite needs.
+        #
+        #   b["ratio"]     EMA of the SIGNED clipped ratio. Drift detection wants
+        #                  this: `status()` asks whether recent outcomes have
+        #                  moved away from the long run, and sign is the signal.
+        #   b["abs_ratio"] EMA of the MAGNITUDE. `calibration_gain` wants this,
+        #                  and reading the signed average instead was a genuine
+        #                  inversion: +3 and -3 cancel, so on the live record the
+        #                  signed EMA sat at -0.274 while the median |true ratio|
+        #                  was 14.4. `abs(-0.274) = 0.27` told the gain to shrink
+        #                  expected_move by 4x when the evidence said grow it by
+        #                  ~14x. It was correcting backwards, confidently.
+        mag = min(MAG_CLIP, abs(ratio if ratio_true is None else ratio_true))
         keys = [("policies", policy), ("policies", f"{policy}@{regime}"),
                 ("drivers", driver or "unattributed")]
         for scope, key in keys:
@@ -231,6 +269,8 @@ class LearningSpine:
             b["wins"] += 1 if won else 0
             a = 1.0 / min(b["n"], 1.0 / 0.15)      # decaying average -> EMA(0.15)
             b["ratio"] = ratio if b["ratio"] is None else (1 - a) * b["ratio"] + a * ratio
+            prev_mag = b.get("abs_ratio")
+            b["abs_ratio"] = mag if prev_mag is None else (1 - a) * prev_mag + a * mag
             b["score"] = score if b["score"] is None else (1 - a) * b["score"] + a * score
             b["recent"] = (b.get("recent") or [])[-(DRIFT_WINDOW - 1):] + [round(ratio, 3)]
 
@@ -264,12 +304,27 @@ class LearningSpine:
         return max(SIZE_BOUNDS[0], min(SIZE_BOUNDS[1], 1.0 + shrink * edge * EDGE_GAIN))
 
     def calibration_gain(self, policy: str) -> float:
-        """Correct systematic over/under-prediction — shrunk by sample count."""
+        """Correct systematic over/under-prediction — shrunk by sample count.
+
+        Reads the MAGNITUDE average, not the signed one. `abs(EMA(signed))`
+        cancels wins against losses: on the live record it gave 0.27 — a
+        4x SHRINK — while the median |true ratio| was 14.4, i.e. the opposite
+        correction to the one the evidence demanded. See `_update`.
+
+        Falls back to the old signed reading only for buckets written before
+        `abs_ratio` existed, so an existing state file keeps working rather than
+        silently reverting to gain 1.0 and discarding what it had learned.
+        """
         b = (self._s.get("policies") or {}).get(policy) or {}
-        if not b.get("n") or b.get("ratio") is None:
+        if not b.get("n"):
             return 1.0
+        raw = b.get("abs_ratio")
+        if raw is None:
+            if b.get("ratio") is None:
+                return 1.0
+            raw = abs(b["ratio"])
+        raw = raw or 1.0
         _, shrink = self._posterior(b)
-        raw = abs(b["ratio"]) or 1.0
         blended = 1.0 + shrink * (raw - 1.0)         # toward reality, gradually
         return max(GAIN_BOUNDS[0], min(GAIN_BOUNDS[1], blended))
 

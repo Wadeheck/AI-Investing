@@ -206,6 +206,137 @@ def test_a_stop_out_is_punished_harder_than_a_scratch():
         assert sp.settle("event", "USO", -0.90)["score"] >= -1.0
 
 
+
+# ---------------------------------------------------------------------------
+# §4A: "RATIO_CLIP hides severity beyond 3x". It hid far more than severity.
+# ---------------------------------------------------------------------------
+def _settled(tmp, expected_signal, vol, realized):
+    """One open->settle round trip, returning the journalled outcome."""
+    sp = _spine(tmp)
+    sp.record("event", "AAA", 1, expected_signal, vol, 1, driver="d")
+    return sp, sp.settle("event", "AAA", realized, held_days=1)
+
+
+def test_the_record_keeps_the_true_ratio_not_only_the_clipped_one():
+    """The live USO case: expected +0.31%, realised -10.06%, true ratio -32.7,
+    recorded for weeks as -3.0. 15 of 19 settled claims were clipped like this,
+    for true ratios spanning 4.8 to 106."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _, out = _settled(tmp, expected_signal=0.0308, vol=0.10, realized=-0.10057)
+        assert abs(out["ratio"]) <= 3.0, "the SCORE bound is unchanged and still applies"
+        assert out["ratio_clipped"] is True
+        assert out["ratio_true"] < -20, (
+            f"the record must show how far off it really was, got {out['ratio_true']}")
+
+
+def test_the_gain_grows_an_expectation_that_is_too_small():
+    """THE INVERSION. `calibration_gain` read `abs(EMA(signed ratio))`, so wins
+    and losses cancelled: on the live record the signed EMA sat at -0.274 while
+    the median |true ratio| was 14.4. It told the model to SHRINK an
+    expected_move that was already ~14x too small.
+
+    Alternating big wins and big losses is exactly the shape that cancelled.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        for i in range(12):
+            sp.record("event", f"S{i}", 1, 0.002, 0.02, 1, driver="d")
+            # +20x and -20x alternating: the signed average is ~0, the magnitude is 20
+            sp.settle("event", f"S{i}", 0.0008 * (1 if i % 2 == 0 else -1), held_days=1)
+
+        b = sp._s["policies"]["event"]
+        assert abs(b["ratio"]) < 5, "fixture: the SIGNED average must be near zero"
+        assert b["abs_ratio"] > 5 * max(0.5, abs(b["ratio"])), (
+            "the MAGNITUDE average must see an error the signed one cancels away: "
+            f"signed={b['ratio']:.2f} abs={b['abs_ratio']:.2f}")
+        assert sp.calibration_gain("event") > 1.5, (
+            f"a systematically too-small expectation must be GROWN, got "
+            f"{sp.calibration_gain('event'):.2f}")
+
+
+def test_the_correction_converges_instead_of_running_away():
+    """The loop closes: as the gain grows, expected_move grows, and the measured
+    error falls toward 1. A correction that did not converge would be a feedback
+    loop, not a calibration."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        seen = []
+        for i in range(12):
+            sp.record("event", f"S{i}", 1, 0.002, 0.02, 1, driver="d")
+            sp.settle("event", f"S{i}", 0.0008 * (1 if i % 2 == 0 else -1), held_days=1)
+            seen.append(sp._s["policies"]["event"]["abs_ratio"])
+        assert seen[-1] < seen[0] / 2, (
+            f"the measured error must shrink as the gain corrects: "
+            f"{seen[0]:.1f} -> {seen[-1]:.1f}")
+
+
+def test_the_gain_ceiling_is_visible_when_it_binds():
+    """GAIN_BOUNDS caps the correction at 3x. On evidence of a 20x error the
+    gain pins there and the residual stays visible in `abs_ratio` — the same
+    saturation the edge calibrator shows at `gain=2.0`. The bound is a
+    deliberate choice; what must never happen is it hiding that it bound."""
+    from ai_investing.learning.spine import GAIN_BOUNDS
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        for i in range(12):
+            sp.record("event", f"S{i}", 1, 0.002, 0.02, 1, driver="d")
+            sp.settle("event", f"S{i}", 0.0008 * (1 if i % 2 == 0 else -1), held_days=1)
+        gain = sp.calibration_gain("event")
+        residual = sp._s["policies"]["event"]["abs_ratio"]
+        assert gain == GAIN_BOUNDS[1], "fixture: the ceiling must actually bind here"
+        assert residual > 2.0, (
+            "and the un-corrected remainder must remain legible rather than "
+            f"being absorbed silently: residual {residual:.1f}x")
+
+
+def test_the_gain_still_shrinks_an_expectation_that_is_too_large():
+    """The correction must work in both directions — this is not a licence to
+    always inflate."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        for i in range(12):
+            sp.record("event", f"S{i}", 1, 0.20, 0.02, 1, driver="d")
+            sp.settle("event", f"S{i}", 0.0004 * (1 if i % 2 == 0 else -1), held_days=1)
+        assert sp.calibration_gain("event") < 1.0, "an over-prediction must shrink"
+
+
+def test_the_gain_is_bounded_however_extreme_the_evidence():
+    """106x was a real observation. The correction must stay inside GAIN_BOUNDS
+    no matter what — an unbounded gain is how one outcome rewrites the model."""
+    from ai_investing.learning.spine import GAIN_BOUNDS
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        for i in range(20):
+            sp.record("event", f"S{i}", 1, 0.0001, 0.02, 1, driver="d")
+            sp.settle("event", f"S{i}", 0.5, held_days=1)      # absurd overshoot
+        assert GAIN_BOUNDS[0] <= sp.calibration_gain("event") <= GAIN_BOUNDS[1]
+
+
+def test_drift_detection_still_reads_the_SIGNED_average():
+    """The two averages must not be confused: `status()` needs sign, and would
+    be blinded by magnitude. A policy that alternates +/- is NOT drifting."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        for i in range(25):
+            sp.record("event", f"S{i}", 1, 0.002, 0.02, 1, driver="d")
+            sp.settle("event", f"S{i}", 0.0008 * (1 if i % 2 == 0 else -1), held_days=1)
+        b = sp._s["policies"]["event"]
+        assert b["ratio"] is not None and b["abs_ratio"] is not None
+        assert abs(b["ratio"]) < b["abs_ratio"], \
+            "the signed and magnitude averages must be genuinely different numbers"
+
+
+def test_an_old_state_file_without_abs_ratio_still_works():
+    """Backward compatibility: a bucket written before `abs_ratio` existed must
+    keep its learned gain rather than silently reverting to 1.0."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sp = _spine(tmp)
+        sp._s["policies"]["event"] = {"n": 20, "wins": 10, "ratio": -2.0,
+                                      "score": 0.0, "recent": []}
+        assert sp.calibration_gain("event") != 1.0, \
+            "an old bucket must fall back to the signed reading, not to neutral"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

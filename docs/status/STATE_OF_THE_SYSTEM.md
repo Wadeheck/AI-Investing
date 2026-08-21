@@ -178,6 +178,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.42 | 40% of the strategist's thesis capacity spent on shorts the venue refuses | ✅ The rule follows execution; ingestion downgrades short → avoid |
 | 4.43 | I read two trading books as frozen that were trading normally | ✅ The audit reads the authoritative source per book |
 | 4.44 | Three tests written to close a defect passed with the bug put back | ✅ Mutation-tested; all now fail on re-introduction |
+| 4.45 | The expectation calibrator shrank an expectation that was 14x too small | ✅ Signed average for drift, magnitude average for the gain; true ratio journalled |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2013,6 +2014,49 @@ investigating §4.41 — and because the instrument had inherited it.
   defect in the place you would least look for it. **Mutation-test anything
   written to close a register entry.**
 
+### 4.45 The expectation calibrator was correcting backwards *(2026-08-21)*
+
+- **What.** `calibration_gain()` scales `expected_move` toward reality. It read
+  `abs(b["ratio"])`, where `ratio` is an EMA of the SIGNED ratio of realised to
+  expected. Wins and losses therefore cancelled: on the live record the signed
+  EMA sat at **−0.274**, so `abs()` gave 0.27 and the gain SHRANK an expectation
+  that the same data said was ~14× too small.
+- **Why it hid.** One field served two consumers with opposite requirements.
+  `status()`'s drift detection needs the SIGN (has the policy moved away from
+  its long run?). `calibration_gain()` needs the MAGNITUDE (how far off are we?).
+  Sharing one number satisfied the first and inverted the second.
+- **Compounded by `RATIO_CLIP`.** At ±3.0, **15 of 19** settled claims were
+  clipped — median |true ratio| 14.4, max 106. So the evidence that would have
+  revealed the inversion was itself flattened before it was stored. §4A had this
+  filed as "one freak outcome (USO)" and as a minor observability nit.
+- **The numbers, since they are the argument:**
+
+```
+symbol      expected   realised   TRUE ratio   recorded
+000660.KS    0.00107    0.11380       106.4       3.0
+AMD          0.00106    0.06497        61.3       3.0
+BTC/USD      0.00100   -0.05126       -51.3      -3.0
+USO          0.00308   -0.10057       -32.7      -3.0
+MP           0.00210    0.06679        31.8       3.0
+```
+
+- **Fix.** `ratio_true`/`ratio_clipped` journalled; `RATIO_CLIP` keeps bounding
+  the score, which is what it was for. `_update` keeps a second average,
+  `abs_ratio` (EMA of |true ratio|, bounded by `MAG_CLIP = 50`), and the gain
+  reads that. Old buckets fall back to the signed reading rather than reverting
+  to a neutral 1.0 and discarding what they had learned.
+- **What it did NOT fix.** `GAIN_BOUNDS[1] = 3.0` now binds: the correction pins
+  at 3× while a ~7× residual remains, still visible in `abs_ratio` and pinned by
+  a test. Two saturated clamps in series became one. Raising it is a sizing
+  decision on 19 observations and is left open deliberately.
+- **Consequence worth chasing (§4A, sleeve row).** The event sleeve's "32:1
+  risk/reward" is computed from `expected_move`. If that is ~14× too small, the
+  true ratio is nearer 2:1 — the headline figure may have been measuring a
+  broken expectation rather than a broken strategy.
+- **Lesson.** A number reused by two consumers will eventually be right for one
+  and wrong for the other, and the wrong one fails silently because the field
+  still looks populated. Same shape as §4.6's `hit` before it got a benchmark.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2039,9 +2083,9 @@ and the register had drifted **13 commits** behind reality.
 | **The suite is green under the project runner and red under pytest** (§4.40) | All 57 files pass via `python3 tests/test_x.py` (fresh process each). `pytest engine/tests/` in one process fails 8, on a clean checkout. Cause: cross-file state (shared data dir, module-level `tmp`) and `test_alert_storm.py` asserting against `sys.argv`, which under pytest holds pytest's own arguments. | Low today — the per-file runner is what CI and the ProDesk use, so nothing is silently broken. But "all suites green" appears twice in this document and is true of only one runner, and the red one is what a newcomer reaches for first. It also hides real test-isolation debt (§4.21's family). |
 | **θ has been reset to v1** | Done, with the old file in `data/retired/`. The `journal.db` params rows from the crash loop remain — duplicates of identical θ under rising versions. | Historical noise in the params history only. |
 | ~~Main-loop coverage is one smoke test~~ | **CLOSED 2026-08-21.** `test_runner_decisions.py` drives a real `Runner` and asserts what the cycle CONCLUDES, not merely that it runs: a total feed outage does not collapse equity and places no orders (§4.7), an outage is still reported (the regression the price-key fix could have shipped), a flagged symbol is excluded from decisions but still valued (§4.5), equity is stable across cycles and reconciles with cash+holdings (§4.10/§4.36), a drift latch halts the next cycle and can clear itself (§4.35), and no position is grown past the weight cap. Plus `test_price_absence.py`, `test_shared_drift_latch.py`, `test_strategist_stance.py`. **Every one was mutation-tested** — the bug is re-introduced and the suite must go red. Three did not, first time round, and were strengthened; see §4.44. | — |
-| **The sleeve's risk/reward is inverted** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop — roughly 32:1 on the model's own numbers, needing ~97% accuracy to break even. Left deliberately (see §5) to let the record prove it. | Structural losses in the ⚡ book. |
+| **The sleeve's risk/reward is inverted — and the 32:1 may be a measurement artefact** | `expected_move` ≈ 0.3–0.5% against a 10% hard stop, roughly 32:1 on the model's own numbers. **New evidence 2026-08-21 (§4.45):** those numbers are the problem. Median |true ratio| of realised to expected is **14.4** across 19 settled claims, so the honest expected move is nearer 4–7% and the true ratio nearer 2:1 than 32:1. That does not make the sleeve safe — it means the headline figure was measuring a broken expectation, not a broken strategy. | Unchanged in practice until more settled claims accumulate: 19 is not enough to re-size on, and the gain ceiling (above) still caps the correction at 3×. **Revisit the 32:1 claim at the same cue as before** (first 10% stop-out, or 15 completed cycles) — but re-derive it from `ratio_true` rather than from `expected_move`. |
 | **One dangling claim in the ledger** | The discarded USO claim from defect 4 can never be settled. It stays in `expectations.jsonl` as a permanently open row. | Minor; one unresolved row in the corpus. |
-| **`RATIO_CLIP` hides severity beyond 3×** | The true USO ratio was −32.6, recorded as −3.0. Deliberate (one freak outcome must not rewrite the model) but it means the calibration gain cannot see how far off it really was. | Slow expectation calibration. |
+| ~~`RATIO_CLIP` hides severity beyond 3×~~ | **CLOSED 2026-08-21 — and it was hiding far more than severity, plus a second defect underneath.** This row said "one clipped observation (USO)". Measured: **15 of 19 settled claims were clipped (79%)**, median |true ratio| **14.4**, max **106** (`000660.KS`: expected 0.11%, realised 11.4%) — `expected_move` is systematically one to two ORDERS OF MAGNITUDE too small and every observation saying so was recorded as "3.0". Now `ratio_true` and `ratio_clipped` are journalled; `RATIO_CLIP` still bounds the SCORE, which is its legitimate job. **The defect underneath:** `calibration_gain` read `abs(EMA(signed ratio))`, so +3 and −3 cancelled — the live signed EMA sat at **−0.274**, telling the model to SHRINK the expectation 4× when the evidence demanded growing it ~14×. It was correcting backwards. `_update` now keeps two averages: signed for drift detection (`status()`, which needs the sign) and magnitude for the gain. Verified to converge rather than run away, and bounded. | **The ceiling now binds instead:** with the direction fixed, `GAIN_BOUNDS[1] = 3.0` pins and a ~7× residual error remains uncorrected — visible in `abs_ratio`, and pinned by a test so it cannot be absorbed silently. Two saturated clamps in series became one. Whether to raise the ceiling is a SIZING decision on 19 observations, deliberately not taken here. |
 | ~~Crypto coverage is 6, not 10~~ | **CLOSED 2026-08-21 — it was stale arithmetic, as the row itself suspected.** Re-measured against the current 17-coin watchlist: **16 of 17 scored**, and the single `no_view` is `UNI/USD`, which is deliberate (`CONFIRMED_MISCALIBRATED`, §4A above). The 6/13 figure predated §4.26's widening and was never recounted. | — |
 | **Three new dormant candidates, none influencing a live decision yet** | (1) `signals/trend_zscore.py`, added 2026-08-15 — an EMA/stdev z-score trend filter, added to the formula's feature vector at weight 0 after its own r/algotrading-inspired backtest and a real walk-forward run both failed to clear the Deflated Sharpe bar (0.001 vs 0.60 needed). See `docs/design/FORMULA.md` §7. (2) `research/crypto_signals.py`'s `positioning_crowding_z`, added 2026-08-15 — Binance long/short account-ratio crowding, covering all 17 watchlist coins (funding rate only ever covered 3). Computed and cached every cycle so it starts accumulating real days now, but gated out of brain resting levels by `CRYPTO_POSITIONING_ENABLED` (default false) — Binance retains only 30 days server-side, so there is no deep history to backtest this one against yet. (3) `signals/regime_persistence.py`, added 2026-08-18 (§4.33) — days-sustained-saturation on an asset's origin node, with a 2-hop graph look-through. Explicitly declined to hand-set its weight when asked to, same reasoning as `trend_zscore`'s own history. See `docs/design/FORMULA.md` §8. | None today — all three are inert by construction (weight 0 / flag off). Risk is only in *when* to flip them on without repeating the "trust an unvalidated backtest" mistake all three were built to avoid. |
 | **`SONNET_DIGEST_BRIEF.md`'s golden-set audit has not been re-run since v1.6** (§4.34) | The brief's own rule requires re-running its 50-headline golden-set audit (§15) whenever the document changes, before its output is fully trusted. v1.6 (2026-08-18) added 12 node definitions — transcribed from `knowledge_graph.json`, not freshly authored, so individually low-risk — but the rule was not followed before this entry was written. | Low — transcribed text, not new judgment calls — but unquantified until the audit actually runs. |
