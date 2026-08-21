@@ -106,11 +106,22 @@ def calibrate(settings) -> dict:
         # Market-relative where the column exists (see source_learning._migrate);
         # a name that rose 2% in a tape that rose 6% did not react to the shock.
         if "excess_ret" in cols:
-            basis_used = "excess"
             rows = conn.execute(
                 "SELECT emotion, COALESCE(excess_ret, realized_ret), is_noise "
                 "FROM event_outcomes WHERE symbol != '_NONE' "
                 "  AND COALESCE(excess_ret, realized_ret) IS NOT NULL").fetchall()
+            # The COLUMN existing is not the same as the DATA being
+            # market-relative. Rows written before source_learning._migrate keep
+            # a NULL excess and fall back to their absolute return, so reporting
+            # "excess" off the schema alone would overstate what was measured —
+            # exactly the kind of label this module was fixed for. Report the
+            # mix that was actually used.
+            n_excess = conn.execute(
+                "SELECT COUNT(*) FROM event_outcomes WHERE symbol != '_NONE' "
+                "  AND excess_ret IS NOT NULL").fetchone()[0]
+            basis_used = ("excess" if n_excess == len(rows)
+                          else f"mixed ({n_excess}/{len(rows)} excess)"
+                          if n_excess else "absolute (excess column empty)")
         else:
             rows = conn.execute(
                 "SELECT emotion, realized_ret, is_noise FROM event_outcomes "

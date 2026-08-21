@@ -375,3 +375,64 @@ if __name__ == "__main__":
             fn()
             print(f"  ok  {name}")
     print("test_bullshit_layer: all passed")
+
+
+def test_emotion_calibration_needs_a_control_group_not_a_comparison_to_zero():
+    """The correction of 2026-08-21.
+
+    This module used to t-test each emotion group against ZERO, so in a tape
+    with any drift it measured the drift. On the live record it reported
+    +1.192% after PANIC and +1.118% after EUPHORIA — the same answer, within
+    noise, for OPPOSITE emotions — and clamped both coefficients to 1.0. It had
+    found the window's average forward return and called it an emotion effect.
+
+    The fixture below is that situation exactly: panic events return +2%, and
+    so does everything else. A contrarian claim is comparative ("panic
+    overshoots MORE than an ordinary event"), so with no lift over the control
+    there is no claim, and the coefficient must be 0 — not 1.0.
+    """
+    from ai_investing.brain import emotion_calibration, source_learning
+    s = _fresh_settings()
+    conn = sqlite3.connect(s.brain.db_path)
+    conn.executescript(source_learning._SCHEMA)
+    cols = ("INSERT INTO event_outcomes(event_id,symbol,impact_sign,realized_ret,hit,"
+            " emotion,source,polarity,is_noise,scored_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    rows = []
+    for i in range(30):    # panic: +2%
+        rows.append((i, "AAA", -1, 0.02 + 0.0001 * (i % 5), 0, "panic", "x", -0.5, 0, "t"))
+    for i in range(30):    # ordinary events: ALSO +2% — the whole tape drifted
+        rows.append((200 + i, "CCC", 1, 0.02 + 0.0001 * (i % 5), 0, "neutral", "x", 0.1, 0, "t"))
+    conn.executemany(cols, rows)
+    conn.commit()
+    conn.close()
+
+    rep = emotion_calibration.calibrate(s)
+    assert rep["panic_rebound"]["coef"] == 0.0, \
+        "panic that merely matches the tape is not a rebound"
+    assert rep["panic_rebound"]["basis"] == "measured-contradicted"
+    assert abs(rep["panic_rebound"]["lift"]) < 0.001, "no lift over the control"
+    assert rep["panic_rebound"]["baseline_n"] == 30, "the control group is counted"
+
+
+def test_emotion_calibration_reports_the_basis_it_actually_measured():
+    """The `excess_ret` COLUMN existing is not the same as the DATA being
+    market-relative — rows written before the migration keep a NULL excess and
+    fall back to their absolute return. Reporting "excess" off the schema alone
+    would overstate what was measured, which is the exact class of mislabel
+    this module was fixed for."""
+    from ai_investing.brain import emotion_calibration, source_learning
+    s = _fresh_settings()
+    conn = sqlite3.connect(s.brain.db_path)
+    conn.executescript(source_learning._SCHEMA)
+    source_learning._migrate(conn)              # columns exist...
+    conn.executemany(
+        "INSERT INTO event_outcomes(event_id,symbol,impact_sign,realized_ret,hit,"
+        " emotion,source,polarity,is_noise,scored_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [(i, "AAA", -1, 0.01, 0, "panic", "x", -0.5, 0, "t") for i in range(25)]
+        + [(200 + i, "CCC", 1, 0.01, 0, "neutral", "x", 0.1, 0, "t") for i in range(25)])
+    conn.commit()                               # ...but no row has an excess
+    conn.close()
+
+    rep = emotion_calibration.calibrate(s)
+    assert rep["return_basis"] == "absolute (excess column empty)", \
+        f"must not claim 'excess' off the schema alone — got {rep['return_basis']}"
