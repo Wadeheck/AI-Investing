@@ -303,6 +303,7 @@ def graph_resolution(s) -> dict:
     duplicated = sum(len(v) for k, v in groups.items() if len(v) > 1 and any(k))
 
     llm = [e for e in g.edges if e.provenance == "llm"]
+    user = [e for e in g.edges if e.provenance == "user"]
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     # Judged by each node's OWN type: a THEME node naming a category
     # (`uk_banks`) is the definition, not a placeholder. Passing the bare id
@@ -328,6 +329,15 @@ def graph_resolution(s) -> dict:
         "unreviewed_llm_edges": sum(1 for e in llm if not e.reviewed_at),
         "placeholder_nodes": placeholders,
         "orphan_llm_nodes": len(g.orphan_nodes()),
+        # The CURATED tier (§A12). These edges bypass the daily budget, enter at
+        # full confidence and can never be demoted by the calibrator, so the
+        # count is the whole control surface: authority without visibility is
+        # the thing this codebase keeps finding in its own history.
+        "user_edges": len(user),
+        "user_share_pct": round(100 * len(user) / len(g.edges), 1) if g.edges else None,
+        "user_nodes": sum(1 for n in g.nodes.values()
+                          if str(getattr(n, "state", "") or "").startswith("user-asserted")),
+        "user_sources": sorted({(e.note or e.proposed_by or "?")[:60] for e in user})[:10],
         "example_crypto_liquidity_shock": {
             "assets_touched": len([1 for v in g.asset_impacts(
                 g.propagate({"crypto_liquidity": 0.6}, max_hops=3)[0]).values()

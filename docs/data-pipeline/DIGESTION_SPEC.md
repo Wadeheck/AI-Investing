@@ -340,6 +340,72 @@ human review — a bad proposal is damped by the cap, not blocked by a queue.
 
 ---
 
+### A12. The CURATED tier — content the operator hand-picked
+
+**Decided 2026-08-22.** Everything in §A10 above is a control on an extractor
+reading a firehose. None of it should apply to research the operator chose,
+read, and submitted — and measurement showed all of it did.
+
+A `user_curated` item is not a feed item. It arrives through one of two doors:
+
+```bash
+/submit <text>                                    # Telegram, short notes
+scp piece.md prodesk:~/Projects/AI-Investing/data/curated/   # long-form
+```
+
+Both land in the same tier. The drop-directory tags the filename onto the
+source (`user_curated:water_thesis.md`) so any wiring it produces is traceable
+back to the piece that asserted it; the file is never moved or deleted, and
+`BrainStore.filter_new` digests it exactly once.
+
+**What the tier changes, and the measurement that justified each:**
+
+| Gate | Applied to feeds | Applied to curated | Why |
+|---|---|---|---|
+| Prompt body | 400 chars | 12,000 (`CURATED_PROMPT_CHARS`) | A wire body is a lede restating its headline. 400 chars discarded ~90% of a long-form piece **before anything judged it** — never rejected, never read. |
+| Credibility | formula | **1.0, always** | Measured: curated **0.555** vs a corroborated wire's **0.677**. Corroboration is worth 0.15 and a single in-depth analysis has none *by construction* — the thing that makes it valuable is what cost it credibility. `impulse` carries credibility as a factor, so the operator's own research pressed ~18% **softer** than a headline. |
+| `is_noise` | threshold + `rumor_hype` | **never** | At `manipulation_likelihood=0.4` — what an argumentative piece reads as — a curated item scored **0.355** against a 0.35 threshold. Five thousandths from silence. Submitting a piece *about* a rumour is a deliberate call to track it. |
+| Edges per event | `[:2]` | **all of them** | A throttle on a firehose. On research it discarded everything the piece argued after its second relationship, which is the depth it was submitted for. |
+| Daily budget | 6/day | **exempt** | The 6/day cap answers 88.5 proposals/week of extractor noise (§A10). Making curated research queue behind that stream meant it lost slots first-come-first-served, with no priority of any kind. |
+| Confidence | capped 0.6 | **1.0** | 0.6 encodes *"an LLM guessed this."* A human asserting a mechanism from research they chose to read is the act that produced the seed wiring. |
+| Unknown endpoints | refused silently | **created** | `propose_edge` opens `if src not in self.nodes … return False` — no tombstone, no counter. A piece introducing a genuinely NEW mechanism is exactly the case that hits it. `assert_node` mints factors/themes/actors, not just the deals path's `(private)` assets. |
+| Calibrator | may demote ×0.5 | **promote only** | `MIN_N = 60` on 5-day forward returns is ~12 independent observations, ~2 months. A demotion *is* the wait the operator asked to skip, arriving late. Evidence that disagrees is **reported, never acted on** — the brain may tell the operator they are wrong; it may not quietly act as though they are. |
+
+**Two things the tier does NOT change**, deliberately:
+
+- **`is_non_entity` still refuses by shape.** A curated piece is exactly as
+  capable of containing the word "none" as a wire is, and `none` once became the
+  graph's 17th most connected node (§4.24).
+- **There is still a ceiling on prompt size.** An unbounded prompt overflows the
+  local `qwen3:8b` fallback, the call fails, and the piece drops to
+  `_fallback_extract` — losing all of it instead of its tail. The difference
+  from the 400-char cap is that this one **announces itself**, in the prompt and
+  on the headline.
+
+**Ordering matters and is pinned by a test.** Curated wiring is asserted
+**before** propagation, for the same reason the regime updates before it
+(§4g.1). `impulses` is built from `ev["nodes"]` near the top of `think()`; if
+the edges were applied after `propagate()`, a piece would take effect a cycle
+late — and for one introducing a new mechanism, worse: its origin node would not
+exist when `impulses` was built, the article is marked digested in that same
+pass and never re-extracted, so the impulse would be **lost permanently** while
+the wiring appeared with nothing flowing through it. Silent, and it would have
+looked like the feature working. The piece rewires the graph and is felt
+*through its own rewiring*, on the cycle it arrives.
+
+**The control surface is visibility, not restriction.** Full authority is only
+safe if it is counted:
+
+```bash
+python3 scripts/brain_audit.py --section graph   # user_edges, user_nodes, user_share_pct
+```
+
+This project's history is largely a list of controls that existed and were never
+looked at (the review queue: `reviewed & kept: 0`, never used once). The curated
+tier deliberately has no queue — it has a number, printed beside the llm counts
+every time anyone audits the graph. If `user_share_pct` climbs somewhere
+uncomfortable, that is a conversation, not a gate that fires on its own.
+
 ## PART B — The Formula Improvement Plan
 
 Current state (what the numbers are today):

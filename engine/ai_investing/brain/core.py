@@ -83,6 +83,43 @@ class Brain:
             self.store.save_events(events)
         self.store.mark_digested(new_heads)
 
+        # --- the CURATED lane, and it must run BEFORE propagation ------------
+        #
+        # Same reasoning as "regime updates BEFORE propagation" in §4g.1: wiring
+        # asserted this cycle has to be in the graph before the shock walks it,
+        # or the operator's own analysis takes effect a cycle late. Worse than
+        # late, for a piece that introduces a NEW mechanism: its origin node
+        # would not exist when `impulses` is built, the event is marked digested
+        # after this pass and never re-extracted, so the impulse would be lost
+        # permanently while the wiring silently appeared with nothing flowing
+        # through it. Assert first, then propagate — the piece rewires the graph
+        # and is felt through its own rewiring, on the cycle it arrives.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        added_user_edges, added_user_nodes = 0, 0
+        for ev in events:
+            if not ev.get("curated") or ev.get("is_noise"):
+                continue
+            for nid in (ev.get("proposed_nodes") or []):
+                if self.graph.assert_node(nid, nid.replace("_", " ").title(),
+                                          proposed_by=ev.get("summary", ""),
+                                          ts=now_iso):
+                    added_user_nodes += 1
+            for pe in (ev.get("proposed_edges") or []):
+                try:
+                    if self.graph.assert_edge(
+                            pe["src"], pe["dst"], pe.get("type", "influences"),
+                            int(pe.get("sign", 1)), float(pe.get("weight", 0.5)),
+                            proposed_by=ev.get("summary", ""), ts=now_iso,
+                            note=str(pe.get("why", ""))[:300],
+                            delay_days=float(pe.get("delay_days", 0.0) or 0.0)):
+                        added_user_edges += 1
+                except (KeyError, TypeError, ValueError):
+                    continue
+            # origins the piece named that now EXIST because it named them
+            ev["nodes"] = list(dict.fromkeys(
+                list(ev.get("nodes") or [])
+                + [n for n in (ev.get("proposed_nodes") or []) if n in self.graph.nodes]))
+
         impulses: dict[str, float] = {}
         for ev in events:
             if ev.get("is_noise"):
@@ -173,6 +210,13 @@ class Brain:
         added_edges = 0
         for ev in events:
             if ev.get("is_noise"):
+                continue
+            # Curated events were already wired, at full authority and with no
+            # `[:2]` rate limit, before propagation ran. `[:2]` is a throttle on
+            # an extractor reading a firehose; applied to hand-picked research it
+            # discarded everything an in-depth piece said after its second
+            # relationship — and depth is the entire reason it was submitted.
+            if ev.get("curated"):
                 continue
             for pe in (ev.get("proposed_edges") or [])[:2]:
                 try:
@@ -288,7 +332,15 @@ class Brain:
         except Exception:
             state["advice"] = None
 
-        self._persist(state, added_edges + len(deal_report.get("nodes_created", []))
+        # Curated wiring is reported SEPARATELY, never folded into the llm
+        # count. Full authority is only safe if it is also visible: this is the
+        # number that says how much of the graph the operator wired by hand
+        # this cycle, and `brain_audit --section graph` reads it back.
+        state["user_edges_added"] = added_user_edges
+        state["user_nodes_added"] = added_user_nodes
+        state["user_edges_total"] = len(self.graph.user_edges())
+        self._persist(state, added_edges + added_user_edges + added_user_nodes
+                      + len(deal_report.get("nodes_created", []))
                       + len(deal_report.get("edges_added", []))
                       + len(deal_report.get("edges_corroborated", [])))
         return state

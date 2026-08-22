@@ -925,6 +925,88 @@ def _user_news_path(settings) -> str:
                         "news_user_submitted.jsonl")
 
 
+# Storage ceiling for a hand submission. Well above the extractor's own
+# per-item prompt cap, so THIS is never the thing that truncates research.
+CURATED_SUBMISSION_CHARS = 60000
+
+# The drop-directory: long-form research, one file per piece. Telegram is right
+# for a paragraph typed on a phone; it is the wrong door for a 20-page analysis,
+# and its message ceiling was silently deciding how much of one got through.
+_CURATED_DIR = "curated"
+_CURATED_EXTS = (".md", ".txt", ".markdown")
+_CURATED_FILE_LIMIT = 40
+_CURATED_SKIP = {"readme.md", "readme.txt"}
+
+
+def curated_dir_path(settings) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings.state_path)),
+                        _CURATED_DIR)
+
+
+def _curated_dir_headlines(settings, limit: int = _CURATED_FILE_LIMIT) -> list[dict]:
+    """Hand-dropped research files, newest first.
+
+    Deliberately NOT windowed by time, unlike the X capture and the Telegram
+    queue. Those are append-only streams where an old record is genuinely stale;
+    a file the operator placed here is a considered artefact that stays true
+    until they delete it. Re-reading it every cycle is free: BrainStore
+    .filter_new keys on (title, source) and only counts an article once
+    DIGESTED, so each file is extracted exactly once and skipped forever after.
+
+    The file is never moved, renamed or deleted — it is the operator's, and it
+    doubles as the provenance record for whatever wiring it produced. `source`
+    carries the filename so a curated edge in the graph can be traced back to
+    the piece that asserted it.
+    """
+    d = curated_dir_path(settings)
+    try:
+        names = [n for n in os.listdir(d)
+                 if n.lower().endswith(_CURATED_EXTS)
+                 # The directory's own instructions are not research. Excluded
+                 # by name rather than by trusting the extractor to notice it
+                 # has no origin node: a doc explaining what high-authority
+                 # ingestion does, fed through high-authority ingestion, is
+                 # exactly the kind of thing that wires something absurd at
+                 # confidence 1.0.
+                 and n.lower() not in _CURATED_SKIP]
+    except OSError:
+        return []
+    paths = []
+    for n in names:
+        p = os.path.join(d, n)
+        try:
+            paths.append((os.path.getmtime(p), p, n))
+        except OSError:
+            continue
+    paths.sort(reverse=True)
+    out: list[dict] = []
+    for mtime, p, name in paths[:limit]:
+        try:
+            with open(p, errors="replace") as fh:
+                text = fh.read(CURATED_SUBMISSION_CHARS).strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        # first non-blank line, minus any markdown heading marker
+        title = next((ln.strip().lstrip("#").strip()
+                      for ln in text.splitlines() if ln.strip()), name)
+        ts = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+        out.append({"title": (title or name)[:200],
+                    "source": f"user_curated:{name}",
+                    "published": ts, "summary": text})
+    if len(paths) > limit:
+        # Loud, not silent. If this ever fires the oldest files stop being
+        # offered, and the operator should know which door stopped opening.
+        out.append({"title": f"[curated] {len(paths) - limit} older files beyond "
+                             f"the {limit}-file read limit were not offered "
+                             f"this cycle", "source": "user_curated:_overflow",
+                    "published": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "summary": "Housekeeping notice, not a market event. Archive "
+                               "digested files out of data/curated/ to clear it."})
+    return out
+
+
 def submit_user_news(settings, text: str, sender: str = "you") -> dict:
     """Append one user-submitted item (news, a trend, an opinion) to the queue
     `_user_submitted_headlines` reads. Digestion happens on the engine's own next
@@ -936,8 +1018,12 @@ def submit_user_news(settings, text: str, sender: str = "you") -> dict:
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     first_line = text.splitlines()[0].strip() if text.splitlines() else text
     title = first_line[:200] + ("…" if len(first_line) > 200 else "")
-    rec = {"title": title, "summary": text[:4000], "source": "user_curated",
-          "published": ts, "ts": ts, "sender": sender}
+    # Was 4000 — roughly one Telegram message, and a hard ceiling on how much
+    # analysis could ever reach the brain through this door. The extractor now
+    # applies its own generous cap (events.CURATED_PROMPT_CHARS), so this one
+    # only needs to be large enough not to be the binding constraint.
+    rec = {"title": title, "summary": text[:CURATED_SUBMISSION_CHARS],
+           "source": "user_curated", "published": ts, "ts": ts, "sender": sender}
     with open(_user_news_path(settings), "a") as fh:
         fh.write(json.dumps(rec) + "\n")
     return rec
@@ -1044,7 +1130,11 @@ def build_market_context(settings, assets, price_moves: Optional[dict] = None) -
     # race this cycle for the article's one-time "digested" flag and win
     # sometimes purely by timer coincidence (see the comment in
     # fetch_headlines). First in line, ahead of even the X capture.
-    headlines = _user_submitted_headlines(settings) + fetch_headlines(settings)
+    # Both curated doors land here, ahead of everything: the drop-directory
+    # first (long-form research), then the Telegram queue, then the feeds.
+    headlines = (_curated_dir_headlines(settings)
+                 + _user_submitted_headlines(settings)
+                 + fetch_headlines(settings))
     ctx["headlines"] = headlines
 
     brain = None

@@ -67,6 +67,19 @@ control is a 6/day budget added in §4.38, after the measured rate turned out to
 be 88.5/week against a spec assuming ≤1 — with the review queue reporting
 `reviewed & kept: 0`, never used once.
 
+**Feeding the brain research you chose yourself** is a separate tier with none
+of that filtering — DIGESTION_SPEC **§A12**. Two doors, both landing at full
+authority (`provenance: "user"`, confidence 1.0, no budget, never demoted):
+
+```bash
+/submit <text>                                       # Telegram, short notes
+scp piece.md prodesk:~/Projects/AI-Investing/data/curated/    # long-form
+python3 scripts/brain_audit.py --section graph       # user_edges / user_nodes
+```
+
+The audit line is the whole control surface, deliberately — a queue that nobody
+works is what `reviewed & kept: 0` already proved.
+
 The two most likely alerts have their own runbook sections in OPERATIONS.md:
 **🛑 CIRCUIT BREAKER** (do not just clear it — cross-check the marks first) and
 **prices going to zero across the board** (usually do nothing; do *not* restart).
@@ -129,7 +142,9 @@ Durable design intent. Changes only when the design changes.
   coverage as unverified until it is.
 - **DIGESTION_SPEC.md** — the *design* behind digestion: division of labour
   between the tagging AI and the maths. The brief above is what actually runs;
-  this is why it looks the way it does.
+  this is why it looks the way it does. **§A12 is the CURATED tier** — how to
+  feed the brain research you picked yourself, and why none of the feed-grade
+  filtering applies to it.
 - **DAILY_LOOP.md** — data cadence: what the timers pull, when, and recovery.
 - **X_BROWSER_CAPTURE.md** — X/Twitter harvesting. Rule 1: one session, ever.
 - **YOUTUBE_DOSSIER_BRIEF.md** — turning video transcripts into dossiers.

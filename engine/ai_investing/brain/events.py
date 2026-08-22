@@ -30,6 +30,41 @@ EVENT_TYPES = ["monetary_policy", "fiscal_policy", "trade_policy", "regulation",
 
 EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency", "neutral"]
 
+# --- the curated tier ------------------------------------------------------
+#
+# Content the operator hand-picked and submitted. It is NOT a feed and must not
+# be scored like one: the credibility formula rewards CORROBORATION, and a
+# single in-depth analysis has none by construction — the very thing that makes
+# it worth reading is what costs it 0.15 of credibility. Measured before this
+# tier existed: a curated submission scored 0.555 against a corroborated wire's
+# 0.677, so `impulse = polarity x magnitude x credibility x confidence` pressed
+# the operator's own research ~18% SOFTER than a Reuters headline. With the
+# extractor reading promotional register into an argumentative piece
+# (manipulation_likelihood 0.4) it scored 0.355 — five thousandths above the
+# noise line, where it would have stopped propagating entirely.
+#
+# The judgement was already made by a human with capital at risk. Re-deriving it
+# from source statistics can only subtract. Curated events therefore take
+# credibility 1.0 and are never marked noise. See DIGESTION_SPEC §A12.
+CURATED_SOURCES = ("user_curated",)
+
+# Per-item ceiling on curated body text reaching the extractor. 12k chars is
+# ~3k tokens — room for a long-form analysis, while leaving the prompt safe for
+# the local qwen3:8b fallback when the cloud key is exhausted. Compare 400 for a
+# wire item, whose body is a lede restating its own headline.
+CURATED_PROMPT_CHARS = 12000
+
+
+def is_curated(source: str) -> bool:
+    """True for content the operator submitted by hand.
+
+    Substring match on purpose: the drop-directory tags each file
+    `user_curated:<filename>` so provenance survives into the graph, and the
+    Telegram path writes a bare `user_curated`. Both are the same tier.
+    """
+    s = (source or "").lower()
+    return any(s.startswith(c) for c in CURATED_SOURCES)
+
 # Default per-source trust. Keyed by substring of the feed/source host or name.
 SOURCE_TRUST = {
     # Hand-picked by the user via Telegram /submit (data/news.py
@@ -218,8 +253,29 @@ def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
     def _line(i: int, h: dict) -> str:
         s = f"{i}. [{h.get('source', '?')}] {h['title']}"
         extra = (h.get("body") or h.get("summary") or "").strip()
+        # 400 chars is right for a wire item, whose body is a lede restating the
+        # headline. It is exactly wrong for hand-picked long-form: a curated
+        # submission stores 4000 chars (news.py `_submit`) and the
+        # drop-directory stores whole files, so this line was discarding ~90% of
+        # the operator's own research BEFORE anything judged it. The depth was
+        # never rejected — it was never read. Curated content passes whole.
         if extra:                     # body/summary carries the WHO/HOW the
-            s += f" — {extra[:400]}"  # deals & integrity extraction feed on
+            if is_curated(h.get("source", "")):
+                body = extra[:CURATED_PROMPT_CHARS]
+                if len(extra) > CURATED_PROMPT_CHARS:
+                    # NOT silent. An unbounded prompt overflows the local
+                    # qwen3:8b fallback, the call fails, and extraction drops to
+                    # `_fallback_extract` — which would lose the whole piece
+                    # instead of its tail. So there is still a ceiling; the
+                    # difference is that this one announces itself, in the
+                    # prompt and on the headline, where truncation at 400 did
+                    # neither.
+                    body += (f"\n   [TRUNCATED at {CURATED_PROMPT_CHARS} chars of "
+                             f"{len(extra)} — extract what you can from the above]")
+                    h["curated_truncated"] = len(extra)
+            else:
+                body = extra[:400]
+            s += f" — {body}"         # deals & integrity extraction feed on
         # Retrieval hint: alias-matching the text narrows 128 nodes to a handful.
         # Picking the origin node out of the full list is the small model's
         # weakest step, and most of its misses are nodes it simply never
@@ -280,7 +336,20 @@ Return ONLY JSON:
       "emotion_intensity": <0..1>,
       "proposed_edges": [  // OPTIONAL: only when headlines reveal a relationship the node list can't express
         {{"src": "<node id>", "dst": "<node id>", "type": "influences", "sign": <1|-1>,
-          "weight": <0..1>, "why": "<short>"}}
+          "weight": <0..1>, "delay_days": <optional, real-world lag before it lands>,
+          "why": "<short>"}}
+        // For a [user_curated...] item ONLY, this is the MAIN JOB, not an
+        // afterthought. Those are long-form pieces the operator hand-picked
+        // precisely because they explain MECHANISM, and the whole point of
+        // submitting one is to wire what it explains. Extract every distinct
+        // causal claim it actually makes — a dozen is normal for a real
+        // analysis — and you may name `src`/`dst` ids that are NOT in the node
+        // list above when the piece introduces something genuinely new
+        // (a factor, a theme, an actor); those nodes get created. Use snake_case
+        // ids that describe a MEASURABLE QUANTITY, same convention as the list.
+        // Do NOT invent claims to pad the list: extract what the piece argues,
+        // including the lags it asserts. For ordinary feed items the old rule
+        // stands — a genuinely new mechanism only, and rarely.
       ],
       "integrity": [  // OPTIONAL but CRITICAL: any story casting doubt on whether an
                       // entity's reported numbers, assets, returns, or collateral are
@@ -630,24 +699,46 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
             continue
         ev.setdefault("summary", ev.get("headline", ""))
         ev["assumption"] = str(ev.get("assumption") or "")[:400]   # shown to the user in consult asks
-        ev["nodes"] = [n for n in (ev.get("nodes") or []) if n in graph.nodes]
+        # Unknown origin ids are normally dropped — the extractor hallucinates
+        # node names and a shock cannot start somewhere that does not exist.
+        # For CURATED items an unknown id is the opposite signal: the operator
+        # submitted a piece precisely because it names a mechanism the graph has
+        # not heard of. Those ids are kept aside for `core` to create, then used
+        # as real origins on the SAME cycle (§A12).
+        raw_nodes = [n for n in (ev.get("nodes") or []) if isinstance(n, str) and n]
+        ev["nodes"] = [n for n in raw_nodes if n in graph.nodes]
+        if is_curated(ev.get("source", "")):
+            ev["proposed_nodes"] = [n for n in raw_nodes if n not in graph.nodes]
         ev["polarity"] = _polarity_of(ev)
         ev["magnitude"] = max(0.0, min(1.0, float(ev.get("magnitude", 0.0) or 0.0)))
         ev["confidence"] = max(0.0, min(1.0, float(ev.get("confidence", 0.5) or 0.5)))
-        ev["credibility"] = round(credibility(ev, headlines, settings), 3)
-        # noise-rescue: a source whose ignored calls keep coming true gets a
-        # lower noise bar — its "noise" has measurably been signal
-        eff_threshold = threshold
-        try:
-            from ai_investing.brain.source_learning import rescue_map
-            rescued, _ = rescue_map(settings)
-            s_low = (ev.get("source") or "").lower()
-            if any(r and r.lower() in s_low for r in rescued):
-                eff_threshold = max(0.0, threshold - 0.1)
-                ev["rescued_source"] = True
-        except Exception:
-            pass
-        ev["is_noise"] = ev["credibility"] < eff_threshold or ev.get("type") == "rumor_hype"
+        # THE CURATED TIER. A human with capital at risk already made this
+        # judgement; the credibility formula can only subtract from it, and it
+        # subtracts hardest for depth (no corroboration) and for argumentative
+        # prose (manipulation_likelihood). Neither is a defect in hand-picked
+        # research. Curated events take full credibility and are never noise —
+        # not even on `type == "rumor_hype"`, because the operator submitting a
+        # piece ABOUT a rumour is making a deliberate call to track it.
+        ev["curated"] = is_curated(ev.get("source", ""))
+        if ev["curated"]:
+            ev["credibility"] = 1.0
+            ev["is_noise"] = False
+        else:
+            ev["credibility"] = round(credibility(ev, headlines, settings), 3)
+            # noise-rescue: a source whose ignored calls keep coming true gets a
+            # lower noise bar — its "noise" has measurably been signal
+            eff_threshold = threshold
+            try:
+                from ai_investing.brain.source_learning import rescue_map
+                rescued, _ = rescue_map(settings)
+                s_low = (ev.get("source") or "").lower()
+                if any(r and r.lower() in s_low for r in rescued):
+                    eff_threshold = max(0.0, threshold - 0.1)
+                    ev["rescued_source"] = True
+            except Exception:
+                pass
+            ev["is_noise"] = (ev["credibility"] < eff_threshold
+                              or ev.get("type") == "rumor_hype")
         ev["emotion"] = ev.get("emotion") if ev.get("emotion") in EMOTIONS else "neutral"
         ev["emotion_intensity"] = max(0.0, min(1.0, float(ev.get("emotion_intensity", 0.0) or 0.0)))
         ev["ts"] = now
@@ -656,7 +747,7 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
                               * ev["confidence"], 4)
         # fear-monger discount: a source whose doom stories measurably never move
         # markets gets its fear-event impulses damped (learned, per source)
-        if ev["emotion"] in ("fear", "panic") and ev["polarity"] < 0:
+        if ev["emotion"] in ("fear", "panic") and ev["polarity"] < 0 and not ev["curated"]:
             try:
                 from ai_investing.brain.source_learning import learned_map
                 s = (ev.get("source") or "").lower()

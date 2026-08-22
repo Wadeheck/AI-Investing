@@ -72,7 +72,12 @@ class Edge:
                                  # None = symmetric (weight both ways).
     confidence: float = 1.0      # curated=1.0; LLM-proposed lower
     delay_days: float = 0.0      # τ: real-world lag before the effect lands (0 = immediate)
-    provenance: str = "seed"     # "seed" | "llm"
+    provenance: str = "seed"     # "seed" | "llm" | "user"
+                                 # "user" is the CURATED TIER: wiring the
+                                 # operator asserted by submitting research.
+                                 # It ranks WITH seed, not with llm — no 0.6
+                                 # confidence cap, no daily budget, and the
+                                 # calibrator may never demote it (§A12).
     note: str = ""
     proposed_by: str = ""        # event summary that proposed it (llm edges)
     proposed_at: str = ""
@@ -162,9 +167,29 @@ class KnowledgeGraph:
     def set_calibration(self, factors: dict[str, float]) -> None:
         """Attach evidence-based per-edge multipliers (from brain/calibration.py).
         Applied at adjacency-build time, IN MEMORY ONLY — never persisted into
-        edge confidence, so reloading and reapplying can't compound the discount."""
-        self._calibration = {k: max(0.25, min(1.5, float(v)))
-                             for k, v in (factors or {}).items()}
+        edge confidence, so reloading and reapplying can't compound the discount.
+
+        **Curated (`provenance="user"`) edges are never DEMOTED.** The operator
+        asked for wiring that acts immediately rather than waiting on evidence,
+        and a demotion is exactly that wait arriving late: `MIN_N = 60` on
+        5-day forward returns is ~12 independent observations, about two months,
+        after which a curated mechanism could be halved by a t-statistic on a
+        sample the audit itself would call a coin flip.
+
+        PROMOTION still applies. The asymmetry is deliberate and it is the same
+        one the calibrator already makes between `influences` and `member_of`
+        (LEARNING.md §2): evidence agreeing with the operator is free to
+        strengthen the wire, evidence disagreeing is recorded in the report —
+        `scripts/review_edges.py --user` reads it — and left for a human to act
+        on. The brain may tell the operator they are wrong. It may not quietly
+        act as though they are.
+        """
+        user_keys = {self.edge_key(e) for e in self.edges if e.provenance == "user"}
+        self._calibration = {
+            k: max(0.25, min(1.5, float(v)))
+            for k, v in (factors or {}).items()
+            if not (k in user_keys and float(v) < 1.0)
+        }
         self._adj = None
 
     # -- persistence ---------------------------------------------------------
@@ -758,6 +783,114 @@ class KnowledgeGraph:
         self._adj = None
         self._alias_index = None
         return True
+
+    # -- growth: the CURATED tier ---------------------------------------------
+    def assert_node(self, node_id: str, label: str, type_: str = "factor",
+                    aliases: list[str] | None = None, proposed_by: str = "",
+                    ts: str = "", symbol: str = "", market: str = "",
+                    equilibrium: str = "") -> bool:
+        """Create a node the operator's own research introduced.
+
+        `propose_node` is the DEALS path and always mints `type="asset"` with a
+        "(private)" label — right for an unresolved counterparty in an M&A
+        story, wrong for everything else. Curated research introduces factors,
+        themes and actors ("datacenter water consumption", "SE-Asia grid
+        buildout"), and those are the nodes a shock actually travels THROUGH.
+        Restricting the operator to asset nodes would have meant new mechanisms
+        could only ever be leaves.
+
+        Curated seeds still win an id clash: this never overwrites, matching
+        `propose_node`. The non-entity shape refusal still applies — `none` and
+        `unnamed_acquirer` are not entities no matter who submits them (§4.24),
+        and a curated piece is exactly as capable of containing the word "none"
+        as a wire is.
+        """
+        node_id = node_id.lower().replace("&", " and ").replace("-", "_")
+        node_id = re.sub(r"[^a-z0-9_]", "", re.sub(r"\s+", "_", node_id.strip()))
+        node_id = re.sub(r"_{3,}", "__", node_id)
+        if not node_id or node_id in self.nodes:
+            return False
+        if self.is_non_entity(node_id):
+            return False
+        if type_ not in ("factor", "theme", "sector", "asset", "actor", "commodity"):
+            type_ = "factor"
+        self.nodes[node_id] = Node(
+            id=node_id, type=type_, label=(label or node_id)[:60],
+            aliases=[a.lower() for a in (aliases or []) if a][:6],
+            symbol=symbol, market=market, equilibrium=equilibrium[:200],
+            state=f"user-asserted {ts[:10]}: {proposed_by[:120]}")
+        self._adj = None
+        self._alias_index = None
+        return True
+
+    def assert_edge(self, src: str, dst: str, type_: str, sign: int, weight: float,
+                    proposed_by: str, ts: str, confidence: float = 1.0,
+                    note: str = "", delay_days: float = 0.0) -> bool:
+        """Wire a relationship the operator asserted. The CURATED lane.
+
+        Differs from `propose_edge` in exactly the four ways that matter, and
+        each one was measured as a live obstruction before this existed:
+
+          1. **No daily budget.** The 6/day cap exists because the extractor
+             proposes 88.5/week off the RSS firehose (§4.38). Curated research
+             is not that stream, and making it queue behind that stream meant
+             the operator's own analysis lost slots to noise, first-come-first-
+             served, with no priority of any kind.
+          2. **No 0.6 confidence cap.** That cap encodes "an LLM guessed this".
+             A human asserting a mechanism from research they chose to read is
+             the same act that produced the seed wiring, so it gets seed's 1.0.
+          3. **Missing endpoints are created, not refused.** `propose_edge`
+             opens with `if src not in self.nodes ... return False`, silently,
+             with no tombstone and no counter. An in-depth piece introducing a
+             genuinely NEW mechanism is precisely the case that hits it — the
+             relationship was dropped for naming something the graph had not
+             heard of yet, which is the whole reason to submit it.
+          4. **A rejection tombstone does not block it.** A tombstone records
+             that a REVIEWER threw out an LLM guess. The operator overruling
+             that is the same authority that wrote the tombstone, so the
+             tombstone is cleared rather than obeyed.
+
+        It keeps one property of `propose_edge`: it never overwrites an edge
+        that already exists. Re-asserting an existing relationship UPGRADES its
+        provenance to "user" and refreshes weight/sign, which is how you correct
+        a curated seed you now disagree with, but it will not duplicate wiring.
+        """
+        if type_ not in EDGE_FLOW:
+            return False
+        for nid in (src, dst):
+            if nid not in self.nodes:
+                if not self.assert_node(nid, nid.replace("_", " ").title(),
+                                        proposed_by=proposed_by, ts=ts):
+                    return False        # refused by shape (non-entity) — §4.24
+        # the operator outranks a reviewer's tombstone on the same pair
+        key = self.pair_key(src, dst, type_)
+        self.rejected = [r for r in self.rejected
+                         if self.pair_key(r.get("src", ""), r.get("dst", ""),
+                                          r.get("type", "")) != key]
+        sign = 1 if sign >= 0 else -1
+        weight = max(0.05, min(1.0, weight))
+        confidence = max(0.05, min(1.0, confidence))
+        for e in self.edges:
+            if e.src == src and e.dst == dst and e.type == type_:
+                e.sign, e.weight, e.confidence = sign, weight, confidence
+                e.provenance = "user"
+                e.proposed_by, e.proposed_at = proposed_by[:160], ts
+                if note:
+                    e.note = note[:300]
+                self._adj = None
+                return True
+        self.edges.append(Edge(src=src, dst=dst, type=type_, sign=sign,
+                               weight=weight, confidence=confidence,
+                               delay_days=max(0.0, delay_days),
+                               provenance="user", note=note[:300],
+                               proposed_by=proposed_by[:160], proposed_at=ts))
+        self._adj = None
+        return True
+
+    def user_edges(self) -> list["Edge"]:
+        """Every relationship the operator asserted. The audit surface for the
+        curated tier — full authority is only safe if it is also visible."""
+        return [e for e in self.edges if e.provenance == "user"]
 
     # -- growth: LLM-proposed edges -------------------------------------------
     def propose_edge(self, src: str, dst: str, type_: str, sign: int, weight: float,

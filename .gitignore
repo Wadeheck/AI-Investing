@@ -18,11 +18,24 @@ env/
 # example instead of trying to enumerate the backups people will make.
 .env*
 !.env.example
-/data/
+# `/data/*` rather than `/data/`: git does not descend into an ignored
+# DIRECTORY, so a negation for a file inside one can never take effect. Listing
+# the children is what makes the single exception below reachable. Everything
+# under data/ stays ignored either way.
+/data/*
 *.db
 *.sqlite
 *.log
 /data/state.json
+# ...except the curated drop-directory's own instructions. That file is
+# documentation, not state, and shipping it is what CREATES the directory on a
+# deploy — a door nobody can find is not a door. Nothing else under
+# data/curated/ is tracked: the research dropped there is the operator's, may
+# be paywalled or private, and has no business in a git history (see the .env
+# note above for how that goes).
+!/data/curated/
+/data/curated/*
+!/data/curated/README.md
 
 # --- Node / Next.js (dashboard) ---
 node_modules/

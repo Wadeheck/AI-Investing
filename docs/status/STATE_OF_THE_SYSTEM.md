@@ -2788,6 +2788,83 @@ fills vs their own sector    0/16              11/16
   data collected against a yardstick that might have been measuring the wrong
   thing.
 
+### 4.60 The curated tier — five gates that were silencing the operator's own research *(2026-08-22)*
+
+- **Not a defect report; a design decision, and the measurement that forced it.**
+  The operator asked for hand-picked in-depth content to be *used* — not
+  discarded, not damped, not held pending evidence. Every gate below was
+  measured obstructing exactly that, and none of them was designed to.
+- **The user_curated path already existed** (`SOURCE_TRUST` 0.9, Telegram
+  `/submit`) and solved only the "discarded" half. Five other gates bit:
+
+| Gate | Measured effect on a submitted piece |
+|---|---|
+| `_prompt` body cap **400 chars** | Submissions store 4000; **~90% never reached the extractor.** Not rejected — never read. The most destructive, and the furthest upstream. |
+| `credibility()` | **0.555** vs a corroborated wire's **0.677**. `impulse` carries credibility as a factor, so the operator's research pressed **~18% softer** than a headline. |
+| noise threshold | At `manipulation_likelihood=0.4` — how argumentative prose reads — it scored **0.355** against a 0.35 bar. Five thousandths from silence. |
+| `core.think` `[:2]` | Everything a piece argued after its **second** relationship was dropped. |
+| `propose_edge` | Refused any edge naming an unknown node — **silently**, no tombstone, no counter. Precisely the case a piece introducing a new mechanism hits. Plus a 0.6 confidence cap and a 6/day budget shared first-come-first-served with an 88.5/week RSS firehose. |
+
+- **The perverse structure, which is the finding worth keeping:** `credibility`
+  rewards **corroboration**, and a single in-depth analysis has none *by
+  construction*. **The property that makes a piece worth submitting is the one
+  the formula charges it for.** Depth was penalised as unverifiability.
+- **Decided: the curated tier** (DIGESTION_SPEC **§A12**). `provenance="user"`
+  ranks with seed, not with llm — full credibility, never noise, no `[:2]`, no
+  budget, confidence 1.0, may mint factor/theme/actor nodes, and the calibrator
+  may **promote but never demote** it. Two doors: `/submit` and a
+  `data/curated/` drop-directory.
+- **The ordering bug I introduced and caught with a test.** First draft applied
+  curated edges where the llm ones are applied — **after** `propagate()`. That
+  is not merely a cycle late: for a piece introducing a NEW mechanism the origin
+  node does not exist when `impulses` is built, the article is marked digested
+  in the same pass and never re-extracted, so **the impulse is lost permanently
+  while the wiring appears with nothing flowing through it.** Silent, and it
+  would have looked like the feature working. Asserting runs before propagation
+  now — same reasoning as §4g.1's "regime before propagate".
+- **The second one I introduced, and it destroyed real data.** The new tests
+  called `Settings()` without redirecting `STATE_PATH`, which the `BRAIN_*` block
+  does not cover. They wrote **43 fixture files into the live `data/curated/`
+  and unlinked its README.** §4.21's rule is about a module reaching past its
+  caller; this is the same failure **from the other end** — the module honoured
+  `settings` correctly and the *test* forgot to set it. Then it failed again
+  under the full suite: eleven test modules set `STATE_PATH` at import time, so
+  the last module pytest imports wins. Module-level env is not ownership.
+  Fixed by setting it immediately before constructing, plus a helper that
+  **refuses to delete** anything outside the temp dir — verified by removing the
+  redirect and watching it refuse rather than delete.
+- **The third, and only the two runners disagreeing found it.** Both new test
+  files pass under pytest. `test_curated_end_to_end.py` **failed** under the
+  bare `__main__` runner — the one the ProDesk uses — on `premise: node is new`.
+  Cause: pytest runs tests in **definition** order, the `__main__` block sorts
+  them **alphabetically**, and the two Brain tests were sharing one persisted
+  graph, so whichever ran first minted the node the other asserted was absent.
+  A test whose premise depends on its neighbours is not testing what it claims.
+  Each Brain test now gets a fresh graph. **Run both runners; a green from one
+  is not a green.**
+- **What is NOT relaxed**, deliberately: `is_non_entity` still refuses by shape
+  (§4.24 — a curated piece is as capable of containing "none" as a wire is);
+  there is still a prompt ceiling, at 12k chars, because an unbounded prompt
+  overflows the local qwen3:8b fallback and loses the *whole* piece instead of
+  its tail — but that ceiling **announces itself**; and `data/curated/README.md`
+  is skipped **by name**, because a document explaining high-authority ingestion,
+  fed through high-authority ingestion, is how something absurd gets wired at
+  confidence 1.0.
+- **The control surface is a number, not a queue.** `brain_audit --section graph`
+  now prints `user_edges`, `user_nodes`, `user_share_pct`, `user_sources`. This
+  project's review queue was the control for llm wiring and reported
+  `reviewed & kept: 0` — never used once, ever. A gate nobody operates is not a
+  control; a number printed beside the llm counts every time anyone audits is at
+  least read.
+- **Three mutations verified** on the tier itself (drop the origin
+  reconciliation → the impulse test names it; reinstate `[:2]` → the third edge
+  is missing; allow demotion → the calibrator test fires), plus the
+  temp-dir-guard mutation above. 725 green, both runners.
+- **Lesson.** A filter tuned for one population will quietly mis-handle another
+  that shares its input channel. The credibility formula is *correct* for feeds
+  and *inverted* for curated research, and it had no way to tell them apart
+  because nothing had ever asked it to.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
