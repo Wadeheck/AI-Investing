@@ -1,6 +1,6 @@
 # Handover — resume here
 
-**Written 2026-08-22, at the end of the brain-review session. HEAD `7747aa9`.**
+**Written 2026-08-22. HEAD `2b24e58`, deployed and running on the ProDesk.**
 
 This is the *resume-here* document. It is deliberately short and it points at
 the detail rather than repeating it.
@@ -15,66 +15,71 @@ the detail rather than repeating it.
 
 ---
 
-## 1. DO THIS FIRST — one pending deploy
+## 1. Deploy state — CURRENT, nothing pending
 
-`ffe5b65` and `7747aa9` are pushed to origin but **are not on the ProDesk**. The
-box powered off on its daily schedule mid-deploy. That is not a fault, and
-nothing is broken by it — the box is running the previous commit, which ran
-correctly all evening, and the engine restarts from `ExecStartPre` on boot.
+The ProDesk woke on schedule at **07:30 SGT on 2026-08-22**, pulled, and is
+running **`2b24e58`**. Engine `active`, no failed units.
 
-```bash
-ssh -A prodesk                      # -A is required; the box has no git key
-cd ~/Projects/AI-Investing
-git pull                            # fast-forwards cleanly — see the note below
-systemctl --user restart ai-investing.service
-systemctl --user is-active ai-investing.service
+*(Historical note, because the correction is the useful part: the deploy was
+left pending overnight when the box powered off mid-session. On the resume, one
+prediction I had written here was wrong in wording — `brain_audit.py` showed as
+`M` in `git status`, not clean. The content was byte-identical to the committed
+version; it read as modified only because the box's HEAD predated that commit.
+Verified by comparing sha256 on both sides before discarding the working copy.
+**Compare the hash, do not trust the prediction.**)*
 
-# then confirm the new instrument is live:
-.venv/bin/python scripts/brain_audit.py --section learning | head -40
-```
-
-**Expect** an `expected_move` block reporting `median_observed_ratio`,
-`median_noise_ratio`, `hit_rate` and
-`ratio_is_indistinguishable_from_noise: true`. If that block is missing, the
-pull did not take.
-
-> **Why the pull is clean.** `scripts/brain_audit.py` was copied to the box by
-> hand during the investigation, before it was committed. The copy is
-> **byte-identical** to the committed version, so git sees no local
-> modification. If it somehow does, the box's copy is the one that is safe to
-> discard: `git checkout -- scripts/brain_audit.py`.
-
-**Then check the one cue that should have fired overnight:** the declared book
-basis (§4A row 16). A mark is written once a day; the last one predates the
-deploy.
+Both post-deploy checks were run, and **the second one failed, correctly** —
+see §1.1.
 
 ```bash
-tail -1 data/stock_journal.jsonl        # must now carry a "basis" field
+# the routine health check, any time
+ssh prodesk 'cd ~/Projects/AI-Investing && systemctl --user is-active ai-investing.service'
+ssh prodesk 'cd ~/Projects/AI-Investing && .venv/bin/python scripts/brain_audit.py --section learning'
 ```
 
-If a mark lands **without** `basis`, that is a live defect, not a timing
-artefact — the wiring is grepped and tested but has never been observed in
-production.
+### 1.1 The basis cue fired NEGATIVE, and it was right — §4.52
+
+The one open cue was: *does the next daily mark carry a `basis` field?* It did
+not. That row had said in advance what a missing field would mean — **a live
+defect, not a timing artefact** — so there was nothing to argue about.
+
+```
+stock_journal.jsonl   "event": "mark", "equity": 10001.71 ...      no basis
+invest_journal.jsonl  "event": "mark", "basis": "BookBroker:book"  DECLARED
+```
+
+The second line is what made it real: the investing book declared its basis on
+the **same cycle**, so the mixin demonstrably worked — the missing one was a
+path, not a delay. `stock_journal.jsonl` is written by the **runner**, not by a
+book: a fifth journal nobody counted, and the one the watchdog and
+`daily_status.py` actually read.
+
+Fixed, three mutations verified, closed. **Sixth instance of
+one-of-N-paths-fixed.**
+
+**The transferable lesson is about the cue, not the code:** a cue is only worth
+writing if its *negative* answer is written down too. "No basis yet" was true
+the evening before and false the morning after, and only the pre-written
+verdict told them apart.
 
 ---
 
 ## 2. What this session actually did
 
 ```
-                     START (e327d65)      NOW (7747aa9)
-register entries          §4.36               §4.51        (15 new)
-§4A open rows              19                  16
+                     START (e327d65)      NOW (2b24e58)
+register entries          §4.36               §4.52        (16 new)
+§4A open rows              19                  15
 test files                 54                  65
-tests                  one runner only     678, BOTH runners, BOTH machines
-commits                   280                 317
+tests                  one runner only     682, BOTH runners, BOTH machines
 ```
 
-**Fifteen defects found and fixed (§4.37–§4.51).** Four of them were found only
+**Sixteen defects found and fixed (§4.37–§4.52).** Five of them were found only
 because an earlier one taught us where to look. Four false alarms are recorded
 at the same length as the fixes, because a review that records only its hits is
 not a measurement.
 
-**Two of the fifteen I caused myself, during this session:**
+**Two of the sixteen I caused myself, during this session:**
 - **§4.48** — my `parse_args(argv)` refactor killed the X capture channel for
   two hours, and the guard written in the same commit passed the whole time.
 - **§4.50** — a cleanup rule I wrote deleted **Procter & Gamble** from the live
@@ -84,10 +89,12 @@ Both are written up in full. They are the two most useful entries in the file.
 
 ### The recurring shapes, which matter more than any single fix
 
-1. **One-of-two-paths-fixed — five times today** (§4.14, §4.23, §4.36, §4.49,
-   §4.51). A defect gets fixed where it was *observed* and nowhere else. The
+1. **One-of-N-paths-fixed — six times** (§4.14, §4.23, §4.36, §4.49, §4.51,
+   §4.52). A defect gets fixed where it was *observed* and nowhere else. The
    0.0 price sentinel was removed from the live path in the morning and left
-   standing in the shadow path, in the same file, eight hours later.
+   standing in the shadow path, in the same file, eight hours later. **This is
+   the single most productive question to ask of any fix in this codebase:
+   where else does this pattern live?**
 2. **A ratio without its null is not a measurement — three times** (§4.6 needed
    a benchmark, §4.44 a control group, §4.51 a noise floor). Same question
    every time: *compared with what?*
@@ -173,7 +180,7 @@ is*, because "still open" was hiding four different situations.
 | **`O39.SI` / non-USD trading** | §3.2 above. Not data-gated — one small order in SGT hours proves the path, exactly as `F` proved the US leg. |
 | **The self-wiring BAR** (not the budget) | The 6/day budget caps the *rate*; nothing caps *quality*. 320 LLM edges, **all 320 unreviewed**, and the calibrator cannot reach them (none terminates on a tradable symbol). How much self-wiring do you actually want? |
 
-### 4.2 Waiting, each with a cue that fires on its own (6)
+### 4.2 Waiting, each with a cue that fires on its own (5)
 
 | Waiting on | Cue |
 |---|---|
@@ -182,7 +189,6 @@ is*, because "still open" was hiding four different situations.
 | **Adviser gate** | n=90, hit 62.2%, **15 of the 30 days** required. Self-checking on a timer. |
 | **Sleeve's true risk/reward** | Re-derive from `ratio_true`, **not** `expected_move`. And note §4.51: the 32:1 was always a measurement artefact. |
 | **`602035` rejects** | Instrumented. Next occurrence will say why. §4.23 tick-snapping is ruled out. |
-| **Declared book basis** | The next daily mark — see §1. |
 
 ### 4.3 Curation — real work, no cleverness available (3)
 
