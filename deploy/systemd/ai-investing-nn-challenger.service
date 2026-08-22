@@ -6,11 +6,18 @@ Type=oneshot
 WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
 
 # The whole point of this job is that it CANNOT replace the brain:
-#   - no --save flag, so ParamStore.save() is never called;
+#   - no --save flag, so the live ParamStore.save() is never called;
 #   - PARAMS_PATH is redirected anyway, so even an accidental --save could not
 #     touch the live data/formula.json;
 #   - STATE_PATH redirects the output dir, so backtest.json lands in
 #     data/nn_shadow/ instead of clobbering the panel the dashboard reads.
+#
+# --save-nn-shadow persists the FITTED net (win or lose) so the shadow BOOK has
+# something to trade and journal. That is not adoption and cannot become it:
+# the flag refuses any destination outside an `nn_shadow` directory, in code,
+# so the redirect above is belt AND braces rather than the only guard. A net the
+# deflated-Sharpe gate refused is exactly the one worth watching -- refusing to
+# record it is how nobody ever finds out whether the refusal was right.
 # BRAIN_DB_PATH and DB_PATH are deliberately NOT overridden: the challenger is
 # meant to see exactly the information the live brain sees.
 Environment=LEARN_NN_ENABLED=true
@@ -28,7 +35,7 @@ Environment=CRYPTO_WATCHLIST=BTC/USD,ETH/USD
 ExecStart=/bin/sh -lc "\
   mkdir -p /home/eugene/Projects/AI-Investing/data/nn_shadow && \
   echo \"===== $(date -Is) =====\" >> /home/eugene/Projects/AI-Investing/data/nn_shadow/nn_challenger.log && \
-  /home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.backtest.main --optimize \
+  /home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.backtest.main --optimize --save-nn-shadow \
     >> /home/eugene/Projects/AI-Investing/data/nn_shadow/nn_challenger.log 2>&1 && \
   /home/eugene/Projects/AI-Investing/.venv/bin/python \
     /home/eugene/Projects/AI-Investing/scripts/nn_challenger_report.py \

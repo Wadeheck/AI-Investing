@@ -201,6 +201,19 @@ class WalkForwardOptimizer:
             "nn_reason": nn["reason"], "nn_train_samples": nn["train_samples"],
             "nn_windows_fit": nn["windows_fit"],
             "nn_n_params": nn["n_params"],
+            # The fitted net itself, exposed WIN OR LOSE.
+            #
+            # ADOPTION and SHADOW-PERSISTENCE are different questions and were
+            # previously conflated by `model` being the only way out: a net that
+            # the deflated-Sharpe gate refused was unreachable, so it could not
+            # even be watched. Refusing to let it TRADE is the gate doing its
+            # job; refusing to let it be RECORDED just means nobody ever finds
+            # out whether the refusal was right.
+            #
+            # Nothing downstream may treat this as adopted — `adopted` and
+            # `model_type` are unchanged above, and the only writer of this
+            # object refuses any path outside an `nn_shadow` directory.
+            "nn_model": nn["model"],
         })
         return out
 

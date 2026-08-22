@@ -51,6 +51,12 @@ def foreign_positions(position_keys, universe) -> set[str]:
     return {k for k in position_keys if k not in universe}
 
 
+class _NNInactive(Exception):
+    """No net fitted yet — the ordinary state, not a fault. Raised so the
+    inactive path costs nothing and prints nothing per cycle; the reason is
+    stated once at startup."""
+
+
 class Runner:
     def __init__(self, settings: Settings, use_news: bool = True):
         self.settings = settings
@@ -226,6 +232,21 @@ class Runner:
         self.shadow_broker = self._load_shadow(settings.starting_cash)
         self.shadow_engine = DecisionEngine(default_signals(), model=self.model, user_views=UserViews())
         self.shadow_risk = RiskManager(settings.risk, regime_gate=self.regime)
+        # The NN's parallel book. Constructing it is cheap and it reports
+        # `available=False` with a reason until the weekly challenger has
+        # actually fitted a net — which is the normal state, not an error.
+        # Guarded because a failure to BUILD it must not stop the engine
+        # starting, for the same reason a failure to run it must not stop a
+        # cycle.
+        try:
+            from ai_investing.learning.nn_shadow import NNShadowBook
+            self.nn_shadow = NNShadowBook(settings)
+            if not self.nn_shadow.available:
+                print(f"  [nn-shadow] inactive: {self.nn_shadow.reason}")
+        except Exception as exc:
+            print(f"  [nn-shadow] unavailable: {type(exc).__name__}: {exc}")
+            self.nn_shadow = None
+        self._nn_report: dict = {}
 
         # --- bounded slice of a live account (LIVE_CAPITAL_BASE) ---------------
         self._ledger = None
@@ -875,6 +896,35 @@ class Runner:
         decisions = apply_adviser_gate(decisions, self.settings)
         for d in decisions:
             self.journal.record_decision(d)
+
+        # -- the NN's own book -------------------------------------------------
+        # It decides on the SAME inputs the live engine just used — same signals,
+        # same news, same brain field, same curated wiring — trades a paper book
+        # on its own view, and journals every call beside the brain's so the two
+        # records can be compared on identical (symbol, day) rows.
+        #
+        # Placed HERE, after `decisions`, purely so it can be handed the brain's
+        # own call for this cycle; the comparison then costs a row lookup instead
+        # of a join across two systems on a timestamp.
+        #
+        # HARD GUARD, deliberately. `_run_shadow` above is unguarded and an
+        # exception there kills the cycle. A second shadow lane must never be
+        # able to cost a live cycle, so anything it raises is printed and
+        # swallowed. Everything it writes lives under data/nn_shadow/.
+        try:
+            if self.nn_shadow is None or not self.nn_shadow.available:
+                raise _NNInactive
+            self._nn_report = self.nn_shadow.run(
+                prices, context, bars_by_key, self.assets, bad_data,
+                live_decisions={d.asset.symbol: d for d in decisions})
+            if self._nn_report.get("available"):
+                print(f"  [nn-shadow] {self._nn_report['decided']} decided, "
+                      f"{self._nn_report['primaries']} primary, "
+                      f"equity ${self._nn_report['equity']:,.0f}")
+        except _NNInactive:
+            pass                      # no net fitted yet; said once at startup
+        except Exception as exc:
+            print(f"  [nn-shadow] skipped: {type(exc).__name__}: {exc}")
 
         # 4) Size and open new positions — only if the breaker allows it.
         # With TRADE_APPROVAL on, entries first go to you on Telegram and only

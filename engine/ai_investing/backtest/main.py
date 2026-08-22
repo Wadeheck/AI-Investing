@@ -83,11 +83,48 @@ def _dump(assets, chosen, default_res, chosen_res, result=None) -> None:
     print(f"  wrote {path}")
 
 
+def _save_nn_shadow(settings, result) -> None:
+    """Persist the fitted net so the shadow book has something to trade.
+
+    THIS IS NOT ADOPTION and must never become it. The deflated-Sharpe gate
+    decides what the engine trades; this decides only what the SHADOW trades,
+    and the shadow cannot place a real order. A net the gate refused is exactly
+    the one worth watching — refusing to record it is how you never find out
+    whether the refusal was right.
+
+    THE GUARD IS STRUCTURAL. The write is refused unless the destination sits
+    inside a directory named `nn_shadow`. Redirecting PARAMS_PATH in the systemd
+    unit is a convention and conventions get edited; this is a rule the code
+    enforces, so a mis-set env var cannot put an unadopted net where the live
+    engine loads its formula.
+    """
+    from pathlib import Path as _P
+    model = (result or {}).get("nn_model")
+    if model is None:
+        print("\n  [nn-shadow] no net was fitted this run — nothing to save.")
+        return
+    dest = _P(settings.params_path).resolve()
+    if "nn_shadow" not in dest.parts:
+        print(f"\n  !! REFUSED to write an unadopted net to {dest}\n"
+              f"     --save-nn-shadow only writes inside an nn_shadow directory.\n"
+              f"     Set PARAMS_PATH to .../data/nn_shadow/formula.json.")
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    ParamStore(str(dest)).save(model)
+    print(f"\n  [nn-shadow] fitted net saved -> {dest}\n"
+          f"     NOT adopted; the live formula is untouched. The shadow book "
+          f"will trade this net and journal every call.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest and walk-forward optimize the formula.")
     parser.add_argument("--optimize", action="store_true", help="run walk-forward curation (default)")
     parser.add_argument("--run", action="store_true", help="just backtest the saved/default formula")
     parser.add_argument("--save", action="store_true", help="persist the matured formula")
+    parser.add_argument("--save-nn-shadow", action="store_true",
+                        help="persist the FITTED NN (win or lose) for the shadow "
+                             "book to trade. Refuses any path outside an "
+                             "nn_shadow directory. Never adopts.")
     args = parser.parse_args()
 
     assets, bars_by_key = _load_data()
@@ -158,6 +195,9 @@ def main() -> None:
     if args.save:
         ParamStore(settings.params_path).save(chosen, metrics=chosen_res.metrics)
         print(f"\nSaved matured formula -> {settings.params_path} (version {chosen.version})")
+
+    if args.save_nn_shadow:
+        _save_nn_shadow(settings, result)
 
 
 if __name__ == "__main__":

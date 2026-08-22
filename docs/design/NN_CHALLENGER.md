@@ -427,17 +427,69 @@ observations (§1). It is **not** a bigger network, and it is **not** a lower
 - **No change to default behavior.** `nn_challenger_enabled` defaults `False`
   and every new path is gated behind it.
 
-### Not built: a live per-cycle shadow book
+### ~~Not built: a live per-cycle shadow book~~ — BUILT 2026-08-22
 
-The original request was for a network that "makes its own decision and learns
-from it" in parallel with the brain. **What exists is an offline challenger,
-not a live shadow.** The NN refits weekly on real history and is scored
-out-of-sample against the linear model; it does **not** compute a decision on
-each 300s engine cycle alongside the brain's.
+This section previously said the live shadow was not built and named what it
+would take. It now exists, following the `_run_shadow` pattern this section
+recommended: `engine/ai_investing/learning/nn_shadow.py`, wired into
+`runner.py` after the live `decisions` are formed.
 
-Building that means editing the live engine loop on a real-money system, and it
-is a genuinely separate piece of work: where the shadow book lives, what it
-logs, how its decisions are compared to the live ones, and how it avoids
-becoming a second source of truth that quietly diverges. `runner.py` already has
-a shadow "formula-only" portfolio that is the right pattern to follow. This
-document does not cover it.
+**What it does.** Every cycle the net sees exactly the context the live engine
+just used — same signals, same news, same brain field, same curated wiring —
+forms its own view on every asset, trades a paper book on it, and journals each
+call **beside the brain's own call for the same asset on the same cycle**. The
+comparison is therefore a row lookup, not a join across two systems on a
+timestamp, which is where this kind of comparison usually rots.
+
+**The counting unit is (symbol, day), not the row.** The engine cycles every
+~8 minutes, so one row per decision per cycle would re-log a standing view ~65
+times a day against the same forward return — the exact defect
+`BRAIN_REVIEW_2026-08-21` found inflating the evidence base 65× (§4.37). Every
+row is written and auditable; exactly one per (symbol, SGT day) carries
+`is_primary`, and only those are graded. `_primary_symbols_for` reads **disk**,
+not memory, so a mid-day restart cannot mint a second primary.
+
+**Four outcomes, because a record that counts only what it took is a brochure:**
+
+| | |
+|---|---|
+| `captured` | positioned, move went its way |
+| `wrong` | positioned, it did not |
+| `missed` | **FLAT while the asset moved >2%** — the opportunity cost a P&L-only record cannot show |
+| `avoided` | FLAT and the move was small, or would have lost |
+
+`missed` is the half normally absent. A book that never trades has no losses and
+looks disciplined; counting its misses is what separates discipline from
+paralysis. The 2% threshold matters: without it every FLAT call scores as a miss
+and the net is pushed to be permanently long everything.
+
+**Isolation is structural, not conventional** — five independent reasons:
+
+1. Its own `PaperBroker`; it never sees the real broker or the live books.
+2. Its own state, under `data/nn_shadow/` only. A test pins that a cycle writes
+   nothing else in the data directory.
+3. Its own model object; it never touches `runner.model` or `runner.rls`.
+4. `UserViews()` empty by construction — judged on its own read.
+5. The runner calls it inside a hard `try/except`. Note `_run_shadow` is **not**
+   guarded that way; a second shadow lane must never be able to cost a live
+   cycle.
+
+**Persisting the net is not adoption.** `result["nn_model"]` now exposes the
+fitted net win or lose, and `--save-nn-shadow` writes it for the shadow book to
+trade. Previously a net the gate refused was unreachable — meaning the one
+candidate most worth watching was the one nobody could watch. The flag **refuses
+in code** any destination outside an `nn_shadow` directory, so the systemd
+`PARAMS_PATH` redirect is belt *and* braces rather than the only guard. Adoption
+still requires clearing `nn_min_dsr`, unchanged.
+
+```bash
+python3 scripts/nn_shadow_report.py     # the record, beside the brain's
+```
+
+**Still not built, and deliberately: online learning for the net.** The journal
+accumulates the labelled record a future refit can consume, but the net does not
+update from its own shadow outcomes between weekly runs. §8's first bullet still
+applies — a safe online update for an MLP is a separate, harder problem, and at
+this sample size an online-updated MLP would fit noise while *looking* like it
+was learning. The net learns weekly from history; the shadow book records
+whether that learning was any good.
