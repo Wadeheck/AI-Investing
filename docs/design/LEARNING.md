@@ -51,6 +51,16 @@ met bad luck. The system grades *skill*, in three components, per settled trade:
    *corrected* (future expectations shrink), not punished. A policy can be
    perfectly skilled and badly scaled; those are different faults with
    different fixes.
+
+   > **Read this ratio only beside its noise floor (§4.51).** `expected` is the
+   > move attributable to the event; `realized` is the asset's TOTAL move, which
+   > its own volatility dominates. On the live record the two are
+   > indistinguishable — observed 14.4 against 15.5 for pure noise, at a 52.6%
+   > hit rate — so a large ratio is **not** by itself evidence of bad scaling
+   > and **not** grounds for raising `gain`. It becomes evidence only when it
+   > falls BELOW the noise floor while the hit rate rises. The clipping in the
+   > next section bounds the score; it does not make the ratio mean more than
+   > it does.
 3. **Cost-awareness** — a "win" smaller than its own frictions is not a win.
    The trade must clear its costs to score positive.
 

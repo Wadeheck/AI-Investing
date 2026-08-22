@@ -8,11 +8,19 @@ Run it the morning after any change to `nightly-rest.timer`, to
 `apt-daily-upgrade`'s schedule, to the unattended-upgrades reboot policy, or to
 any timer that fires between 04:00 and 09:00.
 
-**First cycle to verify: the morning of 2026-08-12.** Everything below was put
-in place on 2026-08-11 and has never run end to end. The `rtcwake` *mechanism*
-was proven with a 240-second test (powered off 17:50:53, returned 17:55:07), and
-the RTC timebase is correct (`RTC in local TZ: no`, `rtcwake` assumes UTC — they
-agree), but the full 2.5-hour cycle has not happened yet.
+**Status: PROVEN in production.** This section used to read *"has never run end
+to end"*, which was true when it was written on 2026-08-11 and has been wrong
+since 08-12. The cycle has now run nightly for ten days.
+
+**Most recently observed directly on 2026-08-22:** the box disappeared from
+Tailscale cleanly mid-session (*"offline, last seen 55m ago"* — a clean
+shutdown, not a hang), and `uptime -s` after the return read **2026-08-22
+07:30:38** — the scheduled wake, to the second.
+
+One practical note earned that morning, since it is the failure mode that
+actually costs time: **an unreachable box during the rest window is expected,
+not an incident.** The signal that something is genuinely wrong is a box that
+does not come back *after* 07:30 — see section A.
 
 ---
 

@@ -21,7 +21,7 @@ Quick map from vision to code:
 
 | Vision | Where it lives |
 |---|---|
-| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (seed v39: **802 curated + 323 LLM edges over 609 nodes**; factor nodes carry an `equilibrium` note). Live counts come from `scripts/brain_audit.py --section graph`, never from this table — the figure here was 283/562 and eleven seed versions stale before anyone checked. |
+| Factors as nodes, signed relationships, stable points | `brain/graph.py` + `brain/seed.py` (seed v39: **802 curated + 320 LLM edges over 604 nodes**; factor nodes carry an `equilibrium` note). Live counts come from `scripts/brain_audit.py --section graph`, never from this table — the figure here was 283/562 and eleven seed versions stale before anyone checked. |
 | News shocks a node and ripples to the others | `KnowledgeGraph.propagate()` — impulse × sign × weight × per-hop decay, with a full traversal trace |
 | Multi-market (Longbridge, not just US) | Asset nodes across US / HK / CN / SG / crypto; `MacroLinkageSignal` bridges Longbridge symbols (700.HK) to canonical ones (0700.HK) |
 | Noise vs real information (manipulation filter) | `brain/events.py` credibility score: source trust × corroboration × manipulation-likelihood × hype-language; sub-threshold events are labeled NOISE, shown but never propagated or traded |
@@ -344,14 +344,36 @@ Known simplifications that remain (the roadmap, in honesty):
   months. The "unproven" label is honest and doing its job; the demotion half of
   the design has not fired yet, by design. See STATE_OF_THE_SYSTEM §4.47 and
   §4A.
-- **Expected-move magnitude is saturated.** The global `gain` correcting
-  over/under-shoot is clamped to `[0.25, 2.0]` and sits **at 2.0** — realized
-  moves are at least twice what the graph predicts and the calibrator cannot
-  say how much further. Every `expected_move_pct` the adviser publishes is
-  scaled by that bound, which is what the event sleeve's 32:1 risk/reward
-  argument rests on.
+- **Expected-move magnitude is saturated, and that is now a DECIDED hold.**
+  The global `gain` is clamped to `[0.25, 2.0]` and sits **at 2.0**. This
+  section used to conclude *"realized moves are at least twice what the graph
+  predicts"* and treat the ceiling as the thing in the way. **That inference was
+  wrong, and §4.51 is the correction.**
+
+  `expected_move` is the move **attributable to an event**. A realised move is
+  the asset's **total** move over the horizon, which its own volatility
+  dominates. Their ratio therefore measures signal-to-noise, not calibration
+  error, and it cannot be driven toward 1 by any gain:
+
+  ```
+  median |realised / expected|             14.4
+  median  own-5d-volatility / expected     15.5   <-- what PURE NOISE gives
+  directional hit rate                      0.526  (n=19 — a coin flip)
+  ```
+
+  Raising the gain until the ratio closes needs a gain above **13**, at which
+  point every `expected_move_pct` asserts the model predicts the asset's entire
+  five-day range — and that figure feeds position sizing, stop distances and the
+  event sleeve's risk/reward. **Do not raise it to fix this number.** The lever
+  that legitimately moves the ratio is a larger `impact`, i.e. better graph
+  wiring, which is the same work as the resolution problem below.
+
+  `scripts/brain_audit.py --section learning` prints the ratio, the noise floor
+  and the hit rate together; a test refuses to let the ratio be published
+  without its control. The event sleeve's much-quoted 32:1 risk/reward rests on
+  this same number and is closer to 2:1 for the same reason.
 - **The graph resolves fewer objects than it holds.** 202 distinct response
-  signatures across 469 assets (43.1%); 104 assets are an exact duplicate of a
+  signatures across 464 assets (43.5%); 104 assets are an exact duplicate of a
   peer because each hangs off one `member_of` edge into a shared theme. For
   those names the path-sum below has exactly one term and the "cluster" is a
   sector lookup. Partially compensated (conviction × 1/√group, `brain/adviser.py`
