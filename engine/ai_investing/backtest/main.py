@@ -49,19 +49,34 @@ def _dump(assets, chosen, default_res, chosen_res, result=None) -> None:
         "adopted": (result or {}).get("adopted"),
         "dsr": (result or {}).get("dsr"),
         "n_trials": (result or {}).get("n_trials"),
+        "challenger_avg": (result or {}).get("challenger_avg"),
+        "default_avg": (result or {}).get("default_avg"),
         "windows": (result or {}).get("windows", []),
         "metrics_default": default_res.metrics,
         "metrics_chosen": chosen_res.metrics,
         "equity_curve_default": [round(x, 2) for x in default_res.equity_curve],
         "equity_curve_chosen": [round(x, 2) for x in chosen_res.equity_curve],
+        "model_type": (result or {}).get("model_type", "linear"),
         "formula": {
             "version": chosen.version, "fitted": chosen.fitted,
-            "weights": dict(zip(chosen.feature_names, chosen.weights)),
+            # An MLP has no per-feature weight; the dashboard gets an empty dict rather
+            # than a fabricated attribution (see NNFormulaModel.weight_of).
+            "weights": dict(zip(chosen.feature_names, chosen.weights))
+                       if hasattr(chosen, "weights") else {},
             "gain": chosen.gain, "entry_threshold": chosen.entry_threshold,
             "size_scale": chosen.size_scale, "stop_loss": chosen.stop_loss,
             "take_profit": chosen.take_profit,
         },
     }
+    if result and "nn_dsr" in result:
+        # Both candidates, win or lose -- scripts/nn_challenger_report.py reads this.
+        payload["nn_challenger"] = {
+            k[3:] if k.startswith("nn_") else k: result[k]
+            for k in ("nn_challenger_avg", "nn_dsr", "nn_n_trials", "nn_windows",
+                      "nn_reason", "nn_train_samples", "nn_n_params", "nn_windows_fit",
+                      "nn_min_dsr", "nn_adoption_margin", "nn_ok", "linear_ok",
+                      "adoption_case")
+        }
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         json.dump(payload, fh, indent=2)
@@ -100,7 +115,11 @@ def main() -> None:
     print("\nWalk-forward optimization (train -> validate out-of-sample -> champion/challenger)")
     opt = WalkForwardOptimizer(bt, n_windows=settings.learning.walkforward_windows,
                                search=settings.learning.walkforward_search, embargo=settings.learning.embargo)
-    result = opt.optimize(assets, bars_by_key, prior_model=FormulaModel(), min_dsr=settings.learning.min_dsr)
+    lc = settings.learning
+    result = opt.optimize(assets, bars_by_key, prior_model=FormulaModel(), min_dsr=lc.min_dsr,
+                          try_nn=lc.nn_challenger_enabled, nn_min_dsr=lc.nn_min_dsr,
+                          nn_adoption_margin=lc.nn_adoption_margin, nn_hidden=lc.nn_hidden,
+                          nn_min_samples=lc.nn_min_samples)
 
     for w in result["windows"]:
         print(f"  window {w['window']}: default Sharpe {w['default_sharpe']:>6}  "
@@ -109,6 +128,21 @@ def main() -> None:
     print(f"  Deflated Sharpe {result['dsr']} over {result['n_trials']} trials "
           f"(need >= {result.get('min_dsr', 0.6)}) "
           f"-> {'ADOPT new formula' if result['adopted'] else 'KEEP incumbent (not significant)'}")
+
+    if "nn_dsr" in result:
+        # Both candidates, side by side -- never just the winner (see brain_audit.py:
+        # "A track record that reports only its winners is a brochure").
+        print(f"\n  NN challenger: fit in {result['nn_windows_fit']}/{len(result['nn_windows'])} "
+              f"windows, {result['nn_train_samples']} training rows for "
+              f"{result['nn_n_params']} parameters"
+              f"{'  [' + result['nn_reason'] + ']' if result['nn_reason'] else ''}")
+        for w in result["nn_windows"]:
+            print(f"    window {w['window']}: default Sharpe {w['default_sharpe']:>6}  "
+                  f"NN {str(w['nn_sharpe']):>6}  ({w['train_samples']} train rows)")
+        print(f"    NN avg Sharpe {result['nn_challenger_avg']} vs linear "
+              f"{result['challenger_avg']}  |  NN DSR {result['nn_dsr']} over "
+              f"{result['nn_n_trials']} trials (need >= {result['nn_min_dsr']})")
+        print(f"    adoption -> {result['adoption_case']}")
 
     chosen = result["model"]
     print("\nChosen formula:")

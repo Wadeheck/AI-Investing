@@ -190,6 +190,17 @@ class LearningConfig:
     lambda_reg: float = field(default_factory=lambda: _get_float("LEARN_LAMBDA_REG", 0.10))
     embargo: int = field(default_factory=lambda: _get_int("LEARN_EMBARGO", 5))
     min_dsr: float = field(default_factory=lambda: _get_float("LEARN_MIN_DSR", 0.60))
+    # The NN challenger (docs/design/NN_CHALLENGER.md). OFF by default: until someone
+    # deliberately flips LEARN_NN_ENABLED, none of it runs and nothing changes. Its DSR
+    # bar is higher than the linear model's on purpose — more parameters must earn a
+    # higher evidentiary bar, not an equal one — and even after clearing it, the net
+    # only wins by beating the linear model's Sharpe by nn_adoption_margin.
+    nn_challenger_enabled: bool = field(default_factory=lambda: _get_bool("LEARN_NN_ENABLED", False))
+    nn_min_dsr: float = field(default_factory=lambda: _get_float("LEARN_NN_MIN_DSR", 0.75))
+    nn_adoption_margin: float = field(default_factory=lambda: _get_float("LEARN_NN_ADOPTION_MARGIN", 0.20))
+    nn_hidden: int = field(default_factory=lambda: _get_int("LEARN_NN_HIDDEN", 4))
+    # ~49 params at hidden=4, and this codebase's rule of thumb is n_samples/10 >= n_params.
+    nn_min_samples: int = field(default_factory=lambda: _get_int("LEARN_NN_MIN_SAMPLES", 500))
 
 
 @dataclass

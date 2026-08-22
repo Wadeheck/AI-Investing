@@ -114,7 +114,16 @@ class Journal:
         hyper = {"gain": model.gain, "entry_threshold": model.entry_threshold,
                  "size_scale": model.size_scale, "stop_loss": model.stop_loss,
                  "take_profit": model.take_profit}
-        weights = dict(zip(model.feature_names, model.weights))
+        if hasattr(model, "weights"):
+            weights = dict(zip(model.feature_names, model.weights))
+        else:
+            # An MLP has no per-feature weight to name. Record its flattened parameters
+            # instead, so an NN adoption is just as visible and just as revertible in
+            # this log as a linear one (docs/design/NN_CHALLENGER.md §2.6) -- but never
+            # under feature names the model does not actually have one for.
+            weights = {"model_type": "nn", "hidden": getattr(model, "hidden", None),
+                       "params": [v for row in model.W1 for v in row]
+                                 + list(model.b1) + list(model.W2) + [model.b2]}
         self.conn.execute(
             "INSERT INTO params (ts,version,weights,hyper,metrics) VALUES (?,?,?,?,?)",
             (_now(), model.version, json.dumps(weights), json.dumps(hyper), json.dumps(metrics)),

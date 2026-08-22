@@ -94,9 +94,13 @@ class Runner:
         self.user_views = UserViews.load(settings.user_views_path)
         self.engine = DecisionEngine(default_signals(), model=self.model, user_views=self.user_views)
         lc = settings.learning
-        self.rls = rls or RLSLearner.initialize(
+        # RLS matures a LINEAR θ. The NN challenger has no online update path in this
+        # phase (docs/design/NN_CHALLENGER.md §2.6) -- its update rule simply doesn't
+        # apply to a nonlinear model -- so when the adopted model is a net there is no
+        # online learner at all, and every self.rls use below is guarded.
+        self.rls = None if not hasattr(self.model, "weights") else (rls or RLSLearner.initialize(
             self.model.weights, prior_confidence=lc.prior_confidence,
-            mu=lc.forgetting_mu, trust_region=lc.trust_region)
+            mu=lc.forgetting_mu, trust_region=lc.trust_region))
         # The open-claims ledger: which φ opened which position. Persisted
         # because the engine restarts daily and this book holds for weeks — see
         # the module docstring in learning/attribution.py for what a fresh
@@ -108,7 +112,7 @@ class Runner:
                 self.tracker = OutcomeTracker.from_state(json.load(fh))
         except (OSError, json.JSONDecodeError, TypeError, AttributeError):
             self.tracker = OutcomeTracker()
-        self.samples_seen = self.rls.updates
+        self.samples_seen = self.rls.updates if self.rls else 0
         # SAY WHETHER THE FORMULA IS ACTUALLY LEARNING. "θv1 (learned from 0
         # trades)" has been in every cycle header for sixteen days and reads as
         # a version string, not as an alarm. Zero samples has two very different
@@ -1202,12 +1206,18 @@ class Runner:
             return
         for s in samples:
             phi = [s.features.get(n, 0.0) for n in self.model.feature_names]
-            err = self.rls.update(phi, s.realized_return)
+            # With an NN adopted there is no online learner, but the OUTCOME still gets
+            # journaled: labeled (symbol, day) rows are the scarce resource this whole
+            # effort is bottlenecked on (NN_CHALLENGER.md §1 Track A), and throwing them
+            # away because today's model can't consume them online would be backwards.
+            err = (self.rls.update(phi, s.realized_return) if self.rls
+                   else s.realized_return - self.model.raw(s.features))
             self.samples_seen += 1
             self.journal.record_outcome(s.symbol, s.realized_return, s.features, err)
             print(f"  LEARN   {s.symbol:<10} realized {s.realized_return * 100:+.2f}%  "
-                  f"pred_err {err * 100:+.2f}%  (sample #{self.samples_seen})")
-        if self.samples_seen >= lc.min_samples and samples:
+                  f"pred_err {err * 100:+.2f}%  (sample #{self.samples_seen})"
+                  f"{'  [logged only -- NN has no online update]' if not self.rls else ''}")
+        if self.rls and self.samples_seen >= lc.min_samples and samples:
             self.model.weights = list(self.rls.theta)
         if samples and self._cycles % lc.save_every == 0:
             self.store.save(self.model, self.rls, journal=self.journal)
@@ -1492,7 +1502,11 @@ class Runner:
                 "version": self.model.version,
                 "trades_learned": self.samples_seen,
                 "fitted": self.model.fitted,
-                "weights": dict(zip(self.model.feature_names, self.model.weights)),
+                # An MLP has no per-feature weight; the dashboard gets an empty dict
+                # rather than a fabricated attribution (see NNFormulaModel.weight_of).
+                "weights": dict(zip(self.model.feature_names, self.model.weights))
+                           if hasattr(self.model, "weights") else {},
+                "model_type": "nn" if not hasattr(self.model, "weights") else "linear",
                 "gain": self.model.gain,
                 "entry_threshold": self.model.entry_threshold,
             },

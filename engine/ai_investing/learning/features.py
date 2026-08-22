@@ -68,3 +68,22 @@ class FeatureExtractor:
 
     def vector(self, feats: dict[str, float]) -> list[float]:
         return [feats.get(n, 0.0) for n in FEATURE_NAMES]
+
+
+def feature_stats(X: list[list[float]]):
+    """Column-wise mean/std of a design matrix, for OOD gating and NN input scaling.
+
+    Lives here rather than in backtest/walkforward.py (where it started) because
+    learning/nn_formula.py needs it too, and walkforward imports the learning
+    package -- the other direction would be a cycle.
+    """
+    if not X:
+        return None, None
+    n, d = len(X), len(X[0])
+    fmean = [sum(row[j] for row in X) / n for j in range(d)]
+    fstd = []
+    for j in range(d):
+        m = fmean[j]
+        v = sum((row[j] - m) ** 2 for row in X) / max(1, n - 1)
+        fstd.append(v ** 0.5)
+    return fmean, fstd

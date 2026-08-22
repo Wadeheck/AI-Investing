@@ -365,15 +365,27 @@ def learning_loops(s) -> dict:
         theta, prior = rls.get("theta") or [], model.get("weights") or []
         moved = any(abs(a - b) > 1e-12 for a, b in zip(theta, prior)) \
             if len(theta) == len(prior) and theta else None
+        # A file with no model_type predates the NN challenger, so it is linear.
+        mtype = f.get("model_type", "linear")
         out["formula"] = {
             "written": f.get("ts"), "version": model.get("version"),
+            "model_type": mtype,
             "fitted": model.get("fitted"),
             "features": len(model.get("feature_names") or []),
             "feature_names": model.get("feature_names"),
             "rls_samples": rls.get("n"),
             "rls_theta_moved_from_prior": moved,
+            # The NN has no online path (NN_CHALLENGER.md §2.6), so "alive" for it can
+            # only mean "a walk-forward run fit it" -- there is no RLS drift to detect,
+            # and reading a missing one as death would be wrong.
             "alive": bool(model.get("fitted")) or bool(moved),
         }
+        if mtype == "nn":
+            n_params = (sum(len(r) for r in (model.get("W1") or []))
+                        + len(model.get("b1") or []) + len(model.get("W2") or []) + 1)
+            out["formula"]["nn_params"] = n_params
+            out["formula"]["nn_hidden"] = model.get("hidden")
+            out["formula"]["see"] = "scripts/nn_challenger_report.py for linear-vs-NN detail"
     except (OSError, json.JSONDecodeError) as exc:
         out["formula"] = {"error": str(exc)}
 
