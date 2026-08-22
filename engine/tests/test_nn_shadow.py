@@ -227,6 +227,27 @@ def test_an_unpriced_order_is_dropped_not_filled_at_zero():
     assert len(filled) == 1
 
 
+def test_a_newly_fitted_net_is_picked_up_without_an_engine_restart():
+    """The lane loads its model at construction. Without a refresh, a net
+    written by Monday's 04:00 job would not be traded until the engine next
+    restarted — a staleness trap of exactly the kind that cost this session
+    twice already (a process holding pre-deploy code; a graph file read before
+    the cycle wrote it). Both looked like "the feature does not work" and were
+    really "what you are reading is older than what you changed"."""
+    s = _settings()
+    first = _fit_a_net(s, ["bias", "momentum"])
+    b = nn_shadow.NNShadowBook(s)
+    b.refresh()
+    assert b.available and len(b.model.feature_names) == 2
+
+    import time
+    time.sleep(0.01)
+    _fit_a_net(s, ["bias", "momentum", "mean_reversion", "sentiment"])
+    assert b.refresh() is True, "a newer net on disk must be taken up"
+    assert len(b.model.feature_names) == 4
+    assert b.refresh() is False, "an unchanged net must not reload every cycle"
+
+
 # --- persisting the net: NOT adoption, and structurally cannot become it ----
 
 def test_the_fitted_net_is_reachable_even_when_the_gate_refuses_it():

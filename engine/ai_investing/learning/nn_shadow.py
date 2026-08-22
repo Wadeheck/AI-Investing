@@ -144,6 +144,40 @@ class NNShadowBook:
     def available(self) -> bool:
         return self.engine is not None and self.broker is not None
 
+    def refresh(self) -> bool:
+        """Reload the net if the challenger has written a newer one.
+
+        Without this the lane loads its model once, at Runner construction, and
+        a net written by Monday's 04:00 job would not be traded until the engine
+        next restarted. That is a staleness trap of exactly the kind that has
+        already cost this session twice: a process holding pre-deploy code, and
+        a graph file read before the cycle wrote it. Both looked like "the
+        feature does not work" and were really "the thing you are reading is
+        older than the thing you changed".
+
+        Cheap: one `stat` per cycle, and a reload only when the mtime moves.
+        Returns True when a new net was actually taken up.
+        """
+        path = os.path.join(self.dir, "formula.json")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return False
+        if mtime == getattr(self, "_net_mtime", None):
+            return False
+        prev = self.model
+        # `_load` restores the book from `nn_book.json`, which is written every
+        # cycle, so the positions survive the model swap without being carried
+        # by hand. They are the RECORD — a new net inherits the book its
+        # predecessor opened, exactly as a new formula version does live.
+        self._load(getattr(self.settings, "starting_cash", 10000.0))
+        self._net_mtime = mtime
+        took = self.model is not None and self.model is not prev
+        if took:
+            print(f"  [nn-shadow] picked up a newly fitted net "
+                  f"({getattr(self.model, 'n_params', '?')} params)")
+        return took
+
     # -- the per-cycle pass --------------------------------------------------
     def run(self, prices: dict, context: dict, bars_by_key: dict, assets: list,
             bad_data: set | None = None,
@@ -155,6 +189,12 @@ class NNShadowBook:
         row lookup later rather than a join across two systems on a timestamp,
         which is where this kind of comparison usually rots.
         """
+        # Pick up a net the challenger wrote since this process started, before
+        # deciding anything with the old one.
+        try:
+            self.refresh()
+        except Exception as exc:
+            print(f"  [nn-shadow] refresh skipped: {type(exc).__name__}: {exc}")
         if not self.available:
             return {"available": False, "reason": self.reason}
         from ai_investing.util import atomic
