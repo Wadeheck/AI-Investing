@@ -303,10 +303,35 @@ def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
         # alias-matches oil_supply, so the model must stay free to overrule it.
         if graph is not None:
             try:
-                cand = [n for n in graph.match_text(f"{h['title']} {extra}")
+                matched = graph.match_text(f"{h['title']} {extra}")
+                cand = [n for n in matched
                         if graph.nodes[n].type != "asset"][:8]
                 if cand:
                     s += f"\n   (mentions: {', '.join(cand)} — verify, may be wrong or incomplete)"
+                # For CURATED items only, also surface matched ASSET/hub ids.
+                #
+                # `node_ids` above excludes every asset, so the extractor never
+                # sees them and cannot name one as an edge endpoint unless it
+                # can GUESS the slug. It guesses famous tickers (`nvda` wired
+                # fine) and cannot guess an internal hub minted by the deals
+                # path — `blue_owl_capital`, `athene`, `us_life_insurers`.
+                #
+                # That is precisely the wiring that matters for curated
+                # research: the whole point of submitting a financing analysis
+                # is to connect the FIRMS doing it to the MECHANISM they run.
+                # Twice the entity bridge failed to wire for this reason while
+                # the factor-to-factor edges landed, so the graph knew
+                # securitisation existed and did not know who does it.
+                #
+                # Feed items are left alone: they are one line of wire copy, the
+                # asset universe is ~470 nodes, and the exclusion is what keeps a
+                # 100-headline prompt from listing the entire book.
+                if is_curated(h.get("source", "")):
+                    hubs = [n for n in matched
+                            if graph.nodes[n].type == "asset"][:12]
+                    if hubs:
+                        s += ("\n   (entities in the graph you MAY wire to: "
+                              f"{', '.join(hubs)} — use these exact ids)")
             except Exception:
                 pass
         return s

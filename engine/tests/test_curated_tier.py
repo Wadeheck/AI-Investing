@@ -106,6 +106,43 @@ def test_raising_the_ceiling_did_not_loosen_the_wire_cap():
     assert w.count(Q) * 2 == 400, "a wire body is a lede; 400 is right for it"
 
 
+def test_curated_items_are_shown_the_entity_ids_they_may_wire_to():
+    """`node_ids` in the extraction prompt excludes EVERY asset node, so the
+    model can only name one as an edge endpoint by guessing the slug. It guesses
+    famous tickers (`nvda` wired fine) and cannot guess an internal hub minted
+    by the deals path — `blue_owl_capital`, `athene`, `us_life_insurers`.
+
+    That is exactly the wiring curated research exists to add: connecting the
+    FIRMS running a financing structure to the MECHANISM itself. Measured twice
+    on live pieces — the factor-to-factor edges landed and the entity bridge did
+    not, so the graph knew compute securitisation existed and did not know who
+    does it. A shock to `compute_securitization` moved NVDA +0.07 and
+    `blue_owl_capital` exactly 0.0000.
+
+    Feed items must NOT get this: a wire item is one line, the asset universe is
+    ~470 nodes, and the exclusion is what keeps a 100-headline prompt affordable.
+    """
+    from ai_investing.brain.graph import Edge as _E  # noqa: F401
+    g = KnowledgeGraph(
+        [Node(id="blue_owl_capital", type="asset",
+              label="Blue Owl Capital (private)", aliases=["blue owl capital"]),
+         Node(id="compute_securitization", type="factor",
+              label="Compute Securitization")], [])
+    text = "Blue Owl Capital sells the paper on to insurers."
+    curated = {"title": "Blue Owl securitises compute", "summary": text,
+               "source": "user_curated:x.md"}
+    wire = {"title": "Blue Owl securitises compute", "summary": text,
+            "source": "reuters"}
+
+    pc = ev_mod._prompt([curated], "compute_securitization", g)
+    assert "entities in the graph you MAY wire to" in pc and "blue_owl_capital" in pc, \
+        "a curated piece must be told the exact hub ids it can wire to"
+
+    pw = ev_mod._prompt([wire], "compute_securitization", g)
+    assert "entities in the graph" not in pw, \
+        "feed items keep the asset exclusion; it is what bounds the prompt"
+
+
 # --- 2. credibility must not subtract from a human judgement ----------------
 
 def test_curated_content_is_never_damped_by_the_noise_formula():
