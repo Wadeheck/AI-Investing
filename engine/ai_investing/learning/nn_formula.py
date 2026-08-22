@@ -23,6 +23,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ai_investing.indicators import pct_returns, stdev
 from ai_investing.learning.features import FEATURE_NAMES, feature_stats
 
 
@@ -46,6 +47,12 @@ class NNFormulaModel:
     # saturates the tanh units and the net predicts a constant.
     feature_mean: Optional[list[float]] = None
     feature_std: Optional[list[float]] = None
+    # Best early-stopping loss this net reached, on its own purged out-of-time slice.
+    # Carried on the model so a caller can choose BETWEEN nets (e.g. which L2) without
+    # scoring each one on the walk-forward validation window -- every candidate scored
+    # there is a trial the deflated Sharpe has to pay for. Diagnostic only: nothing in
+    # the decision path reads it.
+    val_loss: Optional[float] = None
 
     # -- the formula --------------------------------------------------------
     def _normalize(self, feats: dict[str, float]) -> list[float]:
@@ -103,6 +110,7 @@ class NNFormulaModel:
             "fitted": self.fitted,
             "feature_mean": self.feature_mean,
             "feature_std": self.feature_std,
+            "val_loss": self.val_loss,
         }
 
     @classmethod
@@ -126,13 +134,56 @@ class NNFormulaModel:
 # rest of this codebase uses for how much evidence a fit needs). 49 params -> ~500 rows.
 #
 # Read this as a floor, not a licence: a "sample" here is one (symbol, day) row out of
-# Backtester.build_samples, and twenty symbols on the same day are one market moving,
+# build_nn_samples, and twenty symbols on the same day are one market moving,
 # not twenty independent draws. Clearing 500 is necessary, not sufficient -- the real
 # evidence count is the independent (symbol, day) count that
 # docs/status/BRAIN_REVIEW_2026-08-21.md establishes the discipline for, and it is
 # always smaller. The deflated-Sharpe gate, not this constant, is what actually stops
 # an overfit net being adopted.
 MIN_SAMPLES = 500
+MIN_XS_BREADTH = 3
+
+
+def build_nn_samples(backtester, assets, bars_by_key: dict) -> tuple[list[list[float]], list[float], list[int]]:
+    """Build NN-only risk-adjusted, cross-sectionally demeaned training labels.
+
+    This intentionally does not extend ``Backtester.build_samples``: the live and
+    linear paths retain their original raw-forward-return labels and API.  ``t_index``
+    identifies the common, aligned bar time for every row and is used to create the
+    purged early-stopping split in ``fit_nn``.
+    """
+    aligned, length = backtester._aligned(bars_by_key)
+    asset_by_key = {asset.key: asset for asset in assets}
+    X: list[list[float]] = []
+    y: list[float] = []
+    t_index: list[int] = []
+
+    for key, bars in aligned.items():
+        asset = asset_by_key.get(key)
+        if asset is None:
+            continue
+        for t in range(backtester.warmup, length - backtester.horizon):
+            results = [signal.evaluate(asset, bars[:t + 1], {}) for signal in backtester.signals]
+            features = backtester.fx.build(results, bars[:t + 1])
+            forward_return = ((bars[t + backtester.horizon].close - bars[t].close) / bars[t].close
+                              if bars[t].close else 0.0)
+            returns = pct_returns([bar.close for bar in bars[max(0, t - 20):t + 1]])
+            sigma = stdev(returns) * (backtester.horizon ** 0.5)
+            label = max(-3.0, min(3.0, forward_return / sigma)) if sigma > 1e-9 else 0.0
+            X.append(backtester.fx.vector(features))
+            y.append(label)
+            t_index.append(t)
+
+    by_time: dict[int, list[int]] = {}
+    for row, t in enumerate(t_index):
+        by_time.setdefault(t, []).append(row)
+    for rows in by_time.values():
+        if len(rows) < MIN_XS_BREADTH:
+            continue
+        average = sum(y[row] for row in rows) / len(rows)
+        for row in rows:
+            y[row] -= average
+    return X, y, t_index
 
 
 def _forward(W1, b1, W2, b2, x):
@@ -146,9 +197,27 @@ def _mse(W1, b1, W2, b2, X, y) -> float:
     return sum((_forward(W1, b1, W2, b2, x)[1] - t) ** 2 for x, t in zip(X, y)) / len(X)
 
 
+def _time_split(t_index: list[int], purge: int) -> tuple[list[int], list[int]]:
+    """Rows for training and for early stopping, split by TIME with a purge gap.
+
+    The validation side is the last ~20% of distinct timestamps. The training side
+    stops `purge` timestamps before that boundary, because a row at t carries an
+    h-day forward label that reaches to t+h: without the gap the last h training
+    labels are drawn from the validation period, and early stopping then selects
+    its epoch using the very data it is supposed to be held out from. Same reason
+    WalkForwardOptimizer embargoes its own train/validation boundary.
+    """
+    ts = sorted(set(t_index))
+    cut = ts[max(0, int(len(ts) * 0.8) - 1)]
+    train = [i for i, t in enumerate(t_index) if t <= cut - purge]
+    val = [i for i, t in enumerate(t_index) if t > cut]
+    return train, val
+
+
 def fit_nn(X: list[list[float]], y: list[float], hidden: int = 4,
            lr: float = 0.05, epochs: int = 300, l2: float = 1e-2,
-           seed: int = 7, min_samples: int = MIN_SAMPLES
+           seed: int = 7, min_samples: int = MIN_SAMPLES,
+           t_index: Optional[list[int]] = None, purge: int = 0
            ) -> tuple[Optional[NNFormulaModel], str]:
     """Full-batch gradient descent, deterministic given `seed`.
 
@@ -157,18 +226,40 @@ def fit_nn(X: list[list[float]], y: list[float], hidden: int = 4,
     memorized net that clears a Sharpe gate by luck is the exact failure this whole
     challenger apparatus exists to prevent.
 
-    Early stopping uses the LAST 20% of the training slice, not the walk-forward
-    validation window — that one is reserved for the outer champion/challenger
-    comparison, exactly as it is for the linear model.
+    Early stopping never touches the walk-forward validation window — that one is
+    reserved for the outer champion/challenger comparison, exactly as it is for the
+    linear model. It uses a slice of the TRAINING data instead, and HOW that slice is
+    chosen is the whole point of `t_index`:
+
+      - With `t_index` (the bar index of each row, from `build_nn_samples`)
+        the slice is the last ~20% of timestamps, with a `purge`-length gap. This is
+        what you want, and callers inside the optimizer always pass it.
+
+      - Without it, the slice falls back to the last 20% of ROWS. **That is a symbol
+        split, not a time split**, because `build_samples` emits rows symbol-major:
+        all of symbol A's history, then all of symbol B's. On the live 22+2 universe
+        that made the last 598 of 2992 rows the final ~4.4 symbols in dict-insertion
+        order — i.e. both crypto names plus a couple of trailing stocks — so the net's
+        epoch selection was decided by BTC/ETH over the same calendar period it trained
+        on. Contemporaneous and correlated, so validation loss tracked training loss
+        and the patience counter barely bit. The fallback is kept only so a caller with
+        no notion of time (synthetic data in the tests) still fits.
     """
     if len(X) < min_samples or len(X) != len(y):
         return None, "insufficient data for NN challenger"
-    n_val = max(20, len(X) // 5)
-    if len(X) - n_val < 2:
-        return None, "insufficient data for NN challenger"
 
-    X_train, y_train = X[:-n_val], y[:-n_val]
-    X_val, y_val = X[-n_val:], y[-n_val:]
+    if t_index is not None and len(t_index) == len(X):
+        tr, va = _time_split(t_index, purge)
+        if len(tr) < 2 or len(va) < 20:
+            return None, "insufficient data for NN challenger"
+        X_train, y_train = [X[i] for i in tr], [y[i] for i in tr]
+        X_val, y_val = [X[i] for i in va], [y[i] for i in va]
+    else:
+        n_val = max(20, len(X) // 5)
+        if len(X) - n_val < 2:
+            return None, "insufficient data for NN challenger"
+        X_train, y_train = X[:-n_val], y[:-n_val]
+        X_val, y_val = X[-n_val:], y[-n_val:]
 
     fmean, fstd = feature_stats(X_train)
     n_feat = len(X_train[0])
@@ -235,5 +326,20 @@ def fit_nn(X: list[list[float]], y: list[float], hidden: int = 4,
     if best_state is None:
         return None, "NN training did not converge"
     W1, b1, W2, b2 = best_state
-    return NNFormulaModel(hidden=hidden, W1=W1, b1=b1, W2=W2, b2=b2,
-                          feature_mean=fmean, feature_std=fstd, fitted=True), ""
+
+    # DERIVE gain rather than searching it. conviction = tanh(gain * raw), so gain is
+    # purely a scale: the right value is whatever makes `raw` order-unity, and that is
+    # readable straight off the training predictions. Searching it instead costs a
+    # 5-way axis in the outer hyperparameter draw, and every draw scored on the
+    # validation window is a trial the deflated Sharpe pays for (see _optimize_nn).
+    # It is also required for NN-specific volatility-scaled labels, whose output is in
+    # volatility units, so the hand-set gain=20.0 -- chosen for a model whose output
+    # was in return units -- would saturate tanh and make every conviction ±1.
+    preds = [_forward(W1, b1, W2, b2, x)[1] for x in Xn_train]
+    mu = sum(preds) / len(preds)
+    sd = (sum((p - mu) ** 2 for p in preds) / max(1, len(preds) - 1)) ** 0.5
+    gain = 1.0 / sd if sd > 1e-9 else 1.0
+
+    return NNFormulaModel(hidden=hidden, W1=W1, b1=b1, W2=W2, b2=b2, gain=gain,
+                          feature_mean=fmean, feature_std=fstd, fitted=True,
+                          val_loss=best_val), ""

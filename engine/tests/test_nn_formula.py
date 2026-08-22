@@ -17,7 +17,9 @@ from ai_investing.backtest.engine import Backtester
 from ai_investing.backtest.walkforward import WalkForwardOptimizer, adoption_decision
 from ai_investing.learning.features import FEATURE_NAMES
 from ai_investing.learning.formula import FormulaModel
-from ai_investing.learning.nn_formula import NNFormulaModel, _mse, fit_nn
+from ai_investing.learning.nn_formula import (
+    MIN_XS_BREADTH, NNFormulaModel, _mse, _time_split, build_nn_samples, fit_nn,
+)
 from ai_investing.learning.store import ParamStore
 from ai_investing.data.providers import SyntheticDataProvider
 from ai_investing.models import Asset, AssetClass
@@ -282,6 +284,117 @@ def test_runner_boots_with_an_nn_model_and_has_no_online_learner():
     feats = dict(zip(FEATURE_NAMES, [1.0] * len(FEATURE_NAMES)))
     assert math.isfinite(nn.raw(feats))
     assert (dict(zip(nn.feature_names, nn.weights)) if hasattr(nn, "weights") else {}) == {}
+
+
+# -- the three 2026-08-22 fixes --------------------------------------------------
+# Each of these pins a defect that was live, not a preference. Read the failure each
+# one describes before relaxing it.
+def test_build_samples_row_order_is_symbol_major_so_a_slice_is_a_symbol_split():
+    """The defect that motivated t_index: positional slicing looks like a time split.
+
+    If this ever fails because the row order changed to time-major, fit_nn's
+    positional fallback stops being dangerous -- but _time_split is still the
+    correct thing, because only it applies the purge gap.
+    """
+    assets, bars = _synthetic_assets(n_bars=200)
+    bt = Backtester(warmup=60, horizon=5)
+    X, y, t_idx = build_nn_samples(bt, assets, bars)
+    per = len(X) // len(assets)
+    n_val = max(20, len(X) // 5)
+    # Rows are emitted symbol-major, so row // per recovers which symbol a row is.
+    # The defect: a positional tail slice draws from a strict SUBSET of symbols --
+    # it holds out names, not time, and on the live universe those names were
+    # whichever landed last in dict-insertion order (both crypto pairs).
+    tail_symbols = {i // per for i in range(len(X) - n_val, len(X))}
+    assert len(tail_symbols) < len(assets), tail_symbols
+    assert t_idx[:per] == t_idx[per:2 * per], "row order is no longer symbol-major"
+
+
+def test_time_split_holds_out_the_end_and_purges_the_boundary():
+    t_index = [t for _ in range(4) for t in range(100)]     # 4 symbols x 100 bars
+    train, val = _time_split(t_index, purge=5)
+    t_train = {t_index[i] for i in train}
+    t_val = {t_index[i] for i in val}
+    assert max(t_train) < min(t_val)                      # strictly out of time
+    assert min(t_val) - max(t_train) > 5                  # purge gap wider than h
+    # the purged timestamps belong to neither side -- they are dropped, not reassigned
+    assert len(t_train) + len(t_val) == 95, (len(t_train), len(t_val))
+    assert not (t_train & t_val)
+    assert all(len([i for i in train if t_index[i] == t]) == 4 for t in t_train)
+
+
+def test_fit_uses_the_time_split_when_given_an_index():
+    """Not just 'it runs' -- the fitted net must actually differ, or the index is inert."""
+    X, y = _learnable_dataset(900)
+    t_index = [i % 150 for i in range(len(X))]            # 6 symbols x 150 bars
+    a, _ = fit_nn(X, y, min_samples=500)
+    b, _ = fit_nn(X, y, min_samples=500, t_index=t_index, purge=5)
+    assert a is not None and b is not None
+    assert (a.W1, a.b2) != (b.W1, b.b2)
+    assert b.val_loss is not None and math.isfinite(b.val_loss)
+
+
+def test_gain_is_derived_from_the_data_not_left_at_the_hand_set_default():
+    """A vol-scaled label puts `raw` in volatility units; gain=20.0 would saturate tanh."""
+    X, y = _learnable_dataset(900)
+    model, _ = fit_nn(X, y, min_samples=500)
+    assert model.gain != 20.0
+    # conviction should span the range, not pin to +/-1 on every row
+    convs = [abs(model.conviction(dict(zip(FEATURE_NAMES, row)))) for row in X[:200]]
+    assert max(convs) > 0.2, max(convs)
+    assert sum(1 for c in convs if c > 0.999) < len(convs) // 2
+
+
+def test_vol_scaled_label_is_risk_adjusted_and_cross_sectionally_demeaned():
+    # needs >= MIN_XS_BREADTH symbols, so not _synthetic_assets (which makes 2)
+    p = SyntheticDataProvider()
+    assets = [Asset(s, AssetClass.STOCK) for s in ("AAA", "BBB", "CCC", "DDD")]
+    bars = {a.key: p.get_bars(a, 200) for a in assets}
+    bt = Backtester(warmup=60, horizon=5)
+    _, y_raw = bt.build_samples(assets, bars)
+    X, y, t_idx = build_nn_samples(bt, assets, bars)
+    assert len(y) == len(y_raw)
+    # every timestep with enough breadth sums to ~0: the market move is gone
+    by_t = {}
+    for lab, t in zip(y, t_idx):
+        by_t.setdefault(t, []).append(lab)
+    wide = [v for v in by_t.values() if len(v) >= MIN_XS_BREADTH]
+    assert wide, "test universe too narrow to exercise demeaning"
+    assert all(abs(sum(v)) < 1e-9 for v in wide)
+    assert all(-3.0001 <= lab <= 3.0001 for lab in y)     # winsorized
+
+
+def test_nn_label_builder_does_not_change_the_linear_sample_api():
+    assets, bars = _synthetic_assets(n_bars=200)
+    bt = Backtester(warmup=60, horizon=5)
+    a = bt.build_samples(assets, bars)
+    assert isinstance(a, tuple) and len(a) == 2         # arity unchanged for the ridge track
+    b = build_nn_samples(bt, assets, bars)
+    assert len(b) == 3 and len(b[0]) == len(a[0])
+
+
+def test_nn_track_spends_one_trial_per_window_not_search_per_window():
+    """The trial count IS the bar. 48 trials made nn_min_dsr=0.75 unreachable."""
+    assets, bars = _synthetic_assets()
+    opt = WalkForwardOptimizer(Backtester(warmup=60, horizon=5), n_windows=2, search=16)
+    r = opt.optimize(assets, bars, FormulaModel(), try_nn=True, nn_min_samples=50)
+    assert r["nn_windows_fit"] == 2
+    assert r["nn_n_trials"] == 2, r["nn_n_trials"]         # was search * windows = 32
+    assert r["nn_n_trials"] < r["n_trials"]                # linear track unchanged
+
+
+def test_nn_inherits_the_decision_layer_from_the_incumbent():
+    """Hold everything but the predictor fixed -- otherwise it is not the same question."""
+    assets, bars = _synthetic_assets()
+    prior = FormulaModel(entry_threshold=0.17, size_scale=0.77,
+                         stop_loss=0.061, take_profit=0.31)
+    opt = WalkForwardOptimizer(Backtester(warmup=60, horizon=5), n_windows=2, search=3)
+    r = opt.optimize(assets, bars, prior, try_nn=True, nn_min_samples=50)
+    net = r["nn_model"]
+    assert net is not None
+    assert (net.entry_threshold, net.size_scale) == (0.17, 0.77)
+    assert (net.stop_loss, net.take_profit) == (0.061, 0.31)
+    assert net.gain != 20.0            # derived, not inherited
 
 
 if __name__ == "__main__":

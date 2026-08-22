@@ -19,7 +19,7 @@ from ai_investing.backtest.engine import Backtester
 from ai_investing.learning.features import FEATURE_NAMES, feature_stats
 from ai_investing.learning.formula import FormulaModel
 from ai_investing.learning.linalg import ridge_solve
-from ai_investing.learning.nn_formula import MIN_SAMPLES, NNFormulaModel, fit_nn
+from ai_investing.learning.nn_formula import MIN_SAMPLES, NNFormulaModel, build_nn_samples, fit_nn
 from ai_investing.learning.objective import deflated_sharpe_ratio, mean
 
 HYPER_SPACE = {
@@ -157,7 +157,7 @@ class WalkForwardOptimizer:
         nn = None
         if try_nn:
             nn = self._optimize_nn(assets, aligned, start, fold, length, default_scores,
-                                   nn_hidden, nn_min_samples)
+                                   nn_hidden, nn_min_samples, prior_model)
 
         out = {"model": None, "adopted": False, "windows": windows,
                "challenger_avg": round(challenger_avg, 3), "default_avg": round(default_avg, 3),
@@ -218,17 +218,53 @@ class WalkForwardOptimizer:
         return out
 
     def _optimize_nn(self, assets, aligned, start, fold, length, default_scores,
-                     hidden: int, min_samples: int) -> dict:
+                     hidden: int, min_samples: int, prior_model) -> dict:
         """The NN candidate track: same windows, same validation slices, same scoring as
         the linear track — only the fitter differs. Its trial count is kept separate so
-        its deflated Sharpe pays its OWN multiple-comparisons penalty (§2.4)."""
+        its deflated Sharpe pays its OWN multiple-comparisons penalty (§2.4).
+
+        THE TRIAL BUDGET IS THE BINDING CONSTRAINT, and this function used to spend it
+        carelessly. It drew `self.search` (16) random hyperparameter combinations per
+        window and kept the max, so a 3-window run scored 48 candidates on the very
+        returns its deflated Sharpe was computed from. Against the same synthetic return
+        stream, `deflated_sharpe_ratio` gives DSR 0.394 at 48 trials and 0.822 at 4 —
+        the trial count alone was the difference between "hopeless" and "arguable", and
+        at 48 trials the 0.75 bar effectively demanded a Sharpe-3 strategy.
+
+        What those 48 trials bought was mostly nothing. Five of the six searched axes
+        (`entry_threshold`, `size_scale`, `stop_loss`, `take_profit`, and `gain`) do not
+        touch the network at all — they are decision-layer sizing knobs, and the
+        incumbent already has curated values for them. Re-searching them for the NN
+        asked "does the net PLUS a different risk config beat theta PLUS the old one",
+        which is not the question. So now:
+
+          - decision-layer hyperparameters are INHERITED from `prior_model`, holding
+            everything but the predictor fixed. That is the cleaner experiment.
+          - `gain` is derived inside `fit_nn` from the spread of the net's own training
+            predictions (and must be, under the vol-scaled label).
+          - the L2 choice is made on each net's PURGED OUT-OF-TIME early-stopping loss,
+            not on validation Sharpe, so selecting it costs no trial.
+
+        One candidate is scored per window, and the trial count is the number of windows
+        (3, not 48). This is a *tightening*, not a loophole: nothing here lowers
+        `nn_min_dsr`, it stops spending the net's evidence on questions nobody asked.
+        """
         windows, scores = [], []
         best_overall, best_val, n_trials = None, -float("inf"), 0
         reason, train_samples, n_params, windows_fit = "", 0, 0, 0
 
+        # Everything except the predictor, held fixed at the incumbent's values.
+        inherited = {"entry_threshold": prior_model.entry_threshold,
+                     "size_scale": prior_model.size_scale,
+                     "stop_loss": prior_model.stop_loss,
+                     "take_profit": prior_model.take_profit}
+
         for w in range(self.n_windows):
             train_end, val_start, val_end = self._bounds(w, start, fold, length)
-            X, y = self.bt.build_samples(assets, {k: v[:train_end] for k, v in aligned.items()})
+            # The NN-specific sample builder returns risk-adjusted, cross-sectionally
+            # demeaned labels and a time index for the purged early-stopping split.
+            X, y, t_idx = build_nn_samples(
+                self.bt, assets, {k: v[:train_end] for k, v in aligned.items()})
             train_samples = max(train_samples, len(X))
 
             # One fit per L2 setting. Seeded from (window, l2 index) rather than
@@ -237,7 +273,8 @@ class WalkForwardOptimizer:
             nets = []
             for i, l2 in enumerate(NN_L2_OPTIONS):
                 net, err = fit_nn(X, y, hidden=hidden, l2=l2, seed=7 + 100 * w + i,
-                                  min_samples=min_samples)
+                                  min_samples=min_samples, t_index=t_idx,
+                                  purge=self.bt.horizon)
                 if net is not None:
                     nets.append(net)
                     n_params = net.n_params
@@ -251,22 +288,19 @@ class WalkForwardOptimizer:
                 continue
 
             windows_fit += 1
-            local_best, local_score = None, -float("inf")
-            for _ in range(self.search):
-                net = self.rng.choice(nets)
-                hyper = {k: self.rng.choice(v) for k, v in HYPER_SPACE.items()}
-                cand = net.clone(**hyper)
-                n_trials += 1
-                score = self._val(assets, aligned, cand, val_start, val_end).metrics["sharpe"]
-                if score > local_score:
-                    local_score, local_best = score, cand
+            # Model selection on held-out-in-training loss, so it costs no trial.
+            best_net = min(nets, key=lambda n: n.val_loss if n.val_loss is not None
+                           else float("inf"))
+            cand = best_net.clone(**inherited)
+            n_trials += 1
+            local_score = self._val(assets, aligned, cand, val_start, val_end).metrics["sharpe"]
 
-            scores.append(local_score if local_best else default_scores[w])
+            scores.append(local_score)
             windows.append({"window": w, "train_end": train_end, "val_end": val_end,
                             "train_samples": len(X), "nn_sharpe": round(local_score, 3),
                             "default_sharpe": round(default_scores[w], 3)})
-            if local_best and local_score > best_val:
-                best_val, best_overall = local_score, local_best
+            if local_score > best_val:
+                best_val, best_overall = local_score, cand
 
         dsr = 0.0
         if best_overall is not None:
