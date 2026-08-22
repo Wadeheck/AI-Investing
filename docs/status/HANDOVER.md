@@ -54,8 +54,18 @@ path, not a delay. `stock_journal.jsonl` is written by the **runner**, not by a
 book: a fifth journal nobody counted, and the one the watchdog and
 `daily_status.py` actually read.
 
-Fixed, three mutations verified, closed. **Sixth instance of
-one-of-N-paths-fixed.**
+Fixed, three mutations verified. **Sixth instance of one-of-N-paths-fixed.**
+
+**One live confirmation is still outstanding, and I nearly skipped it.** The runner
+writes one mark per SGT day, and today's (`day: 2026-08-22`) was written *before* the
+fix deployed — so the next one is **2026-08-23**. I had already marked the row closed
+before checking that. Tested is not observed, which is the exact distinction that
+created §4.52 in the first place, so it now has its own §4B cue:
+
+```bash
+ssh prodesk 'tail -1 ~/Projects/AI-Investing/data/stock_journal.jsonl'
+# expect "basis": "live:10000" — if it is absent, the fix does not work
+```
 
 **The transferable lesson is about the cue, not the code:** a cue is only worth
 writing if its *negative* answer is written down too. "No basis yet" was true
@@ -153,8 +163,9 @@ filled unattended at an open nobody was watching — the opposite of what the
 order is for. Its whole value is proving submit → fill → stop → exit *while
 someone is watching it*.
 
-**It needs SGT market hours (09:00–17:00 SGT), and it is a live-ish order on a
-routed paper account, so I want you to say go before I place it.**
+**It needs SGT market hours (09:00–17:00 SGT, weekdays), and it is a live-ish
+order on a routed paper account, so I want you to say go before I place it.**
+As of this handover it is **Saturday** — the earliest window is Monday.
 
 ### 3.3 Judgement calls I made inside the work, for the record
 
