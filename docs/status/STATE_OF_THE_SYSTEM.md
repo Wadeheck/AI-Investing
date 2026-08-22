@@ -213,6 +213,8 @@ what is still broken — read that one first if something is wrong now.
 | 4.51 | "The model under-predicts by 14x" was noise; and every equity claim was sized off one 2% constant | ✅ Gains NOT raised, with the noise floor now audited beside the ratio; `_shock_assets` enriched so vol is the asset's own |
 | 4.52 | The basis cue fired negative: the runner's own equity journal was the fifth path | ✅ `stock_journal.jsonl` marks now declare `basis` + `basis_changed`, seeded from the file |
 | 4.53 | The reach table used to justify a first live order was noise, ranked | ✅ `n_independent` + computed `significant` on every row; the "best where it cannot trade" finding retired |
+| 4.54 | The defect rate tracked how hard someone looked | ✅ `defect_sweep.py` asks the four questions that found 13 of 17, mechanically |
+| 4.55 | First order on an unproven path — decided | ✅ NO on the trade (1 independent observation); path validation kept as a separate, minimal test |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2505,6 +2507,98 @@ US         51   0.529     10   0.623   False
   small sample, because it is indistinguishable from skill precisely where the
   temptation to act is greatest. **Report `n_independent` beside every rate, at
   the point of publication.** Three modules, three times, same fix.
+
+### 4.54 Making the defect rate not depend on who is looking *(2026-08-22)*
+
+- **The problem, stated honestly.** This review found **17 defects
+  (§4.37–§4.53)** in a system with 645 passing tests, and **two of them were
+  introduced during the review itself** (§4.48, §4.50). The uncomfortable read
+  is that the defect rate tracks how hard someone looks — which makes quality a
+  function of who is on shift and how alert they are that day. That is not a
+  property you want in something that trades unattended.
+- **But 17 defects were not 17 insights.** Sorted by the QUESTION that surfaced
+  each, they collapse:
+
+```
+Q1  "what is the unit of observation?"    §4.37 §4.47 §4.53        3
+Q2  "compared with what?"                 §4.6  §4.44 §4.51        3
+Q3  "where else does this pattern live?"  §4.14 §4.23 §4.36 §4.49
+                                          §4.51 §4.52 §4.53        7  <-- biggest
+Q4  "who else reads this field?"          §4.45                    1
+Q5  "has this test ever actually failed?" §4.44 §4.48 (+8 vacuous)  2
+Q6  "what does the NEGATIVE answer mean?" §4.52                    1
+```
+
+  **13 of 17 came from four questions a script can ask.** So `scripts/defect_sweep.py`
+  asks them, every time, instead of relying on someone thinking to.
+- **It earned its place on the first run**, by finding that **§4.51's own fix was
+  one-of-N again**: `vols.get(sym, 0.02)` — the same 2% default — in three more
+  sites (`adviser.py`, `calibration.py` ×2) that I had not touched.
+- **And then measurement said those three are dormant, which is the other half
+  of the discipline.** All **281** asset symbols have a real vol, so that
+  default never fires today. §4.51's instance was live for a different reason —
+  the *dict was never enriched*, not that `vols` was empty. Same literal,
+  different root cause. **The sweep asks; it does not convict.** Reporting the
+  three as defects would have been the §4.43 mistake (reading two healthy books
+  as frozen) with a tool attached.
+- **Design decisions that make it usable rather than ignorable:**
+  - **Clusters only, never lone sites.** A one-off fallback is usually correct;
+    the question is never *"is this line wrong"* but *"did you get all of them"*.
+  - **A module that demonstrably did the thinking is not flagged.**
+    `adviser_gate.py` publishes `{n, hit, days}` with no `n_independent`, which
+    looks exactly like §4.53 — but it sets `min_n = 80` *"knowing the effective
+    sample is ~1/5 of min_n"* and publishes `effective_n_divisor`. The first
+    version flagged it. That suppression took the rate check from 21 findings
+    to 9, all real.
+  - **Every line of output is a QUESTION, not a verdict**, and the footer says
+    so. A clean sweep means these four questions have no obvious answers left —
+    not that the code is correct.
+- **Lesson.** The answer to *"the well is not dry"* is not to look harder, which
+  does not scale and does not survive a bad day. It is to notice that the
+  finding questions repeat, and to make the repeatable ones cost nothing to ask.
+
+### 4.55 The first order on an unproven path: DECIDED, and the answer is no *(2026-08-22)*
+
+- **The decision, delegated.** Whether to place `O39.SI` (OCBC) — the single
+  qualifying long, blocked only because the live slice is USD-only.
+- **DECISION: do not place it.** Not as caution, and not on venue risk. On the
+  evidence, which does not exist.
+- **The number the case rested on:** 7 symbol-days, hit 0.86, +1.98% average
+  excess. Read raw, `p ≈ 0.06` and nearly interesting. Read in the unit that
+  exists — daily readings of a 5-day forward return —it is **1 independent
+  observation**, and one observation of a coin is a coin. §4.53 has the full
+  table; **no market in it is distinguishable from chance.**
+- **The bar, stated so it can be met:** a 0.86 hit rate needs **8 independent
+  observations** for p<0.05 — **40 consecutive symbol-days.** `O39.SI` has 7.
+  That is roughly two months of the symbol staying in conviction. It is a
+  reachable bar, not a refusal.
+- **The two questions that were being conflated, and this is the substance of
+  the decision.** *"Place the O39.SI order"* and *"validate non-USD execution"*
+  are different objectives, and merging them is how a path test gets sized like
+  a trade and a trade gets justified by a path test:
+
+| | Sized by | Instrument chosen for | Success is |
+|---|---|---|---|
+| **A trade** | edge × conviction | the signal | P&L over many repetitions |
+| **A path validation** | the minimum that proves the mechanics | lot/tick clarity and liquidity | submit → fill → stop → exit, observed |
+
+- **So: no trade, and the path validation is still worth doing** — separately,
+  deliberately minimal, on an instrument chosen for operational clarity rather
+  than because a thin signal liked it, in SGT hours, watched. The venue layer is
+  where this system's defects actually live (§4.23 tick snapping, §4.30 a HK
+  fill booked at 7× price, the unexplained `602035` rejects), so proving it has
+  real value — just not value that a 1-observation signal should be used to
+  justify.
+- **A Buffett check, since it was asked for.** OCBC is a real business. You
+  would buy it on price-to-book, credit quality, the deposit franchise and the
+  Singapore rate cycle. The model has a view on none of those; it has seven days
+  of a momentum-flavoured score. *"Risk comes from not knowing what you are
+  doing"* — and the honest statement here is that the model does not yet know
+  anything about this name.
+- **Lesson.** The most dangerous number in this system is a high hit rate on a
+  small sample, because it is most persuasive exactly where the sample is
+  thinnest and the temptation to act is greatest. The defence is structural, not
+  personal: **`n_independent` beside every rate, at the point of publication.**
 
 ## 4A. Open defects — known, NOT fixed
 
