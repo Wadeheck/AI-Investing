@@ -215,6 +215,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.53 | The reach table used to justify a first live order was noise, ranked | ✅ `n_independent` + computed `significant` on every row; the "best where it cannot trade" finding retired |
 | 4.54 | The defect rate tracked how hard someone looked | ✅ `defect_sweep.py` asks the four questions that found 13 of 17, mechanically |
 | 4.55 | First order on an unproven path — decided | ✅ NO on the trade (1 independent observation); path validation kept as a separate, minimal test |
+| 4.56 | The P&L was the last layer still counting tickers instead of decisions | ✅ `brain_audit --section pnl` reports per-fill AND per-basket; all four books: edge not demonstrated |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2599,6 +2600,59 @@ Q6  "what does the NEGATIVE answer mean?" §4.52                    1
   small sample, because it is most persuasive exactly where the sample is
   thinnest and the temptation to act is greatest. The defence is structural, not
   personal: **`n_independent` beside every rate, at the point of publication.**
+
+### 4.56 Has any of this made money? Counted properly: not demonstrably *(2026-08-22)*
+
+- **The question the system exists to answer**, asked for the first time with
+  the counting discipline the rest of the audit now uses.
+- **The record, as anyone would quote it:** the event sleeve is **+$1,146 over
+  16 fills, t=2.19, p=0.028 — significant.**
+- **The record, counted as bets:** the sleeve enters and exits a **basket**.
+  Those fills land on **6 distinct days**, three names at a time, and the names
+  inside a basket are correlated — `NVDA, AMD, 000660.KS` is one semis bet
+  wearing three tickers.
+
+```
+                    n      t       p       significant
+per_fill           16   2.19   0.028   YES
+per_basket          6   1.64   0.101   no
+```
+
+  **Identical money. Only the unit changed.**
+- **And six is generous.** Grouped by theme the six baskets are **three bets** —
+  energy (lost), solar/materials (won), semis (won across four consecutive
+  baskets). At n=3 nothing can be significant, ever.
+- **All four books, same verdict: edge not demonstrated.**
+
+```
+event_sleeve   +$1,146   per_fill sig=YES   per_basket sig=no
+crypto            +$33   per_fill sig=no    per_basket sig=no
+investing         -$72   per_fill sig=no    per_basket sig=no
+crypto_event     -$266   per_fill sig=YES   per_basket sig=no
+```
+
+- **`crypto_event` is the sharpest illustration, and it cuts the other way.**
+  Per-fill it is *significantly **losing*** (t=-2.63, p=0.009) — on **three
+  fills across two baskets**. Acting on that number would shut down a book on
+  two observations. **The per-fill figure lies in both directions**, which is
+  why both are printed, always.
+- **Neither figure is benchmarked**, and that is the second half of the honest
+  answer. The winning baskets are semis and solar during a period when those ran.
+  A long book in a rising sector makes money without skill — §4.6's lesson,
+  still unfixed at the book level. So "edge not demonstrated" is if anything
+  generous.
+- **Fourth module with the same defect**: §4.37 (scorecard), §4.47 (calibrator),
+  §4.53 (reach), and now the P&L itself. Each time, **the thing being counted
+  was not the thing that varies independently.**
+- **What this does NOT say.** That the system loses money, or that the sleeve is
+  broken. +$1,146 is real money and the direction is encouraging. It says only
+  that **26 days and three thematic bets cannot distinguish this from luck**, and
+  that anyone quoting the 16-fill t-statistic is quoting a number that counts
+  tickers instead of decisions.
+- **Lesson.** Every measurement layer in this system was inflated the same way,
+  and the P&L was the last one still flattering itself. The instrument that
+  reports it now refuses to publish either unit alone, because **the gap between
+  them is the finding.**
 
 ## 4A. Open defects — known, NOT fixed
 

@@ -601,6 +601,94 @@ def reach(s, horizon: int) -> dict:
                 never, key=lambda r: -r["avg_excess_pct"] * r["days"])}
 
 
+def pnl_significance(s, horizon: int) -> dict:
+    """Per-book realised P&L, and whether it is distinguishable from luck.
+
+    §4.56. This is the question the whole system exists to answer, and it had
+    never been asked with the counting discipline the rest of the audit uses.
+
+    THE UNIT IS THE BET, NOT THE FILL. The event sleeve's record read 17 trades,
+    +$1,196, t=2.29, p=0.022 — significant. But it enters and exits a BASKET:
+    the 17 fills land on 6 distinct days, three names at a time, and the names
+    within a basket are correlated (`NVDA, AMD, 000660.KS` is one semis bet
+    wearing three tickers). Counted as baskets it is t=1.74, p=0.082 — not
+    significant. Counted as THEMES (energy, solar/materials, semis) it is n=3,
+    at which nothing can be significant.
+
+    Same defect as §4.37, §4.47 and §4.53, now at the portfolio level: the
+    thing being counted is not the thing that varies independently.
+
+    Both figures are reported, always, because the gap between them IS the
+    finding. A book that looks significant per-fill and not per-basket has not
+    demonstrated edge; it has demonstrated that it holds correlated positions.
+    """
+    data = Path(s.brain.db_path).parent
+    out = {}
+    for jf, book in (("event_journal.jsonl", "event_sleeve"),
+                     ("crypto_journal.jsonl", "crypto"),
+                     ("invest_journal.jsonl", "investing"),
+                     ("crypto_event_journal.jsonl", "crypto_event"),
+                     ("stock_journal.jsonl", "trading")):
+        try:
+            lines = (data / jf).read_text().splitlines()
+        except OSError:
+            continue
+        fills = []
+        for line in lines:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # The books disagree on the key: the sleeves write `pnl` on a
+            # sell row, others write `realized`. Read both rather than pick
+            # one and silently measure a subset — the first version read only
+            # `realized` and reported nothing at all, which at least failed
+            # loudly instead of reporting a confident partial number.
+            v = r.get("realized")
+            if v is None:
+                v = r.get("pnl")
+            if v is None or not r.get("symbol"):
+                continue
+            try:
+                fills.append((str(r.get("ts", ""))[:10], float(v)))
+            except (TypeError, ValueError):
+                continue
+        if not fills:
+            continue
+
+        def _t(xs):
+            n = len(xs)
+            if n < 2:
+                return {"n": n, "t": None, "p": None, "significant": False}
+            m = sum(xs) / n
+            sd = (sum((x - m) ** 2 for x in xs) / (n - 1)) ** 0.5
+            t = m / (sd / math.sqrt(n)) if sd else 0.0
+            p = 2 * (1 - 0.5 * (1 + math.erf(abs(t) / math.sqrt(2))))
+            return {"n": n, "mean": round(m, 2), "t": round(t, 2),
+                    "p": round(p, 3), "significant": bool(p < 0.05)}
+
+        by_day: dict[str, float] = {}
+        for d, v in fills:
+            by_day[d] = by_day.get(d, 0.0) + v
+        per_fill = _t([v for _, v in fills])
+        per_basket = _t(list(by_day.values()))
+        out[book] = {
+            "total_realised": round(sum(v for _, v in fills), 2),
+            "per_fill": per_fill,
+            "per_basket": per_basket,
+            "inflation": (round(per_fill["n"] / per_basket["n"], 1)
+                          if per_basket.get("n") else None),
+            "verdict": ("edge not demonstrated"
+                        if not per_basket.get("significant") else "worth a second look"),
+        }
+    out["_note"] = ("`per_fill` counts tickers; `per_basket` counts DAYS a bet was "
+                    "taken off. A book that is significant per_fill and not "
+                    "per_basket has not shown edge — it has shown that it holds "
+                    "correlated positions. Neither figure is benchmarked: a long "
+                    "book in a rising sector makes money without skill (§4.6).")
+    return out
+
+
 # Books whose venue margins positions rather than debiting cash for them.
 _MARGINED_BOOKS = {"crypto", "crypto_event"}
 
@@ -708,8 +796,9 @@ SECTIONS = {
     "learning": learning_loops,
     "reach": reach,
     "books": books,
+    "pnl": pnl_significance,
 }
-_NEEDS_HORIZON = {"directional", "symbols", "reach"}
+_NEEDS_HORIZON = {"directional", "symbols", "reach", "pnl"}
 
 
 # --------------------------------------------------------------- rendering --
