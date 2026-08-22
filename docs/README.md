@@ -127,6 +127,11 @@ Durable design intent. Changes only when the design changes.
   the governor, regime conditioning, capital allocation. Read before touching
   anything that adapts.
 - **FORMULA.md** — the adaptive scoring formula.
+- **NN_CHALLENGER.md** — the 49-parameter MLP that competes with the linear
+  formula for the right to be it. **Built and deployed as a weekly SHADOW job;
+  never adopted, and structurally unable to change what trades.** Its §7 is the
+  one to read: the net beat the linear model on raw out-of-sample Sharpe and the
+  deflated-Sharpe gate refused it anyway. Read before touching `nn_min_dsr`.
 - **STRATEGY.md** — policy design across the four books.
 - **SHARED_ACCOUNT.md** — `SHARED_STOCK_ACCOUNT`: several books safely sharing
   the one real Longbridge account. **Built and tested; still switched off.**

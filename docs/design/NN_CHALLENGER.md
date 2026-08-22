@@ -1,11 +1,18 @@
 # A neural-net challenger for the decision formula
 
-**Status: PLANNED, not built.** This is an implementation plan for another
-engineer/agent to execute. It does not touch `brain/graph.py` edge weights and
-does not change what goes live today. Read `docs/design/FORMULA.md` and
-`docs/design/LEARNING.md` first — this document assumes both.
+**Status: BUILT and DEPLOYED (shadow only), 2026-08-22.** Commits `6ad02de`
+(implementation) and `e65c78c` (report fix). Running on ProDesk as a weekly
+shadow job that structurally cannot change what trades. It has never been
+adopted, and on the evidence available it should not be — see §7.
 
-## 0. Why this document exists
+Read `docs/design/FORMULA.md` and `docs/design/LEARNING.md` first; this
+document assumes both. This file was originally an implementation plan. It has
+been rewritten as an as-built record: §0-§2 are the reasoning (largely
+unchanged, because it survived contact), §3-§6 are what exists and how to
+operate it, §7 is what it has actually measured, and §8 is what is deliberately
+still missing.
+
+## 0. Why this exists
 
 We were asked "can the brain be upgraded with a neural network." The honest
 answer: the current linear formula (`θ·φ`, 10 features, fit by ridge + online
@@ -25,460 +32,412 @@ already has to clear — decide, on real out-of-sample evidence, whether a small
 NN beats the linear champion. If it never clears the gate, that's the answer,
 and it cost nothing but compute. If it does, it earned it.
 
-**This plan has two independent tracks. Do both; neither blocks the other:**
+The first live run is exactly this argument in miniature: the net's
+out-of-sample Sharpe **beat** the linear model's, and the gate refused it
+anyway, because deflated across the number of trials that ran, the edge was
+indistinguishable from the best-of-N noise you would expect from random
+strategies. See §7. **The refusal is the feature.** Anyone reading this later
+who is tempted to lower `nn_min_dsr` to get an adoption should read §7 twice.
 
-- **Track A — grow the labeled-outcome count.** This is the actual bottleneck
-  (see §1). It benefits the linear formula, the edge calibrator, and any future
-  NN equally.
-- **Track B — build the NN challenger mechanism.** This is the bulk of this
-  document (§2 onward). It's safe to build now even while Track A's sample
-  count is still small: it will simply keep losing to the linear model on the
-  DSR gate until there's enough data, which is the correct behavior, not a bug.
+## 1. Track A — grow the labeled-outcome count (NOT DONE)
 
-## 1. Track A — grow the labeled-outcome count
+This remains the actual bottleneck and it has **no code deliverable in this
+change**. It is listed here because it is the only thing that will ever let the
+NN win, and because building the challenger did not address it at all.
 
-Read `docs/status/BRAIN_REVIEW_2026-08-21.md` before touching this — it documents
-exactly how the last attempt to read "the record" overcounted by 65x. Any work
-here must respect the counting discipline already built (`advice_outcomes.is_primary`,
-`(symbol, day)` as the unit, embargo gaps, binomial not t-tests). Concretely,
-in priority order:
+Read `docs/status/BRAIN_REVIEW_2026-08-21.md` before touching this — it
+documents exactly how the last attempt to read "the record" overcounted by 65x.
+Any work here must respect the counting discipline already built
+(`advice_outcomes.is_primary`, `(symbol, day)` as the unit, embargo gaps,
+binomial not t-tests). In priority order:
 
-1. **Widen the tradable/observed universe** (`docs/design/BRAIN.md` §3.1,
-   §4c) — more symbols observed daily is more independent (symbol, day) rows
-   per calendar day, which is the actual scarce resource. Check
-   `STOCK_WATCHLIST` / `CRYPTO_WATCHLIST` / `MACRO_WATCHLIST` for room to grow
-   within what's already fetchable via `yfinance` free tier, and confirm
-   `scripts/brain_audit.py --section graph`'s `resolution_pct` doesn't regress
-   (adding symbols that just duplicate an existing theme's signature doesn't
-   help — see BRAIN.md's "graph resolves fewer objects than it holds").
-2. **Backfill history where possible.** If `brain.db` price snapshots or
-   `event_outcomes` can be extended further back using already-available
-   historical data (yfinance/FRED go back years; the constraint has been *when
-   the brain started running*, not data availability), do it — more days is
-   more independent samples without adding any new mechanism.
-3. **Do not shortcut this by lowering `MIN_N` or embargo requirements.**
-   That's the failure mode the 2026-08-21 review fixed. Growing `n` must mean
-   growing genuine independent observations, not relaxing what counts as one.
+1. **Widen the tradable/observed universe** (`docs/design/BRAIN.md` §3.1, §4c).
+   Confirm `scripts/brain_audit.py --section graph`'s `resolution_pct` doesn't
+   regress — adding symbols that duplicate an existing theme's signature
+   doesn't help.
+2. **Backfill history where possible.** yfinance/FRED go back years; the
+   constraint has been *when the brain started running*, not data availability.
+3. **Do not shortcut this by lowering `MIN_N` or embargo requirements.** That's
+   the failure mode the 2026-08-21 review fixed. Growing `n` must mean growing
+   genuine independent observations, not relaxing what counts as one.
 
-This track has no code deliverable beyond "more data flows through the
-existing pipes." It is prerequisite to the NN challenger ever winning, not to
-building it.
+**A blocker found while building the challenger:** `Backtester._aligned()` truncates every
+price series to the length of the **shortest** one. On the production
+watchlist, one recently-listed symbol (CRCL, SPCX, HYPE/USD) collapses the
+entire backtest to **3 bars**, and walk-forward returns "insufficient data"
+before either candidate fits. Measured 2026-08-22 on the real 248-symbol
+universe. Until `_aligned` intersects on dates instead of truncating to the
+minimum, no curation — linear or NN — can run on the real universe at all.
+This is the highest-value fix in this document and it helps the linear model
+exactly as much as the NN.
 
-## 2. Track B — the NN challenger
-
-### 2.1 The interface it must satisfy
+## 2. The interface, and why it drops in unchanged
 
 Nothing in `Backtester.run()` or `DecisionEngine.decide()` is hardcoded to
-`FormulaModel` — both duck-type against it. Confirmed call sites:
+`FormulaModel` — both duck-type against it. Verified call sites:
 
-- `strategy/decision.py: DecisionEngine.decide()` calls `model.raw(feats)`,
+- `strategy/decision.py: DecisionEngine.decide()` → `model.raw(feats)`,
   `model.conviction(feats)`, `model.target_from_conviction(final_conv)`.
-- `backtest/engine.py: Backtester.run()` reads `model.stop_loss`,
-  `model.take_profit` (via `dataclasses.replace(self.risk_cfg, ...)`) and
+- `backtest/engine.py: Backtester.run()` → `model.stop_loss`,
+  `model.take_profit` (via `dataclasses.replace(self.risk_cfg, ...)`), and
   passes `model=model` into `RiskManager.size_orders()`.
-- `strategy/risk.py: RiskManager.size_orders()` reads `model.feature_names`
-  to build `phi` for the OOD gate (`RegimeGate.ood_multiplier`, which reads
+- `strategy/risk.py: RiskManager.size_orders()` → `model.feature_names` to
+  build `phi` for the OOD gate (`RegimeGate.ood_multiplier`, which reads
   `model.feature_mean` / `model.feature_std`).
 
-So a new model class must expose exactly this surface (mirror
-`FormulaModel`'s public API in `learning/formula.py`):
+`NNFormulaModel` exposes that whole surface, and
+`test_interface_matches_formula_model` asserts the two classes agree on it so
+the duck-typing claim is checked rather than believed.
+
+`weight_of()` returns **0.0 for every name** rather than raising, so anything
+reading per-feature attribution degrades to "none available" instead of
+crashing. Grepped before shipping: **nothing currently calls `weight_of` at
+all**, so this costs nothing today.
+
+## 3. What was built
+
+### 3.1 `engine/ai_investing/learning/nn_formula.py`
+
+`NNFormulaModel`: a 10 → 4 (tanh) → 1 (linear) MLP. `10*4 + 4 + 4*1 + 1 = 49`
+parameters, ~5x the linear model's 10 — deliberately not 10x or 100x.
+
+Pure Python, `math` and `random` only. `engine/requirements.txt` states the core
+engine runs on the standard library alone, and this does not become the first
+thing to break that. At 49 parameters and a few thousand rows a hand-rolled
+loop is fast enough: measured on ProDesk, `fit_nn` takes ~1s at 500 rows, ~4s at
+2000, ~16s at 8000, scaling linearly.
+
+Fields beyond the `FormulaModel` set: `hidden`, `W1` (hidden × n_features),
+`b1`, `W2` (the single output row), `b2`, and an `n_params` property.
+
+`feature_mean` / `feature_std` are typed `Optional` to mirror `FormulaModel`,
+but are **required in practice** for this model in a way they are not for the
+linear one: an unnormalized input saturates the tanh units and the net predicts
+a constant. `fit_nn` always sets them.
+
+`raw()` returns `0.0` when `W1` is empty, so an unfit net is inert rather than
+throwing — the same safe default as an all-zero θ.
+
+### 3.2 Training: `fit_nn()`
 
 ```
-feature_names: list[str]
-gain: float
-entry_threshold: float
-size_scale: float
-stop_loss: float
-take_profit: float
-version: int
-fitted: bool
-feature_mean: Optional[list[float]]
-feature_std: Optional[list[float]]
-
-raw(feats: dict[str, float]) -> float
-conviction(feats: dict[str, float]) -> float
-target_from_conviction(c: float) -> float
-target_weight(feats: dict[str, float]) -> float
-weight_of(name: str) -> float          # can raise/return 0.0 — see §2.4 caveat
-to_dict() -> dict
-from_dict(d: dict) -> "NNFormulaModel"     # classmethod
-describe() -> str
-clone(**overrides) -> "NNFormulaModel"
+fit_nn(X, y, hidden=4, lr=0.05, epochs=300, l2=1e-2, seed=7,
+       min_samples=MIN_SAMPLES) -> tuple[NNFormulaModel | None, str]
 ```
 
-Because `raw()` for a linear model is interpretable as feature attribution
-(`weight_of`) and for an NN it isn't in the same way, `weight_of()` on the NN
-model should return **0.0 for every name** rather than raising — anything that
-reads it (there is currently nothing critical that does; grep before shipping)
-degrades to "no attribution available," not a crash.
+Returns `(model, "")` or `(None, reason)`. Full-batch gradient descent, MSE
+loss, tanh hidden activation (derivative `1 - tanh(z)²`), deterministic given
+`seed` (asserted by `test_training_is_deterministic_given_a_seed`).
 
-### 2.2 New file: `engine/ai_investing/learning/nn_formula.py`
+- **Feature normalization** from the training slice's own mean/std.
+- **L2 weight decay on weights only, never biases.** Penalizing the intercept
+  just shrinks the mean prediction toward zero without buying capacity control.
+  With ~49 params and a few thousand rows, decay — not early stopping alone —
+  is the main defense against memorization.
+- **Early stopping on the last 20% of the training slice**, patience 20. Note
+  *training* slice: the walk-forward validation window is reserved for the
+  outer champion/challenger comparison, exactly as it is for the linear model.
+  Using it here would leak.
+- **Divergence guard**: a non-finite validation loss breaks the loop and keeps
+  the best state so far, if any.
+- **`min_samples` floor** (`MIN_SAMPLES = 500`): below it, return
+  `(None, "insufficient data for NN challenger")` without training, mirroring
+  `optimize()`'s existing `"insufficient data for walk-forward"` early return.
 
-A small MLP, pure Python — **no numpy/torch**. `engine/requirements.txt` states
-the core engine runs on the standard library alone; this must not become the
-first thing that breaks that invariant. The feature dimension is 10 and the
-sample counts are in the hundreds-to-low-thousands, so pure-Python forward/
-backward passes are fast enough; nothing here needs a tensor library.
+**Read `MIN_SAMPLES` as a floor, not a licence — this is the most misreadable
+number in the system.** A "sample" is one `(symbol, day)` row out of
+`Backtester.build_samples`. Twenty symbols on the same day are one market
+moving, not twenty independent draws. The first live run reported 2992 rows
+against 49 params — a comfortable-looking 61x — but that is 22 symbols × ~136
+days, cross-correlated. Clearing 500 is **necessary, not sufficient**. This is
+the 2026-08-21 overcounting pattern pointed at the NN's own guard instead of at
+the track record. `scripts/nn_challenger_report.py` prints this caveat on every
+run, pass or fail, and the deflated-Sharpe gate — not this constant — is what
+actually stops an overfit net.
 
-Architecture: **keep it small on purpose.** 10 inputs → 4-unit hidden layer
-(tanh) → 1 linear output. That's `10*4 + 4 + 4*1 + 1 = 49` parameters, roughly
-5x the linear model's 10 — deliberately not 10x or 100x. A bigger network is
-not "the next experiment to try if this one wins"; it's a strictly worse bet
-against the same data-scarcity constraint documented in §0, so don't scale it
-up without a specific, data-backed reason.
+### 3.3 The adoption rule (`backtest/walkforward.py`)
+
+Extracted as a **pure function** so it is testable without running a backtest,
+which is why it is the most-tested thing in this change:
 
 ```python
-"""Small MLP challenger to the linear formula (learning/formula.py).
-
-Same interface as FormulaModel (see docs/design/NN_CHALLENGER.md §2.1) so it
-drops into Backtester/DecisionEngine/RiskManager unchanged. Trained by full-batch
-gradient descent in pure Python — no numpy/torch (see engine/requirements.txt:
-the core engine runs on the stdlib alone).
-
-This is a CHALLENGER, never adopted automatically: WalkForwardOptimizer only
-proposes it, and NN_MIN_DSR (config) sets a stricter bar than the linear
-model's min_dsr, matching the project's existing rule that more model
-complexity earns a *higher*, not equal, evidentiary bar (see
-brain/calibration.py's MIN_N asymmetry between causal `influences` edges and
-structural `member_of` edges for the same reasoning applied elsewhere).
-"""
-from __future__ import annotations
-
-import math
-import random
-from dataclasses import dataclass, field
-from typing import Optional
-
-from ai_investing.learning.features import FEATURE_NAMES
-
-
-@dataclass
-class NNFormulaModel:
-    feature_names: list[str] = field(default_factory=lambda: list(FEATURE_NAMES))
-    hidden: int = 4
-    # W1: hidden x n_features, b1: hidden ; W2: hidden (output row), b2: scalar
-    W1: list[list[float]] = field(default_factory=list)
-    b1: list[float] = field(default_factory=list)
-    W2: list[float] = field(default_factory=list)
-    b2: float = 0.0
-    gain: float = 20.0
-    entry_threshold: float = 0.10
-    size_scale: float = 1.0
-    stop_loss: float = 0.08
-    take_profit: float = 0.25
-    version: int = 0
-    fitted: bool = False
-    feature_mean: Optional[list[float]] = None   # REQUIRED for this model, not optional in practice —
-    feature_std: Optional[list[float]] = None    # unlike the linear model, an untrained-scale input wrecks tanh units
-
-    # -- forward pass ---------------------------------------------------------
-    def _normalize(self, feats: dict[str, float]) -> list[float]:
-        x = [feats.get(n, 0.0) for n in self.feature_names]
-        if not self.feature_mean or not self.feature_std:
-            return x
-        return [(xi - m) / s if s > 1e-9 else 0.0
-                for xi, m, s in zip(x, self.feature_mean, self.feature_std)]
-
-    def raw(self, feats: dict[str, float]) -> float:
-        if not self.W1:
-            return 0.0
-        x = self._normalize(feats)
-        h = [math.tanh(sum(w * xi for w, xi in zip(row, x)) + b)
-             for row, b in zip(self.W1, self.b1)]
-        return sum(w * hi for w, hi in zip(self.W2, h)) + self.b2
-
-    def conviction(self, feats: dict[str, float]) -> float:
-        return math.tanh(self.gain * self.raw(feats))
-
-    def target_from_conviction(self, c: float) -> float:
-        sign = 1.0 if c >= 0 else -1.0
-        if self.entry_threshold >= 1.0:
-            return 0.0
-        mag = max(0.0, abs(c) - self.entry_threshold) / (1.0 - self.entry_threshold)
-        return max(-1.0, min(1.0, sign * mag * self.size_scale))
-
-    def target_weight(self, feats: dict[str, float]) -> float:
-        return self.target_from_conviction(self.conviction(feats))
-
-    def weight_of(self, name: str) -> float:
-        return 0.0   # no linear attribution for an MLP — see §2.1
-
-    # -- (de)serialization ----------------------------------------------------
-    def to_dict(self) -> dict:
-        return {
-            "feature_names": self.feature_names, "hidden": self.hidden,
-            "W1": self.W1, "b1": self.b1, "W2": self.W2, "b2": self.b2,
-            "gain": self.gain, "entry_threshold": self.entry_threshold,
-            "size_scale": self.size_scale, "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit, "version": self.version,
-            "fitted": self.fitted, "feature_mean": self.feature_mean,
-            "feature_std": self.feature_std,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "NNFormulaModel":
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
-
-    def describe(self) -> str:
-        n_params = sum(len(r) for r in self.W1) + len(self.b1) + len(self.W2) + 1
-        return (f"NN[v{self.version}{' fitted' if self.fitted else ''}] "
-                f"hidden={self.hidden} params={n_params} gain={self.gain:.1f} "
-                f"entry_threshold={self.entry_threshold:.3f} size_scale={self.size_scale:.2f}")
-
-    def clone(self, **overrides) -> "NNFormulaModel":
-        d = self.to_dict()
-        d.update(overrides)
-        return NNFormulaModel.from_dict(d)
+adoption_decision(linear_ok, nn_ok, sharpe_linear, sharpe_nn, margin)
+    -> "linear" | "nn" | "none"
 ```
 
-### 2.3 Training: `fit_nn()` in the same file
+The five cases:
 
-Full-batch gradient descent, deterministic given a seed, with:
+1. The linear candidate clears `min_dsr` (0.60, unchanged) — today's behavior.
+2. The NN candidate must clear `nn_min_dsr` (**0.75**, higher) to be eligible.
+   More complexity earns a *higher* evidentiary bar, not an equal one — the
+   same asymmetry `brain/calibration.py` already applies between causal
+   `influences` and structural `member_of` edges.
+3. Neither clears → keep `prior_model`. Unchanged behavior.
+4. Exactly one clears → it wins. Note this holds **even when the loser's raw
+   Sharpe is higher**: an uncleared DSR bar means that Sharpe is not believable
+   in the first place.
+5. Both clear → the NN wins **only if** it beats the linear model by
+   `nn_adoption_margin` (default 0.20). Ties and anything inside the margin go
+   to the linear model, the one you can read.
 
-- **Feature normalization** using the training slice's own mean/std (store on
-  the returned model exactly like `WalkForwardOptimizer._feature_stats` already
-  does for the linear model — reuse that function, don't duplicate it).
-- **L2 weight decay**, not just early stopping — with ~49 params and a few
-  hundred training rows this is the main defense against memorization.
-- **Early stopping on a held-out slice inside the training window** (not the
-  walk-forward validation window — that one is reserved for the outer
-  champion/challenger comparison, exactly as it is for the linear model. Split
-  the training slice itself, e.g. last 20%, as the early-stopping set).
-- **A hard minimum sample count before attempting to fit at all.** Rule of
-  thumb used elsewhere in this codebase: don't fit a model with more free
-  parameters than roughly `n_samples / 10` can support. With 49 params that's
-  ~500 rows minimum — if `len(X) < 500`, return `(None, "insufficient data for
-  NN challenger")` and let the caller skip straight to "not adopted," mirroring
-  `WalkForwardOptimizer.optimize()`'s existing `"insufficient data for
-  walk-forward"` early return.
+The margin is computed as `sharpe_linear + margin * abs(sharpe_linear)`, **not**
+`sharpe_linear * (1 + margin)`. With a negative linear Sharpe the naive form
+*lowers* the bar — at linear = −1.0 it would let a net adopt at −1.2, i.e. while
+being strictly worse. `test_adoption_margin_is_a_hurdle_when_linear_sharpe_is_negative`
+pins this. At linear = 0.0 the margin is 0, so a strict `>` still requires the
+net to be genuinely better.
+
+`ADOPTION_CASE_TEXT` maps the outcome to plain language for the report. When
+the NN never fit at all, the text says so, rather than reporting a linear win
+over an opponent that never showed up.
+
+### 3.4 The second candidate track
+
+`WalkForwardOptimizer.optimize()` gained:
 
 ```python
-def fit_nn(X: list[list[float]], y: list[float], hidden: int = 4,
-           lr: float = 0.05, epochs: int = 300, l2: float = 1e-2,
-           seed: int = 7, min_samples: int = 500) -> tuple[Optional[NNFormulaModel], str]:
-    if len(X) < min_samples:
-        return None, "insufficient data for NN challenger"
-    rng = random.Random(seed)
-    n_val = max(20, len(X) // 5)
-    X_train, y_train = X[:-n_val], y[:-n_val]
-    X_val, y_val = X[-n_val:], y[-n_val:]
-
-    fmean, fstd = _feature_stats(X_train)   # reuse backtest/walkforward.py's helper
-    n_feat = len(X_train[0])
-
-    def norm(row):
-        return [(v - m) / s if s > 1e-9 else 0.0 for v, m, s in zip(row, fmean, fstd)]
-    Xn_train = [norm(r) for r in X_train]
-    Xn_val = [norm(r) for r in X_val]
-
-    scale = 1.0 / math.sqrt(n_feat)
-    W1 = [[rng.gauss(0, scale) for _ in range(n_feat)] for _ in range(hidden)]
-    b1 = [0.0] * hidden
-    W2 = [rng.gauss(0, 1.0 / math.sqrt(hidden)) for _ in range(hidden)]
-    b2 = 0.0
-
-    best_val, best_state, patience, bad_epochs = float("inf"), None, 20, 0
-    for epoch in range(epochs):
-        # forward + backward over the full training batch, plain SGD/GD step,
-        # L2 term added to every weight gradient (not biases)
-        ...  # see reference implementation notes below
-        val_loss = _mse(W1, b1, W2, b2, Xn_val, y_val)
-        if val_loss < best_val - 1e-6:
-            best_val, best_state, bad_epochs = val_loss, (W1, b1, W2, b2), 0
-        else:
-            bad_epochs += 1
-            if bad_epochs >= patience:
-                break
-
-    if best_state is None:
-        return None, "NN training did not converge"
-    W1, b1, W2, b2 = best_state
-    model = NNFormulaModel(hidden=hidden, W1=W1, b1=b1, W2=W2, b2=b2,
-                           feature_mean=fmean, feature_std=fstd, fitted=True)
-    return model, ""
+optimize(assets, bars_by_key, prior_model=None, min_dsr=0.60,
+         try_nn=False, nn_min_dsr=0.75, nn_adoption_margin=0.20,
+         nn_hidden=4, nn_min_samples=MIN_SAMPLES)
 ```
 
-The `...` is deliberately left for the implementer: a plain full-batch forward/
-backward pass (MSE loss, tanh hidden activation, its derivative
-`1 - tanh(z)^2`) using only `math` and list comprehensions, matching the style
-already established in `learning/linalg.py` and `learning/online.py`. Do not
-add a numpy dependency to do this — the whole point of keeping the network at
-49 parameters and a few hundred rows is that a hand-rolled loop is fast enough.
+With `try_nn=False` (the default) this is the code that shipped before the
+change — same result keys, same early return, no NN import touched at runtime.
+`test_walkforward_default_path_is_unchanged_without_try_nn` guards it.
 
-### 2.4 Wiring into the walk-forward optimizer
+`_optimize_nn()` mirrors the linear per-window loop: same windows, same
+embargoed validation slices, same `self._val(...)` scoring. Differences:
 
-`backtest/walkforward.py: WalkForwardOptimizer.optimize()` currently does one
-thing per window: ridge-solve a linear candidate, hyperparameter-search it,
-score it on the validation slice, and average across windows into
-`challenger_avg` vs the running `default_avg`. Add a **second, independent
-candidate track** for the NN, evaluated the same way, so the method ends with
-three tagged results per run, not two:
+- One fit per `NN_L2_OPTIONS` entry per window (3 fits), then `search` random
+  draws from `HYPER_SPACE` paired with a fitted net. The decision-layer
+  hyperparameters (`gain`, `entry_threshold`, …) do not affect training, so
+  refitting per draw would be waste.
+- Seeded from `(window, l2 index)` rather than `self.rng`, so the NN track is
+  reproducible independently of how many draws the linear search consumed.
+- **Its own `n_trials`.** Not pooled with the linear count — pooling would
+  understate the multiple-comparisons penalty each candidate owes its own
+  deflated Sharpe.
+- A window with too few rows contributes the default score and is recorded with
+  `nn_sharpe: None`, so a partial run is visible rather than averaged away.
 
-```python
-def optimize(self, assets, bars_by_key, prior_model=None,
-             min_dsr=0.60, nn_min_dsr=0.75, try_nn=False) -> dict:
-    ...
-    # existing linear ridge/hyperparameter search: unchanged, produces
-    # best_overall (linear) exactly as today
+Extra result keys when `try_nn=True`: `model_type`, `adoption_case`,
+`linear_ok`, `nn_ok`, `nn_challenger_avg`, `nn_dsr`, `nn_n_trials`,
+`nn_windows`, `nn_reason`, `nn_train_samples`, `nn_windows_fit`, `nn_n_params`,
+`nn_min_dsr`, `nn_adoption_margin`.
 
-    nn_result = None
-    if try_nn:
-        nn_result = self._optimize_nn(assets, aligned, start, fold, length, nn_min_dsr)
+`nn_reason` is only meaningful next to `nn_windows_fit`: it holds the last
+refusal seen, which can come from an early short window while later ones fit.
+It is blanked when every window fit.
 
-    # adoption: the linear candidate's existing rule is untouched. The NN
-    # candidate additionally must beat the (already gate-cleared) linear
-    # candidate's challenger_avg by a real margin, not merely clear its own
-    # bar -- extra complexity has to buy something, not just avoid disqualification
-    ...
+### 3.5 Config (`engine/ai_investing/config.py`, `LearningConfig`)
+
+| field | env var | default |
+|---|---|---|
+| `nn_challenger_enabled` | `LEARN_NN_ENABLED` | `False` |
+| `nn_min_dsr` | `LEARN_NN_MIN_DSR` | `0.75` |
+| `nn_adoption_margin` | `LEARN_NN_ADOPTION_MARGIN` | `0.20` |
+| `nn_hidden` | `LEARN_NN_HIDDEN` | `4` |
+| `nn_min_samples` | `LEARN_NN_MIN_SAMPLES` | `500` |
+
+`backtest/main.py` passes all five through. With the flag off — the default —
+nothing in this document runs.
+
+### 3.6 Persistence
+
+`ParamStore` writes a top-level `model_type` tag (`"linear"` | `"nn"`) and
+dispatches on load. **A missing tag means linear**, so every `formula.json`
+written before this change loads unchanged.
+
+- Loading an `"nn"` payload returns `(model, None)` — any saved RLS state is
+  dropped rather than misapplied, because RLS's update rule does not apply to a
+  nonlinear model.
+- `_migrate` (new features appended since the model was saved) works for both:
+  a new input enters the net at **zero weight into every hidden unit**, the
+  same "starts inert and earns trust" contract the linear branch has.
+- `_weights_changed` compares flattened parameters via `_params_of`, and treats
+  a linear ↔ NN swap as a change. The version counter exists to let you watch
+  the formula mature, so it has to see a net whose weights moved — not just a
+  file that was rewritten.
+- The append-only params log records an NN adoption too. `journal.record_params`
+  stores `{"model_type": "nn", "hidden": …, "params": [...]}` rather than
+  pretending an MLP has per-feature weights.
+
+### 3.7 The runner (a gap the plan did not cover)
+
+**The plan specified `ParamStore` round-tripping both types but not its
+consumer, and the live runner would have crashed at boot on an adopted net.**
+`runner.py` calls `RLSLearner.initialize(self.model.weights)` in `__init__` and
+`self.rls.update(...)` every cycle; an MLP has no `.weights`. The moment anyone
+enabled the flag and ran `--optimize --save`, the engine would not have started.
+
+Fixed: when the loaded model is a net, `self.rls` is `None` and every use is
+guarded. Outcomes are **still journaled** — labeled rows are the scarce
+resource this whole effort is bottlenecked on (§1), and discarding them because
+today's model cannot consume them online would be backwards. The per-sample log
+line says `[logged only -- NN has no online update]` so the absence is visible
+rather than silent. `_dump` and the dashboard payload emit an empty weights
+dict for a net instead of a fabricated attribution.
+
+### 3.8 Reporting
+
+`scripts/nn_challenger_report.py` reads `data/backtest.json` and
+`settings.params_path`, and prints **both candidates, win or lose** — per
+window and in aggregate — plus `n_params`, training rows, their ratio, the
+independence caveat, both DSRs against their own bars, the margin, and which
+adoption case fired in plain language.
+
+A report showing only the winner would be the brochure `brain_audit.py`'s own
+"HOW TO READ THIS" warns about. It also reads `settings.params_path` rather
+than building `data_dir/formula.json` by hand — the first version did the
+latter and, under the shadow job's redirected `PARAMS_PATH`, read an absent
+file and announced "live model on disk: linear (version None)": wrong on both
+halves, with no way for a reader to tell (fixed in `e65c78c`).
+
+`scripts/brain_audit.py`'s `learning` section reports `model_type`, and for a
+net also `nn_params` / `nn_hidden` and a pointer to the report.
+
+## 4. Tests — `engine/tests/test_nn_formula.py`
+
+24 tests, with a `__main__` block (project convention: `engine/tests/` files
+without one silently report green on the box). Run:
+`cd engine && python3 tests/test_nn_formula.py`.
+
+The **six adoption-rule tests come first** and are the ones that matter: they
+cover all five cases plus the negative-Sharpe and zero-Sharpe margin traps.
+Everything else can be right and the system still be wrong if a 49-parameter
+model can displace the linear formula without clearing a higher bar *and*
+beating it by a margin.
+
+The rest: exact `to_dict`/`from_dict` round-trip; unfit model inert; `weight_of`
+never raises; interface parity with `FormulaModel`; `clone` overrides
+hyperparameters without touching weights; refusal below `min_samples`; genuine
+learning (validation MSE beats predicting the mean by 2x on a synthetic linear
+relationship); determinism per seed; the 49-parameter guard; walk-forward
+degrading safely below `nn_min_samples`; the `try_nn=False` path unchanged; the
+NN track running when it has the rows; a net actually driving `Backtester.run`
+end to end; `ParamStore` round-trip and RLS drop; pre-NN files loading as
+linear; version bumping on a type swap but not a rewrite; feature migration into
+`W1`; and the runner surviving a net on disk.
+
+## 5. How it is deployed on ProDesk
+
+Systemd **user** units (this box is user-scoped; the engine logs to
+`data/engine.log`, not journalctl):
+
+- `~/.config/systemd/user/ai-investing-nn-challenger.service`
+- `~/.config/systemd/user/ai-investing-nn-challenger.timer` — weekly,
+  `Sun *-*-* 20:00:00 UTC` = Mon 04:00 SGT, `Persistent=true`.
+
+Weekly because the input that decides this — independent `(symbol, day)`
+observations — grows by days, not by how often you refit.
+
+**Four independent reasons the job cannot change what trades**, all verified by
+observation and not merely by design:
+
+1. It runs `--optimize` with **no `--save`**, so `ParamStore.save()` is never
+   called.
+2. `PARAMS_PATH` is redirected to `data/nn_shadow/formula.json`, so even an
+   accidental `--save` could not reach the live formula.
+3. `STATE_PATH` is redirected, so `_dump`'s `backtest.json` lands in
+   `data/nn_shadow/` instead of clobbering the panel the dashboard reads.
+4. Nothing else on the box runs `--optimize` — every systemd timer and cron
+   entry was checked.
+
+After the first live run, `data/formula.json` and `data/backtest.json` were
+**byte-identical** (md5 `3d44d0af…` before and after), and no `formula.json`
+was written in the shadow dir at all.
+
+`BRAIN_DB_PATH` and `DB_PATH` are deliberately **not** redirected: the
+challenger is meant to see exactly the information the live brain sees.
+
+The job pins an explicit 22-symbol `STOCK_WATCHLIST` / 2-symbol
+`CRYPTO_WATCHLIST` rather than the graph-derived universe, forced by the
+`_aligned` defect in §1. Widen it only after `_aligned` intersects on dates.
+Note this means **the challenger is currently measured on a different universe
+than the brain trades** — a real caveat on §7's numbers, not a detail.
+
+Systemd `Environment=` beats `.env`: `_load_dotenv` uses
+`os.environ.setdefault`, so real environment variables always win.
+
+Operating it:
+
+```sh
+systemctl --user start ai-investing-nn-challenger.service   # run now
+systemctl --user list-timers ai-investing-nn-challenger.timer
+tail -n 200 ~/Projects/AI-Investing/data/nn_shadow/nn_challenger.log
 ```
 
-`_optimize_nn` mirrors the existing per-window loop but calls `fit_nn(X, y)`
-instead of `ridge_solve`, uses the same `self._val(...)` scoring against the
-same validation windows, and computes its own deflated Sharpe with its own
-`n_trials` (NN hyperparameter search, if any, is a separate trial count from
-the linear one — don't pool them, that would understate the NN's multiple-
-comparisons penalty).
+## 6. Running it by hand
 
-**The adoption rule, stated precisely (this is the load-bearing part of the
-whole plan):**
-
-1. Linear candidate must independently clear `min_dsr` (0.60, unchanged) to be
-   adoptable at all — exactly today's behavior.
-2. NN candidate must independently clear `nn_min_dsr` (higher — default 0.75,
-   configurable) to be *eligible*. This is the "higher evidentiary bar for
-   higher complexity" rule from §0/§2.2, made concrete.
-3. If neither clears its bar: keep `prior_model` (today's behavior, unchanged).
-4. If only one clears its bar: adopt that one.
-5. If both clear their bars: adopt the NN **only if** its out-of-sample Sharpe
-   beats the linear candidate's by a configurable relative margin (default
-   20%) — e.g. `NN_ADOPTION_MARGIN = 0.20`. Ties, and anything inside the
-   margin, go to the linear model. This encodes "a neural net has to actually
-   earn its opacity, not just tie" instead of leaving it to chance which one a
-   `>` comparison happens to favor on a given run.
-
-This keeps the existing linear path's behavior **completely unchanged** when
-`try_nn=False` (the default) — Track B is opt-in and additive, never a
-silent behavior change to what's running today.
-
-### 2.5 Config
-
-Add to `LearningConfig` in `engine/ai_investing/config.py`, next to the
-existing `min_dsr` line:
-
-```python
-nn_challenger_enabled: bool = field(default_factory=lambda: _get_bool("LEARN_NN_ENABLED", False))
-nn_min_dsr: float = field(default_factory=lambda: _get_float("LEARN_NN_MIN_DSR", 0.75))
-nn_adoption_margin: float = field(default_factory=lambda: _get_float("LEARN_NN_ADOPTION_MARGIN", 0.20))
-nn_hidden: int = field(default_factory=lambda: _get_int("LEARN_NN_HIDDEN", 4))
-nn_min_samples: int = field(default_factory=lambda: _get_int("LEARN_NN_MIN_SAMPLES", 500))
+```sh
+cd engine
+LEARN_NN_ENABLED=true python3 -m ai_investing.backtest.main --optimize
+python3 ../scripts/nn_challenger_report.py            # add --json for the raw dict
 ```
 
-Default `nn_challenger_enabled=False`. Whatever calls
-`WalkForwardOptimizer.optimize()` in production (the offline curation job —
-find it via `grep -rn "\.optimize(" engine/ai_investing/`) should pass
-`try_nn=self.settings.learning.nn_challenger_enabled`. Until someone
-deliberately flips that flag, this entire plan has zero effect on the running
-system — that's intentional; it lets Track B be built, reviewed, and tested
-independently of any decision to actually try it live.
+Omit `--save` unless you intend to adopt the result. On the production
+watchlist expect "insufficient data for walk-forward" until `_aligned` is
+fixed (§1).
 
-### 2.6 Persistence and rollback
+## 7. What it has actually measured
 
-`ParamStore` (`learning/store.py`) currently assumes `FormulaModel` on load.
-Whichever model type `optimize()` adopts needs a type tag so `ParamStore.load()`
-knows which class to reconstruct:
+First live shadow run on ProDesk, 2026-08-22, 22 symbols, 251 aligned bars,
+3 windows, 48 trials per track:
 
-```json
-{"model_type": "linear", "model": {...}}
-{"model_type": "nn", "model": {...}}
+```
+per window (both candidates, win or lose):
+  win   train_rows   default    linear     NN
+  0            924    -1.478       0.0    -0.621
+  1           1958    -1.794       0.0     2.634
+  2           2992     1.026     4.762     4.019
+
+linear : avg Sharpe 1.587   DSR 0.076 over 48 trials              -> cleared=False
+NN     : avg Sharpe 2.011   DSR 0.034 over 48 trials (need 0.75)  -> cleared=False
+
+outcome: case 3: neither candidate cleared its DSR bar -- kept the incumbent
 ```
 
-Add `model_type` (default `"linear"` if absent, for backward compatibility
-with every `formula.json` written before this change) and dispatch
-`FormulaModel.from_dict` vs `NNFormulaModel.from_dict` accordingly. Keep the
-append-only version log `ParamStore` already writes — an NN adoption must be
-just as visible and just as revertible in that log as a linear one. Do **not**
-add any online (RLS-style) update path for the NN in this phase — RLS's linear
-update rule doesn't apply to a nonlinear model, and building a safe online
-update for an MLP is a separate, harder problem than this plan covers. The NN
-challenger is walk-forward-only (curated offline, like the linear model's
-*hyperparameters* already are); it does not mature between offline runs the
-way `RLSLearner` matures the linear θ.
+An earlier run on the same day (before the universe was pinned) recorded the
+NN at avg Sharpe **3.901** against the linear model's 1.442 — a 2.7x edge — with
+a DSR of 0.283 against its 0.75 bar. Refused.
 
-### 2.7 Testing
+**This is the entire point of the mechanism, so read it carefully.** On raw
+out-of-sample Sharpe the net won both times, comfortably. Deflated by the
+number of trials, neither candidate is distinguishable from the best of 48
+random strategies, so neither was adopted and the hand-set θ still trades.
+"Insufficient data" and "did not clear the bar" are **successful outcomes** for
+this phase: it means the gate is doing its job. The fix is more independent
+observations (§1). It is **not** a bigger network, and it is **not** a lower
+`nn_min_dsr`.
 
-New file `engine/tests/test_nn_formula.py` — **must have a `__main__` block**
-(project convention: `engine/tests/` files without one silently report green on
-the box without ever running — see memory note on this exact failure mode).
-Cover:
+## 8. Explicit non-goals, still in force
 
-1. `NNFormulaModel.to_dict()` / `from_dict()` round-trips exactly (weights,
-   biases, feature_mean/std, hyperparameters).
-2. `raw()` on an unfit model (`W1=[]`) returns `0.0` and doesn't raise —
-   mirrors `FormulaModel`'s safe default behavior.
-3. `fit_nn()` with `len(X) < min_samples` returns `(None, "insufficient data...")`
-   without attempting to train.
-4. `fit_nn()` on a small synthetic dataset with a genuine learnable linear
-   relationship (e.g. `y = 0.02*momentum - 0.01*sentiment + noise`) converges
-   to a validation MSE below a naive baseline (predicting the mean) — proves
-   the training loop actually learns something, not just that it runs.
-5. Determinism: same `seed` → bit-identical `W1/b1/W2/b2` across two calls.
-6. `WalkForwardOptimizer.optimize(..., try_nn=True)` on synthetic data with
-   `len(X)` deliberately below `nn_min_samples`: confirms it falls through to
-   the linear-only path and never raises, i.e. Track B degrades safely on
-   exactly the small-sample regime this system currently lives in.
-7. A test that the **adoption rule in §2.4** is followed exactly — construct
-   fake `(dsr_linear, dsr_nn, sharpe_linear, sharpe_nn)` tuples covering all
-   four cases (neither clears, only linear, only NN, both — margin met and
-   margin missed) and assert the right model is chosen each time. This is the
-   single most important test in this plan; get it in before anything else.
+- **No trainable/backprop mechanism on `brain/graph.py` edge weights.** A
+  weight per graph edge needs even more independent samples than this
+  10-feature MLP, and the univariate calibrator in `brain/calibration.py` is
+  already data-starved at `MIN_N=60-120` per edge (BRAIN.md §4d).
+- **No online/live update path for the NN.** Walk-forward-curated only. RLS's
+  linear update rule doesn't apply, and a safe online update for an MLP is a
+  separate, harder problem. The NN does not mature between offline runs the way
+  `RLSLearner` matures the linear θ.
+- **Do not scale the network up.** More hidden units or layers is not "the next
+  experiment if this one wins" — it is a strictly worse bet against the same
+  scarcity. Re-check §1's sample count against the `n_samples / 10 >= n_params`
+  rule first. Bigger is not the next experiment; more data is.
+- **No change to default behavior.** `nn_challenger_enabled` defaults `False`
+  and every new path is gated behind it.
 
-### 2.8 Reporting
+### Not built: a live per-cycle shadow book
 
-Extend `scripts/brain_audit.py`'s `learning` section (or add a
-`scripts/nn_challenger_report.py` if that file is getting crowded) to print,
-whenever a `formula.json` with `model_type: "nn"` exists or an NN run has been
-attempted:
+The original request was for a network that "makes its own decision and learns
+from it" in parallel with the brain. **What exists is an offline challenger,
+not a live shadow.** The NN refits weekly on real history and is scored
+out-of-sample against the linear model; it does **not** compute a decision on
+each 300s engine cycle alongside the brain's.
 
-- `n_params`, `n_training_samples`, and their ratio (the thing §2.3's minimum
-  sample rule exists to protect).
-- Per-window linear vs NN Sharpe, and both DSRs, side by side — not just the
-  winner. A report that only shows the winner is exactly the "brochure"
-  failure mode `brain_audit.py`'s own docstring warns about for symbol
-  tracking (§ HOW TO READ THIS: "A track record that reports only its winners
-  is a brochure").
-- Which adoption case (§2.4, cases 1-5) fired on the most recent run, in
-  plain language, not just the resulting model type.
-
-## 3. Explicit non-goals for this phase
-
-- **Do not touch `brain/graph.py` edge weights with a trainable/backprop
-  mechanism.** That's a harder, separate problem (learning a weight per graph
-  edge needs even more independent samples than this 10-feature MLP, and the
-  existing univariate edge calibrator in `brain/calibration.py` is already
-  data-starved at `MIN_N=60-120` per edge — see BRAIN.md §4d).
-- **Do not give the NN an online/live update path.** Walk-forward-curated
-  only, in this phase (§2.6).
-- **Do not scale the network up** (more hidden units, more layers) as a
-  follow-on "if this works, let's go bigger" move without first re-checking
-  Track A's sample count against the `n_samples / 10 >= n_params` rule this
-  plan uses in §2.3. Bigger is not the next experiment; more data is.
-- **Do not change the default behavior of anything currently running.**
-  `nn_challenger_enabled` defaults to `False`; every new code path is additive
-  and gated behind it.
-
-## 4. Definition of done
-
-- `NNFormulaModel` implements the full interface in §2.1 and passes the tests
-  in §2.7.
-- `WalkForwardOptimizer.optimize(try_nn=True)` runs both candidate tracks and
-  applies the exact adoption rule in §2.4, with `try_nn=False` (default)
-  behaving identically to the code before this change.
-- `ParamStore` round-trips both model types via `model_type`, old
-  `formula.json` files with no `model_type` key still load as `FormulaModel`.
-- `scripts/brain_audit.py` (or the new report script) shows linear-vs-NN
-  side by side whenever an NN run has been attempted.
-- A dry run with `LEARN_NN_ENABLED=true` against current production history
-  is executed and its `nn_challenger_report` output is attached to the PR —
-  expected result, given Track A's current sample size, is "insufficient data"
-  or "NN did not clear nn_min_dsr." That is a successful outcome for this
-  phase, not a failure: it means the gate is doing its job.
+Building that means editing the live engine loop on a real-money system, and it
+is a genuinely separate piece of work: where the shadow book lives, what it
+logs, how its decisions are compared to the live ones, and how it avoids
+becoming a second source of truth that quietly diverges. `runner.py` already has
+a shadow "formula-only" portfolio that is the right pattern to follow. This
+document does not cover it.
