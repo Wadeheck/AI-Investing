@@ -601,6 +601,81 @@ def reach(s, horizon: int) -> dict:
                 never, key=lambda r: -r["avg_excess_pct"] * r["days"])}
 
 
+def _student_p(t: float, df: int) -> float:
+    """Two-sided p for Student's t, via the regularised incomplete beta.
+
+    Written out rather than imported because the normal approximation is wrong
+    exactly where this audit operates — small n. At n=6 the normal says p=0.029
+    where t actually says p=0.081, and the difference is the whole verdict.
+    """
+    if df <= 0:
+        return 1.0
+    x = df / (df + t * t)
+    return _betainc(df / 2.0, 0.5, x)
+
+
+def _betainc(a: float, b: float, x: float) -> float:
+    """Regularised incomplete beta I_x(a, b) by continued fraction (Lentz)."""
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    lbeta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    front = math.exp(math.log(x) * a + math.log(1 - x) * b - lbeta) / a
+    if x >= (a + 1) / (a + b + 2):          # use the symmetry for convergence
+        return 1.0 - _betainc(b, a, 1 - x)
+    f, c, d = 1.0, 1.0, 0.0
+    for i in range(0, 300):
+        m = i // 2
+        if i == 0:
+            num = 1.0
+        elif i % 2 == 0:
+            num = m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m))
+        else:
+            num = -((a + m) * (a + b + m) * x) / ((a + 2 * m) * (a + 2 * m + 1))
+        d = 1.0 + num * d
+        d = 1e-30 if abs(d) < 1e-30 else d
+        d = 1.0 / d
+        c = 1.0 + num / c
+        c = 1e-30 if abs(c) < 1e-30 else c
+        f *= c * d
+        if abs(1.0 - c * d) < 1e-10:
+            break
+    return front * (f - 1.0)
+
+
+def significance(xs):
+    """Mean, t, and a p-value from Student's t — NOT the normal.
+
+    The first version used the normal approximation and reported
+    **p = 0.000 at n = 3**, which is nonsense: with 2 degrees of freedom
+    the standard error is itself estimated from the same three points.
+    `test_pnl_significance.py` asserted that tiny samples must never be
+    credited with significance, and then this function did exactly that
+    — the test was about the arithmetic and the bug was in the code
+    beside it.
+
+    Below MIN_N_FOR_P observations no p-value is reported at all. Not a
+    conservative one: none. A number that cannot mean anything should
+    not be printed in a field a reader will compare against 0.05.
+    """
+    MIN_N_FOR_P = 5
+    n = len(xs)
+    if n < 2:
+        return {"n": n, "t": None, "p": None, "significant": False}
+    m = sum(xs) / n
+    sd = (sum((x - m) ** 2 for x in xs) / (n - 1)) ** 0.5
+    t = m / (sd / math.sqrt(n)) if sd else 0.0
+    out = {"n": n, "mean": round(m, 4), "t": round(t, 2)}
+    if n < MIN_N_FOR_P:
+        out.update({"p": None, "significant": False,
+                    "note": f"n<{MIN_N_FOR_P}: no p-value is meaningful"})
+        return out
+    p = _student_p(abs(t), n - 1)
+    out.update({"p": round(p, 4), "significant": bool(p < 0.05)})
+    return out
+
+
 def pnl_significance(s, horizon: int) -> dict:
     """Per-book realised P&L, and whether it is distinguishable from luck.
 
@@ -623,6 +698,47 @@ def pnl_significance(s, horizon: int) -> dict:
     demonstrated edge; it has demonstrated that it holds correlated positions.
     """
     data = Path(s.brain.db_path).parent
+
+    # --- the benchmark, which is what makes "edge not demonstrated" honest ---
+    # §4.6's lesson at the BOOK level. The sleeve's winning baskets were semis
+    # and solar during a period when semis and solar ran; a long book in a
+    # rising sector makes money without skill. Until a trade's return is
+    # measured against what its own market did over the SAME window, no verdict
+    # about edge means anything in either direction.
+    from ai_investing.brain.scorecard import benchmark_for   # noqa: PLC0415
+    series: dict[str, list[tuple[str, float]]] = {}
+    try:
+        con = _ro(s.brain.db_path)
+        for sym, d, px in con.execute(
+                "select symbol, date, price from price_history order by date"):
+            series.setdefault(sym, []).append((d, float(px)))
+        con.close()
+    except sqlite3.Error:
+        series = {}
+
+    def _px_on(sym: str, day: str):
+        """Last price at or before `day`. Markets close; a holiday must not
+        silently become 'no benchmark' when yesterday's close is right there."""
+        rows = series.get(sym) or []
+        best = None
+        for d, px in rows:
+            if d <= day:
+                best = px
+            else:
+                break
+        return best
+
+    def _bench_ret(sym: str, exit_day: str, held: int):
+        b = benchmark_for(sym)
+        if not b or held is None:
+            return None, None
+        entry_day = (datetime.fromisoformat(exit_day)
+                     - timedelta(days=int(held))).date().isoformat()
+        p0, p1 = _px_on(b, entry_day), _px_on(b, exit_day)
+        if not p0 or not p1:
+            return b, None
+        return b, (p1 - p0) / p0
+
     out = {}
     for jf, book in (("event_journal.jsonl", "event_sleeve"),
                      ("crypto_journal.jsonl", "crypto"),
@@ -650,42 +766,76 @@ def pnl_significance(s, horizon: int) -> dict:
             if v is None or not r.get("symbol"):
                 continue
             try:
-                fills.append((str(r.get("ts", ""))[:10], float(v)))
+                day, pnl = str(r.get("ts", ""))[:10], float(v)
             except (TypeError, ValueError):
                 continue
+            ret = r.get("ret")
+            b, br = _bench_ret(r["symbol"], day, r.get("held_days"))
+            excess = (float(ret) - br) if (ret is not None and br is not None) else None
+            fills.append((day, pnl, excess, b))
         if not fills:
             continue
 
-        def _t(xs):
-            n = len(xs)
-            if n < 2:
-                return {"n": n, "t": None, "p": None, "significant": False}
-            m = sum(xs) / n
-            sd = (sum((x - m) ** 2 for x in xs) / (n - 1)) ** 0.5
-            t = m / (sd / math.sqrt(n)) if sd else 0.0
-            p = 2 * (1 - 0.5 * (1 + math.erf(abs(t) / math.sqrt(2))))
-            return {"n": n, "mean": round(m, 2), "t": round(t, 2),
-                    "p": round(p, 3), "significant": bool(p < 0.05)}
-
         by_day: dict[str, float] = {}
-        for d, v in fills:
+        for d, v, _e, _b in fills:
             by_day[d] = by_day.get(d, 0.0) + v
-        per_fill = _t([v for _, v in fills])
-        per_basket = _t(list(by_day.values()))
+        per_fill = significance([v for _, v, _e, _b in fills])
+        per_basket = significance(list(by_day.values()))
+
+        # The same two units again, but on EXCESS over each trade's own market.
+        ex = [(d, e) for d, _v, e, _b in fills if e is not None]
+        ex_day: dict[str, list[float]] = {}
+        for d, e in ex:
+            ex_day.setdefault(d, []).append(e)
+        excess_block = {"n_benchmarked": len(ex), "of_fills": len(fills)}
+        if ex:
+            excess_block["per_fill"] = significance([e for _, e in ex])
+            excess_block["per_basket"] = significance(
+                [sum(v) / len(v) for v in ex_day.values()])
+            excess_block["mean_excess_pct"] = round(
+                100 * sum(e for _, e in ex) / len(ex), 2)
+            excess_block["benchmarks"] = sorted(
+                {b for _d, _v, e, b in fills if e is not None and b})
+
+        # The verdict is driven by EXCESS at BASKET level, and by nothing else.
+        # A first version keyed it off RAW per_basket, which is wrong in both
+        # directions: raw P&L in a rising sector is beta (§4.6), and raw P&L is
+        # NOISIER than excess because the market factor it contains swamps the
+        # residual. On the live record the sleeve is not significant raw
+        # (p=0.101) and IS significant on excess (p=0.029) — same trades. The
+        # measure that removes the common factor is the one that can see skill.
+        # SIGNIFICANT AND POSITIVE. The first version tested only significance,
+        # and duly reported `crypto_event` — mean excess **-7.44%** — as
+        # "beats its benchmark". A two-sided test says "not zero"; it does not
+        # say "good". Direction has to be asserted separately, always.
+        _eb = excess_block.get("per_basket") or {}
+        beat = bool(_eb.get("significant") and (_eb.get("mean") or 0) > 0)
+        lags = bool(_eb.get("significant") and (_eb.get("mean") or 0) < 0)
         out[book] = {
-            "total_realised": round(sum(v for _, v in fills), 2),
+            "total_realised": round(sum(v for _, v, _e, _b in fills), 2),
             "per_fill": per_fill,
             "per_basket": per_basket,
             "inflation": (round(per_fill["n"] / per_basket["n"], 1)
                           if per_basket.get("n") else None),
-            "verdict": ("edge not demonstrated"
-                        if not per_basket.get("significant") else "worth a second look"),
+            "excess_over_benchmark": excess_block,
+            "verdict": ("beats its benchmark — small sample, read the caveats" if beat
+                        else "UNDERPERFORMS its benchmark significantly" if lags
+                        else "edge not demonstrated"),
         }
     out["_note"] = ("`per_fill` counts tickers; `per_basket` counts DAYS a bet was "
                     "taken off. A book that is significant per_fill and not "
                     "per_basket has not shown edge — it has shown that it holds "
-                    "correlated positions. Neither figure is benchmarked: a long "
-                    "book in a rising sector makes money without skill (§4.6).")
+                    "correlated positions. `excess_over_benchmark` is the measure "
+                    "that can see skill: raw P&L in a rising sector is beta (§4.6), "
+                    "and raw is also NOISIER, because the market factor it carries "
+                    "swamps the residual. Read `per_basket` under excess. "
+                    "TWO CAVEATS THAT ARE NOT OPTIONAL: (1) the benchmark is a broad "
+                    "index, so excess for a high-beta sector name still contains a "
+                    "SECTOR factor — SPY is not the right yardstick for a semis "
+                    "basket, and the honest benchmark would be SOXX. (2) four books "
+                    "are tested here; one p~0.03 among them is roughly what chance "
+                    "produces, so a single significant book is a reason to keep "
+                    "measuring, never a reason to size up.")
     return out
 
 

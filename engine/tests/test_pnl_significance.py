@@ -96,10 +96,111 @@ def test_it_reads_both_pnl_key_spellings():
     `realized`. The first version read only `realized` and reported NOTHING —
     which at least failed loudly rather than confidently measuring a subset."""
     src = (Path(__file__).resolve().parents[2] / "scripts" / "brain_audit.py").read_text()
-    i = src.index("def pnl_significance")
-    window = src[i:i + 3500]
-    assert '"realized"' in window and '"pnl"' in window, \
+    # Scoped to the function by its own extent, not a byte count: the first
+    # version used a fixed 3500-char window and broke the moment the benchmark
+    # code made the function longer. A test that depends on how long the code
+    # happens to be is a test that will fail for the wrong reason.
+    import ast
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "pnl_significance")
+    body = ast.unparse(fn)
+    assert "realized" in body and "pnl" in body, \
         "one spelling only — some books' P&L will be silently invisible"
+
+
+# --- the benchmark, and two bugs it exposed in this very file's instrument ---
+
+def _student_p(t, df):
+    import sys as _s
+    _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import brain_audit
+    return brain_audit._student_p(t, df)
+
+
+def test_the_t_distribution_not_the_normal():
+    """The first version of `pnl_significance` used the normal approximation
+    and it changed the verdict.
+
+    At n=6 the sleeve's excess is t=2.18. The normal says **p=0.029 —
+    significant**. Student's t with 5 degrees of freedom says **p=0.081 — not**.
+    The standard error at n=6 is itself estimated from those six points, and
+    the normal pretends otherwise.
+
+    Checked against textbook critical values so the implementation is not
+    merely self-consistent.
+    """
+    assert abs(_student_p(2.571, 5) - 0.05) < 0.002, "df=5 critical value is 2.571"
+    assert abs(_student_p(2.000, 60) - 0.05) < 0.003, "df=60 critical value is 2.000"
+    assert abs(_student_p(2.18, 5) - 0.081) < 0.005, "the verdict-changing case"
+
+
+def _sig(xs):
+    import sys as _s
+    _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import brain_audit
+    return brain_audit.significance(xs)
+
+
+def test_no_p_value_at_all_below_five_observations():
+    """Not a conservative p-value: none.
+
+    The normal approximation reported **p = 0.000 at n = 3** for the crypto
+    book. A number that cannot mean anything must not be printed in a field a
+    reader will compare against 0.05 — reporting nothing is the honest output.
+
+    Driven through the REAL function, not grepped for. The first version
+    searched the source for `MIN_N_FOR_P` and passed with the floor set to 0 —
+    §4.44's lesson (a test that checks the helper, not the wiring) for the
+    third time this session. `significance()` was lifted out of a closure
+    precisely so this test could call it.
+    """
+    out = _sig([1.0, 2.0, 3.0])
+    assert out["n"] == 3
+    assert out["p"] is None, f"a p-value was reported at n=3: {out}"
+    assert out["significant"] is False
+    assert "note" in out, "the reason for the missing p must be stated"
+
+
+def test_the_real_function_uses_the_t_distribution():
+    """Also driven, not grepped. With the normal approximation the sleeve's six
+    baskets return p=0.029; with Student's t they return p=0.162. Same data."""
+    out = _sig([-190.5, 476.8, 31.4, 556.5, 222.0, 50.1])
+    assert out["n"] == 6 and abs(out["t"] - 1.64) < 0.02
+    assert out["p"] is not None and 0.15 < out["p"] < 0.18, \
+        f"p={out['p']} — this is the normal approximation, not Student's t"
+    assert out["significant"] is False
+
+
+def test_significant_is_not_the_same_as_good():
+    """The bug that reported a LOSING book as beating its benchmark.
+
+    `crypto_event` has mean excess **-7.44%** and t=-2.88. The first version
+    tested only `significant` and duly printed "beats its benchmark". A
+    two-sided test says *not zero*; it does not say *good*. Direction must be
+    asserted separately, always.
+    """
+    import ast
+    src = (Path(__file__).resolve().parents[2] / "scripts" / "brain_audit.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "pnl_significance")
+    body = ast.unparse(fn)
+    assert "UNDERPERFORMS" in body, "a significantly-losing book has no distinct verdict"
+    assert "> 0" in body and "beat" in body, \
+        "the 'beats' verdict does not check the SIGN of the excess"
+
+
+def test_the_sleeve_needs_eight_baskets_to_settle_it():
+    """The useful output of all this: not a verdict, a countable cue.
+
+    The sleeve's excess is +2.54% per basket at t=2.18 over 6 baskets — an
+    effect size of 0.89. Holding that constant, it clears p<0.05 at **8
+    baskets**. That is two more, not a research programme.
+    """
+    import math
+    eff = 2.18 / math.sqrt(6)
+    assert abs(eff - 0.89) < 0.01
+    need = next(n for n in range(6, 30) if _student_p(eff * math.sqrt(n), n - 1) < 0.05)
+    assert need == 8, need
 
 
 if __name__ == "__main__":

@@ -216,6 +216,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.54 | The defect rate tracked how hard someone looked | ✅ `defect_sweep.py` asks the four questions that found 13 of 17, mechanically |
 | 4.55 | First order on an unproven path — decided | ✅ NO on the trade (1 independent observation); path validation kept as a separate, minimal test |
 | 4.56 | The P&L was the last layer still counting tickers instead of decisions | ✅ `brain_audit --section pnl` reports per-fill AND per-basket; all four books: edge not demonstrated |
+| 4.57 | Books benchmarked at last — plus three bugs in the instrument that measured it | ✅ Excess over benchmark, Student's t, sign checked, no p below n=5; sleeve +2.54%/basket at p=0.081, **8 baskets settles it** |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2654,6 +2655,58 @@ crypto_event     -$266   per_fill sig=YES   per_basket sig=no
   reports it now refuses to publish either unit alone, because **the gap between
   them is the finding.**
 
+### 4.57 Benchmarking the books — and three bugs in the instrument that measured it *(2026-08-22)*
+
+- **Why.** §4.56 said no book has demonstrated edge, but called its own verdict
+  *generous*, because nothing compared a book's P&L against what its market did
+  over the same window. The sleeve's winning baskets were semis and solar during
+  a period when semis and solar ran. §4.6's lesson — `hit` meant nothing until
+  it was excess over a benchmark — had never been applied at the book level.
+- **The result, and it is not what I expected.** Benchmarking made the sleeve
+  look BETTER, not worse: raw P&L is noisier because the market factor it
+  carries swamps the residual, and removing it lets the remainder show.
+
+```
+event sleeve, 6 baskets      t       p        mean
+raw P&L                    1.64   0.162
+EXCESS over benchmark      2.18   0.081   +2.54%/basket
+```
+
+- **Still not significant — and the honest cue is small.** Holding that effect
+  size (0.89), it clears p<0.05 at **8 baskets**. There are 6. **Two more
+  baskets settle it**, which is roughly a fortnight of the sleeve. That is the
+  most actionable number this review has produced.
+- **THREE BUGS IN THE INSTRUMENT, all caught by reading its output rather than
+  shipping it.** Each one changed a verdict:
+
+| Bug | What it printed | Why it was wrong |
+|---|---|---|
+| Normal approximation instead of Student's t | sleeve excess **p=0.029, significant** | At n=6 the standard error is estimated from those six points. Student's t says **p=0.081**. The whole verdict turned on this. |
+| `significant` treated as `good` | `crypto_event`, mean excess **−7.44%**, reported as *"beats its benchmark"* | A two-sided test says *not zero*; it does not say *good*. Direction must be asserted separately. |
+| No floor on n | crypto: **p = 0.000 at n = 3** | With 2 degrees of freedom this is meaningless. Now no p-value is printed below n=5 — not a conservative one, **none**. |
+
+- **And two of the tests for those fixes were themselves vacuous**, which is
+  §4.44 for the third time this session: they grepped the source for
+  `MIN_N_FOR_P` and called `_student_p` directly, so the mutations *"set the
+  floor to 0"* and *"go back to the normal approximation"* both passed. The fix
+  was structural — `significance()` was lifted out of a closure to module level
+  **so the test could drive the real function** — which is the same defect class
+  as a function reading global state its caller cannot set.
+- **Caveats that are not optional, and are printed with the numbers.**
+  (1) The benchmark is a broad index, so excess on a high-beta sector name still
+  contains a **sector** factor — SPY is not the right yardstick for a semis
+  basket; SOXX would be. (2) Four books are tested, so one p≈0.03 among them is
+  roughly what chance produces. A single significant book is a reason to keep
+  measuring, never to size up.
+- **Verdict across all four books: edge not demonstrated.** But the sleeve's
+  +2.54% mean excess at t=2.18 is the first number in this system that looks
+  like it might survive contact with more data, and it now has a countable bar.
+- **Lesson.** An instrument built to check for over-claiming will over-claim
+  unless it is checked the same way. All three bugs flattered the result, and
+  all three were found by looking at the output and asking whether it could
+  possibly be true — a losing book cannot "beat its benchmark", and nothing is
+  p=0.000 at n=3.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2706,6 +2759,7 @@ automatically, since several of these are judgement calls, not bugs.
 
 | Open item | Cue to revisit | Where to check |
 |---|---|---|
+| **The sleeve's excess return** (§4.57) | **8 baskets.** There are 6. At the observed effect size (+2.54%/basket, t=2.18) the eighth clears p<0.05 — about a fortnight. This is the single most informative cue open: it is the first thing in the system that might survive more data. Read `excess_over_benchmark.per_basket`, NOT raw P&L, and mind the two caveats printed beside it (broad-index benchmark, four books tested). | `brain_audit.py --section pnl` |
 | Runner's own mark not yet SEEN carrying `basis` (§4.52) | **2026-08-23's mark**, and nothing sooner: the runner writes one mark per SGT day and today's (`day: 2026-08-22`) was already written before the fix deployed. The code is tested and mutation-verified; it has not yet been OBSERVED. That is the same distinction §4.52 itself was created by, so it gets its own cue rather than an assumption. If the 08-23 mark lands without `basis`, the fix does not work and the register entry is wrong. | `tail -1 data/stock_journal.jsonl` — expect `"basis": "live:10000"` (or `paper`). |
 | ~~Declared book basis not yet seen live~~ | **FIRED 2026-08-22, and the answer was NO — §4.52.** The mark landed without `basis`, which this row had said in advance would mean a live defect rather than a delay. It was: the runner's own journal was a fifth path the mixin never covered. Kept here as the first §4B cue to fire negative and be believed — **a cue is only worth writing if its negative answer is written down too.** | — |
 | Edge calibrator's first verdicts (§4.47) | `MIN_N = 60` at roughly one scoreable day per edge per activation puts the first verdicts about **2 months out (~mid-October 2026)**. When they arrive, read the FIRST batch by hand before trusting the next — a bar chosen on reasoning is still a bar nobody has watched fire. Check `structural` and `n_independent` are populated on every verdict. | `data/edge_calibration.json` → `supported` / `contradicted` leaving 0; `brain_audit.py --section learning`. |
