@@ -44,7 +44,16 @@ python3 scripts/defect_sweep.py           # the 4 questions that found 13 of 22 
 python3 scripts/cue_check.py              # which §4B cues have fired
 python3 scripts/review_edges.py --stats   # wiring the brain added to itself
 python3 scripts/review_edges.py --hygiene # placeholder + unwired graph nodes
+python3 scripts/nn_shadow_report.py       # the NN's own book, beside the brain's
 ```
+
+**`nn_shadow_report.py` is the NN challenger's live record** (NN_CHALLENGER.md
+§8). The net decides on every asset every cycle from the same inputs the brain
+gets, trades a paper book it cannot escape, and journals each call beside the
+brain's. It grades four outcomes, not two — `captured`, `wrong`, **`missed`**
+(FLAT while the asset moved >2%), `avoided` — because a record that counts only
+what it took is a brochure, and a book that never trades has no losses and looks
+disciplined. Read `n_independent`, never `graded`.
 
 **`--section pnl` is the one to read if you only read one.** It answers whether
 any book has demonstrated edge, counted in BETS rather than fills and measured
