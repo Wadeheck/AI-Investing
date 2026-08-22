@@ -1,6 +1,6 @@
 # Handover — resume here
 
-**Written 2026-08-22. HEAD `f1f1c51`, deployed and running on the ProDesk.**
+**Written 2026-08-22. HEAD `39384dd`, deployed and running on the ProDesk.**
 
 This is the *resume-here* document. It is deliberately short and it points at
 the detail rather than repeating it.
@@ -110,10 +110,28 @@ is encouraging. It says 26 days and three thematic bets cannot separate it from
 luck — and that anyone quoting the 16-fill t-statistic is counting tickers
 instead of decisions.
 
-**And it is generous, because nothing is benchmarked yet.** The winning baskets
-were semis and solar during a period when those ran. A long book in a rising
-sector makes money without skill (§4.6, still unfixed at book level). **That is
-the next piece of work** — see §6.
+### The benchmark, which was the next piece of work — and it is now done
+
+§4.57 benchmarked the books, and §4.58 attacked the result on its weakest point.
+**Benchmarking made the sleeve look BETTER, not worse** — raw P&L is noisier
+because the market factor it carries swamps the residual:
+
+```
+event sleeve, 6 baskets      t       p        mean excess
+raw P&L                    1.64   0.162
+vs BROAD benchmark         2.18   0.081      +2.54%/basket
+vs its own SECTOR          2.19   0.080      +2.26%/basket   <- 11/16 fills
+```
+
+**The edge is not semiconductor beta.** Measuring `NVDA`/`AMD`/`ASML`/`TSM`/
+`000660.KS` against `XLK` instead of `SPY` moved the mean by 0.28pp and the
+t-statistic not at all. That is the first number in this system to be attacked
+on its weakest point and hold.
+
+**Still not significant — and the bar is small: 8 baskets, of which there are
+6.** Two more, roughly a fortnight. The yardstick is now correct *before* the
+data arrives rather than after, which is why §4.58 was worth doing immediately
+instead of at the cue.
 
 ---
 
@@ -121,18 +139,18 @@ the next piece of work** — see §6.
 
 ```
                      START (e327d65)      NOW (2b24e58)
-register entries          §4.36               §4.56        (20 new)
+register entries          §4.36               §4.58        (22 new)
 §4A open rows              19                  15
 test files                 54                  65
-tests                  one runner only     698, BOTH runners, BOTH machines
+tests                  one runner only     707, BOTH runners, BOTH machines
 ```
 
-**Twenty defects found and fixed (§4.37–§4.56).** Nine of them were found only
+**Twenty-two defects found and fixed (§4.37–§4.58).** Eleven of them were found only
 because an earlier one taught us where to look. Four false alarms are recorded
 at the same length as the fixes, because a review that records only its hits is
 not a measurement.
 
-**Two of the twenty I caused myself, during this session:**
+**Two of the twenty-two I caused myself, during this session:**
 - **§4.48** — my `parse_args(argv)` refactor killed the X capture channel for
   two hours, and the guard written in the same commit passed the whole time.
 - **§4.50** — a cleanup rule I wrote deleted **Procter & Gamble** from the live
@@ -331,27 +349,48 @@ python3 scripts/brain_audit.py           # every measurement, read-only
 
 ---
 
-## 6. The next piece of work: benchmark the books
+## 6. What is next — and for once the answer is "wait"
 
-**Why this and not the backlog.** §4.56 says no book has demonstrated edge —
-but that verdict is *generous*, because nothing compares a book's P&L against
-what the market it traded did over the same window. The sleeve's winning baskets
-were semis and solar during a period when semis and solar ran. A long book in a
-rising sector makes money without skill.
+**The benchmark is done (§4.57, §4.58).** It was the right next thing and it has
+been built, attacked, and deployed. See §1.5.
 
-This is §4.6's lesson — `hit` meant nothing until it was measured as EXCESS over
-a benchmark — never applied at the book level. It is the same missing control as
-§4.44 (no control group) and §4.51 (no noise floor). **Third time, same shape:
-compared with what?**
+**The next step is two more baskets**, and there is no work that brings them
+sooner. The bar is **8**, there are **6**, and at the observed effect size the
+eighth clears p<0.05. That is roughly a fortnight of the event sleeve.
 
-**What it needs:** for each closed trade, the benchmark return over the SAME
-holding window, then `excess = trade_ret − bench_ret`, then significance on
-excess at the BASKET level (§4.56's unit, not per-fill). `brain/scorecard.py`
-already has `benchmark_for()`; the machinery exists and has simply never been
-pointed at realised P&L.
+```bash
+# the one number to watch
+ssh prodesk 'cd ~/Projects/AI-Investing && \
+  .venv/bin/python scripts/brain_audit.py --section pnl'
+# read excess_over_benchmark.per_basket — NOT raw P&L, NOT per_fill
+```
 
-**Why it is worth more than the backlog** (320 unreviewed edges, 200 inert
-assets, the waits): those improve the system. This tells you whether the system
-is worth improving — and in which direction. It can move +$1,146 from
-*ambiguous* to *informative* in either direction, which nothing else on the list
-can do.
+**This is a real change of posture.** For most of this session the answer to
+"what next" was another defect. It is not now: the sleeve has a specific,
+countable question with a date attached, the yardstick it will be judged by is
+correct, and the remaining backlog improves a system whose central claim is
+about to be settled either way.
+
+### 6.1 If you want work in the meantime
+
+**The self-wiring BAR** (§4A) — the highest-value open item and genuinely a
+decision rather than a task. The 6/day budget caps the *rate* of LLM-proposed
+edges; nothing caps *quality*. There are **320 LLM edges, all 320 unreviewed**,
+and the calibrator cannot reach any of them (none terminates on a tradable
+symbol, so `_score_pair` has no price series). The only thing between a bad
+inference and the live field is a 0.6 confidence cap.
+
+The question is not "review them" — it is **how much self-wiring do you want at
+all**, given that nothing can grade it.
+
+### 6.2 What NOT to do
+
+- **Do not raise the gain ceilings** (§4.51). The 14× was noise. Settled.
+- **Do not place `O39.SI` as a trade** (§4.55). One independent observation.
+- **Do not refit the formula** (§4.28). A 26-day single-regime sample whose
+  measurement layer was corrected days ago is how you get a confidently wrong
+  model.
+- **Do not size up on the sleeve** if the eighth basket clears p<0.05. One
+  significant book among four tested is roughly what chance produces; the
+  correct response to the cue firing is *keep measuring*, not *allocate*.
+

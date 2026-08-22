@@ -8,6 +8,7 @@ Organised by **what you are trying to do**, not by when it was written.
 
 | Read | When |
 |---|---|
+| **[status/HANDOVER.md](status/HANDOVER.md)** | ⭐ **Resuming work.** Deploy state, the headline finding, the decisions already taken and why, and every open item grouped by *what it needs* — a decision, a wait with a cue, or curation. Points at everything else. |
 | **[status/STATE_OF_THE_SYSTEM.md](status/STATE_OF_THE_SYSTEM.md)** | Always first. Current state, every defect found and how, and — the part that matters — what is still **unverified**. |
 | **[status/OPERATIONS.md](status/OPERATIONS.md)** | Running it. Which host owns the books, the SSH develop→deploy loop, systemd units, watchdog, backups. |
 
@@ -38,10 +39,21 @@ from "is it running", and it has its own instrument:
 
 ```bash
 python3 scripts/brain_audit.py            # every measurement, read-only
+python3 scripts/brain_audit.py --section pnl   # has any book made money? (§4.56-58)
+python3 scripts/defect_sweep.py           # the 4 questions that found 13 of 22 defects
 python3 scripts/cue_check.py              # which §4B cues have fired
 python3 scripts/review_edges.py --stats   # wiring the brain added to itself
 python3 scripts/review_edges.py --hygiene # placeholder + unwired graph nodes
 ```
+
+**`--section pnl` is the one to read if you only read one.** It answers whether
+any book has demonstrated edge, counted in BETS rather than fills and measured
+against each trade's own sector. Read `excess_over_benchmark.per_basket`; the
+raw P&L and the per-fill figures are both there precisely so you can see how
+much they flatter (§4.56, §4.58).
+
+**`defect_sweep.py` exists because the defect rate used to track how hard
+someone looked** (§4.54). Every line it prints is a QUESTION, not a verdict.
 
 `brain_audit.py` reproduces every number in `BRAIN_REVIEW_2026-08-21` against
 whatever is true today. **Run it before writing or believing any review** —

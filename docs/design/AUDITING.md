@@ -240,3 +240,58 @@ was calculated from.
 Related: [`../status/BRAIN_REVIEW_2026-08-21.md`](../status/BRAIN_REVIEW_2026-08-21.md)
 (the review this discipline came out of), [`BRAIN.md`](BRAIN.md) §4h,
 [`FORMULA.md`](FORMULA.md) §4(c), `STATE_OF_THE_SYSTEM` §4.37–4.40.
+
+---
+
+## The two instruments added 2026-08-22
+
+### `brain_audit.py --section pnl` — has any book actually made money?
+
+The question the system exists to answer, and the last measurement layer that
+was still flattering itself. Three rules, each of which changed a verdict when
+it was missing:
+
+1. **Count bets, not fills.** The event sleeve's 17 fills land on 6 days, three
+   correlated names at a time. `NVDA, AMD, 000660.KS` is one semis bet wearing
+   three tickers. Per-fill: p=0.028, significant. Per-basket: not. Same money.
+2. **Benchmark, and use the right one.** A single stock is measured against its
+   SECTOR (`NVDA` vs `XLK`), because SPY credits semiconductor beta as skill.
+   A sector ETF held outright keeps the broad market — buying `XLE` *is* the
+   energy call.
+3. **Student's t, and no p-value below n=5.** The normal approximation reported
+   p=0.029 where t says 0.081, and p=0.000 at n=3. A number that cannot mean
+   anything is not printed at all.
+
+**Read `excess_over_benchmark.per_basket` and nothing else.** The other figures
+are published so you can see how much they flatter.
+
+### `defect_sweep.py` — the questions, asked mechanically
+
+Twenty-two defects were found in a system with 645 passing tests, two of them
+introduced during the review itself. That means quality tracked how hard someone
+looked. But sorted by the QUESTION that surfaced each, **13 of 22 came from four
+questions a script can ask**:
+
+```
+Q1  what is the unit of observation?        §4.37 §4.47 §4.53 §4.56
+Q2  compared with what?                     §4.6  §4.44 §4.51 §4.57
+Q3  where else does this pattern live?      seven times
+Q5  has this test ever actually failed?     eight vacuous tests
+```
+
+Two design choices keep it usable: it reports **clusters only** (a lone fallback
+is usually right — the question is whether you got all of them), and it does not
+flag a module that demonstrably did the thinking. **Every line is a question,
+not a verdict.** A clean sweep means these four questions have no obvious
+answers left, not that the code is correct.
+
+### The sixth trap, earned the hard way
+
+The five traps above were about measuring the system. This one is about
+measuring the measurement:
+
+> **An instrument built to catch over-claiming will over-claim unless it is
+> checked the same way.** All three bugs found in the P&L instrument flattered
+> the result, and all three were caught by reading its output and asking whether
+> it could possibly be true — a losing book cannot "beat its benchmark", and
+> nothing is p=0.000 at n=3.

@@ -673,3 +673,125 @@ local modification.
 **On the next session, before anything else:** `ssh -A prodesk`, `git pull`,
 restart the engine, and confirm `brain_audit.py --section learning` reports the
 `expected_move` block.
+
+---
+
+## 13. The measurement arc — §4.53 to §4.58
+
+Everything from here was triggered by one delegated question: *should we place
+the first order on an unproven market path?* Answering it honestly required
+checking what the evidence was worth, and that check kept finding the same
+defect in modules nobody had looked at.
+
+### 13.1 The chain, and why each link forced the next
+
+| | Question asked | What it found |
+|---|---|---|
+| **§4.53** | Is `O39.SI`'s 7-day record evidence? | **No — n_independent = 1.** And no market in the reach table is distinguishable from chance. Retired a headline of my own review. |
+| **§4.55** | So should we trade it? | **No.** And the two questions being conflated — *trade* vs *path validation* — have different sizing, instruments and success criteria. |
+| **§4.54** | Why does this keep happening? | 13 of 20 defects came from **four questions a script can ask**. Built `defect_sweep.py`. |
+| **§4.56** | Has any of this made money? | Per-fill significant, **per-basket not**. 17 fills are 6 baskets are ~3 thematic bets. |
+| **§4.57** | Compared with *what*? | Benchmarked at last. Excess is **less** noisy than raw P&L, so the sleeve looked *better*: p=0.081. Plus **three bugs in my own instrument**. |
+| **§4.58** | Is that just semis beta? | **No.** Sector-adjusted, the mean moves 0.28pp and t not at all. |
+
+### 13.2 The recurring defect, now found in four modules
+
+`n` was raw symbol-days or raw fills in every one, when the samples overlap:
+
+```
+§4.37  scorecard    one standing view counted 65 times
+§4.47  calibrator   3 days from grading on ~4 independent observations
+§4.53  reach        7 symbol-days quoted as evidence for a live order
+§4.56  P&L          17 fills that are 6 baskets that are ~3 bets
+```
+
+Each was fixed where it was found and nowhere else, which is why the fourth was
+still live weeks after the first. **The generalisable version:** report
+`n_independent` beside every rate, **at the point of publication** — not at the
+point of reading, where it depends on the reader being suspicious.
+
+### 13.3 Three bugs in the instrument built to catch over-claiming
+
+Every one **flattered** the result, and all three were caught by reading the
+output and asking whether it could possibly be true.
+
+| Bug | Printed | Why wrong |
+|---|---|---|
+| Normal approximation, not Student's t | sleeve excess **p=0.029, significant** | At n=6 the SE is estimated from those six points. Student's t: **p=0.081**. The verdict turned on it. |
+| `significant` read as `good` | `crypto_event`, mean excess **−7.44%**, as *"beats its benchmark"* | A two-sided test says *not zero*, not *good*. |
+| No floor on n | crypto **p=0.000 at n=3** | Meaningless at 2 d.f. Now nothing prints below n=5 — **not a conservative p-value, none.** |
+
+The t-distribution was verified against textbook critical values (t=2.571/df=5
+→ p=0.050; t=2.000/df=60 → p=0.050) so it is not merely self-consistent.
+
+**And two tests for those fixes were themselves vacuous** — §4.44 for the third
+time. They grepped source for `MIN_N_FOR_P` and called `_student_p` directly, so
+the mutations *"set the floor to 0"* and *"revert to the normal approximation"*
+both passed. The fix was structural: `significance()` was lifted out of a
+closure to module level **so the test could drive the real function**. That is
+the same defect class as a function reading global state its caller cannot set.
+
+### 13.4 The one number worth watching
+
+```
+event sleeve, 6 baskets      t       p        mean excess
+raw P&L                    1.64   0.162
+vs BROAD benchmark         2.18   0.081      +2.54%/basket
+vs its own SECTOR          2.19   0.080      +2.26%/basket   (11/16 fills)
+```
+
+Not significant. But it has been measured in the right unit, benchmarked, and
+then attacked on its weakest point — and it held. **8 baskets settles it; there
+are 6.**
+
+Two caveats travel with it, printed beside the numbers because they are not
+optional: the benchmark is still a broad index for 5 of 16 fills, and **four
+books are tested**, so one p≈0.03 among them is roughly what chance produces.
+
+### 13.5 What I got wrong in this arc
+
+Consistent with §2, recorded at the same length as the wins.
+
+- **I expected benchmarking to shrink the edge** (semis ran, so excess should be
+  smaller). It did the opposite, because raw P&L carries the market factor as
+  noise. My intuition about the direction was simply wrong.
+- **I called the saturated gains "the single largest open risk to returns"**
+  twice, on §4.45's reading, before running the control that showed the 14× was
+  noise (§4.51).
+- **I nearly reported two data defects that were mine** — blank driver nodes and
+  a malformed journal row. Drivers are recorded on all 22 buys; my script had
+  conflated `realized`/`realised`. Checked before claiming, per §4.43.
+- **I flagged three `vols.get(sym, 0.02)` sites as one-of-N**, then measured:
+  all 281 asset symbols have a real vol, so those defaults never fire. **The
+  sweep asks; it does not convict.**
+
+---
+
+## 14. Where this leaves the system
+
+**What is now true that was not on 2026-08-21:**
+
+- Every rate in the audit is published with `n_independent` and a computed
+  significance verdict. Four modules, one rule.
+- P&L is measured in bets, benchmarked against the right yardstick, and reported
+  with its coverage.
+- The four questions that found 13 of 22 defects are a script.
+- 707 tests, both runners, both machines.
+
+**What is still true and uncomfortable:**
+
+- **No book has demonstrated edge.** The best case is p=0.080 on 6 baskets.
+- The graph's *judgement* is unchanged — no weight was hand-tuned, the formula
+  still runs on priors, 200 assets are inert.
+- 320 LLM edges are unreviewed and ungradeable.
+- Twenty-two defects surfaced in a system with 645 passing tests, two of them
+  introduced during the review.
+
+**The honest summary:** this session did not make the brain smarter. It made the
+brain *measurable*, and then used the measurements to remove three things that
+looked like edge and were not — the 14× calibration gap, the "best where it
+cannot trade" ranking, and the 17-fill t-statistic. What survived that is one
+number at p=0.080 with a fortnight to run.
+
+That is a worse-sounding and much more useful position than the one it started
+in.
