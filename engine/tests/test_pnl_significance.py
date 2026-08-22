@@ -203,6 +203,63 @@ def test_the_sleeve_needs_eight_baskets_to_settle_it():
     assert need == 8, need
 
 
+# --- the sector benchmark: is the edge just semis beta? (§4.58) ------------
+
+def test_an_etf_held_outright_keeps_the_broad_benchmark():
+    """The rule that makes this defensible rather than arbitrary.
+
+    Buying `XLE` IS the energy call, so the sector move is the thing being
+    judged, not a factor to strip out. Measuring XLE against XLE would be a
+    tautology returning guaranteed-zero excess.
+    """
+    import sys as _s
+    _s.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from ai_investing.brain.scorecard import sector_benchmark_for
+    for etf in ("XLE", "TAN", "USO"):
+        b, conf = sector_benchmark_for(etf)
+        assert conf == "broad", f"{etf} should be judged against the market"
+        assert b != etf, "a symbol may never be its own benchmark"
+
+
+def test_a_single_stock_is_judged_against_its_sector():
+    """NVDA up 6% in a week when XLK is up 5% is a 1% insight, not a 6% one.
+    Benchmarking it against SPY credits semiconductor beta as skill — the exact
+    way a long book in a rising sector looks talented (§4.6)."""
+    import sys as _s
+    _s.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from ai_investing.brain.scorecard import sector_benchmark_for
+    for sym, want in (("NVDA", "XLK"), ("AMD", "XLK"), ("000660.KS", "XLK"),
+                      ("JKS", "TAN"), ("JPM", "XLF")):
+        b, conf = sector_benchmark_for(sym)
+        assert (b, conf) == (want, "sector"), f"{sym} -> {(b, conf)}"
+
+
+def test_the_grading_benchmark_is_left_alone():
+    """`benchmark_for` feeds the live learning signal
+    (`event_outcomes.excess_ret`). Changing it would silently re-grade history,
+    so the sector table is ADDITIVE and read-only — used by the audit, never by
+    the scorer."""
+    import sys as _s
+    _s.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from ai_investing.brain.scorecard import benchmark_for
+    assert benchmark_for("NVDA") == "SPY", \
+        "benchmark_for changed — the live learning signal has been re-graded"
+    assert benchmark_for("JPM") == "SPY"
+
+
+def test_the_audit_reports_how_much_got_the_harder_test():
+    """Without this, a broad-market result reads as a sector-adjusted one. On
+    the live record only 11 of 16 fills have a sector yardstick; the other five
+    are ETFs held outright (correct) or names with no sector ETF in the price
+    history (`MP` — a real gap, and one the reader should see)."""
+    import ast
+    src = (Path(__file__).resolve().parents[2] / "scripts" / "brain_audit.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "pnl_significance")
+    assert "sector_adjusted_fills" in ast.unparse(fn), \
+        "the audit does not say how much of the sample got the sector test"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

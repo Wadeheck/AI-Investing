@@ -705,7 +705,7 @@ def pnl_significance(s, horizon: int) -> dict:
     # rising sector makes money without skill. Until a trade's return is
     # measured against what its own market did over the SAME window, no verdict
     # about edge means anything in either direction.
-    from ai_investing.brain.scorecard import benchmark_for   # noqa: PLC0415
+    from ai_investing.brain.scorecard import sector_benchmark_for  # noqa: PLC0415
     series: dict[str, list[tuple[str, float]]] = {}
     try:
         con = _ro(s.brain.db_path)
@@ -729,15 +729,19 @@ def pnl_significance(s, horizon: int) -> dict:
         return best
 
     def _bench_ret(sym: str, exit_day: str, held: int):
-        b = benchmark_for(sym)
+        """Excess against the SECTOR where one exists, the broad market
+        otherwise. A single stock measured against SPY has its sector beta
+        counted as skill — the exact way a long book in a rising sector looks
+        talented (§4.6, §4.57)."""
+        b, conf = sector_benchmark_for(sym)
         if not b or held is None:
-            return None, None
+            return None, None, conf
         entry_day = (datetime.fromisoformat(exit_day)
                      - timedelta(days=int(held))).date().isoformat()
         p0, p1 = _px_on(b, entry_day), _px_on(b, exit_day)
         if not p0 or not p1:
-            return b, None
-        return b, (p1 - p0) / p0
+            return b, None, conf
+        return b, (p1 - p0) / p0, conf
 
     out = {}
     for jf, book in (("event_journal.jsonl", "event_sleeve"),
@@ -770,20 +774,20 @@ def pnl_significance(s, horizon: int) -> dict:
             except (TypeError, ValueError):
                 continue
             ret = r.get("ret")
-            b, br = _bench_ret(r["symbol"], day, r.get("held_days"))
+            b, br, conf = _bench_ret(r["symbol"], day, r.get("held_days"))
             excess = (float(ret) - br) if (ret is not None and br is not None) else None
-            fills.append((day, pnl, excess, b))
+            fills.append((day, pnl, excess, b, conf))
         if not fills:
             continue
 
         by_day: dict[str, float] = {}
-        for d, v, _e, _b in fills:
+        for d, v, _e, _b, _c in fills:
             by_day[d] = by_day.get(d, 0.0) + v
-        per_fill = significance([v for _, v, _e, _b in fills])
+        per_fill = significance([v for _, v, _e, _b, _c in fills])
         per_basket = significance(list(by_day.values()))
 
         # The same two units again, but on EXCESS over each trade's own market.
-        ex = [(d, e) for d, _v, e, _b in fills if e is not None]
+        ex = [(d, e) for d, _v, e, _b, _c in fills if e is not None]
         ex_day: dict[str, list[float]] = {}
         for d, e in ex:
             ex_day.setdefault(d, []).append(e)
@@ -795,7 +799,11 @@ def pnl_significance(s, horizon: int) -> dict:
             excess_block["mean_excess_pct"] = round(
                 100 * sum(e for _, e in ex) / len(ex), 2)
             excess_block["benchmarks"] = sorted(
-                {b for _d, _v, e, b in fills if e is not None and b})
+                {b for _d, _v, e, b, _c in fills if e is not None and b})
+            # How much of the sample got the HARDER test. Without this, a
+            # broad-market result reads as a sector-adjusted one.
+            excess_block["sector_adjusted_fills"] = sum(
+                1 for _d, _v, e, _b, c in fills if e is not None and c == "sector")
 
         # The verdict is driven by EXCESS at BASKET level, and by nothing else.
         # A first version keyed it off RAW per_basket, which is wrong in both
@@ -812,7 +820,7 @@ def pnl_significance(s, horizon: int) -> dict:
         beat = bool(_eb.get("significant") and (_eb.get("mean") or 0) > 0)
         lags = bool(_eb.get("significant") and (_eb.get("mean") or 0) < 0)
         out[book] = {
-            "total_realised": round(sum(v for _, v, _e, _b in fills), 2),
+            "total_realised": round(sum(v for _, v, _e, _b, _c in fills), 2),
             "per_fill": per_fill,
             "per_basket": per_basket,
             "inflation": (round(per_fill["n"] / per_basket["n"], 1)

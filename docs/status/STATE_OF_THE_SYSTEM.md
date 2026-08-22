@@ -217,6 +217,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.55 | First order on an unproven path — decided | ✅ NO on the trade (1 independent observation); path validation kept as a separate, minimal test |
 | 4.56 | The P&L was the last layer still counting tickers instead of decisions | ✅ `brain_audit --section pnl` reports per-fill AND per-basket; all four books: edge not demonstrated |
 | 4.57 | Books benchmarked at last — plus three bugs in the instrument that measured it | ✅ Excess over benchmark, Student's t, sign checked, no p below n=5; sleeve +2.54%/basket at p=0.081, **8 baskets settles it** |
+| 4.58 | Is the sleeve's edge just semis beta? | ✅ No — sector-adjusted (11/16 fills vs XLK/TAN/XLF) the excess barely moves: 2.54%→2.26%, t 2.18→2.19 |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2707,6 +2708,55 @@ EXCESS over benchmark      2.18   0.081   +2.54%/basket
   possibly be true — a losing book cannot "beat its benchmark", and nothing is
   p=0.000 at n=3.
 
+### 4.58 The sleeve's edge is not semiconductor beta *(2026-08-22)*
+
+- **The caveat §4.57 printed beside its own result**, tested rather than left
+  standing: *"the benchmark is a broad index, so excess on a high-beta sector
+  name still contains a SECTOR factor — SPY is not the right yardstick for a
+  semis basket."* That was the single largest threat to the one promising
+  number in the system, and it needed answering **before** the 8-basket cue
+  fires, not after. Getting the yardstick right first means the next two
+  baskets are measured against something correct.
+- **The rule, and it is the substance rather than a lookup table:**
+
+| Held instrument | Measured against | Why |
+|---|---|---|
+| A sector/thematic **ETF** (`XLE`, `TAN`, `USO`) | the **broad market** | Buying the energy ETF *is* the sector call. The sector move is the thing being judged, not a factor to strip out. |
+| A **single stock** (`NVDA`, `JKS`, `JPM`) | its **sector** (`XLK`, `TAN`, `XLF`) | NVDA up 6% while XLK is up 5% is a 1% insight, not a 6% one. SPY credits semiconductor beta as skill. |
+
+- **The result: the edge survives, essentially unchanged.**
+
+```
+                       broad benchmark    sector-adjusted
+mean excess/basket          2.54%              2.26%
+t                            2.18               2.19
+p                           0.081              0.080
+fills vs their own sector    0/16              11/16
+```
+
+  Stripping the sector factor moved the mean by 0.28pp and the t-statistic not
+  at all. **Whatever the sleeve is doing, it is not riding semis.** That is a
+  materially stronger claim than §4.57 could make, and it is the first time a
+  number in this system has been attacked on its weakest point and held.
+- **Still not significant**, and the bar is unchanged: **8 baskets**, of which
+  there are 6.
+- **Additive, never a re-grade.** `sector_benchmark_for()` is a separate
+  function from `benchmark_for()`, which feeds the live learning signal
+  (`event_outcomes.excess_ret`). Changing that one would silently re-grade
+  history, so it is pinned by a test asserting `benchmark_for("NVDA") == "SPY"`.
+  The audit asks a harder question; the scorer keeps its own.
+- **Honest coverage: 11 of 16 fills, and the report says so.** The other five
+  are ETFs held outright (correct by design) and `MP`, a rare-earth name with
+  no sector ETF in the price history — a real gap the reader should see rather
+  than have averaged away. Reporting the excess without the coverage count
+  would let a broad-market result read as a sector-adjusted one.
+- **Three mutations verified**: an ETF benchmarked against itself, single stocks
+  falling back to broad, and the grading benchmark being quietly changed.
+- **Lesson.** A caveat you print beside a result is a promissory note. This one
+  was worth paying immediately, because the alternative was two more weeks of
+  data collected against a yardstick that might have been measuring the wrong
+  thing.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer
@@ -2759,7 +2809,7 @@ automatically, since several of these are judgement calls, not bugs.
 
 | Open item | Cue to revisit | Where to check |
 |---|---|---|
-| **The sleeve's excess return** (§4.57) | **8 baskets.** There are 6. At the observed effect size (+2.54%/basket, t=2.18) the eighth clears p<0.05 — about a fortnight. This is the single most informative cue open: it is the first thing in the system that might survive more data. Read `excess_over_benchmark.per_basket`, NOT raw P&L, and mind the two caveats printed beside it (broad-index benchmark, four books tested). | `brain_audit.py --section pnl` |
+| **The sleeve's excess return** (§4.57, §4.58) | **8 baskets.** There are 6. **Sector-adjusted as of §4.58**, so the yardstick is now correct before the data arrives rather than after. At the observed effect size (+2.54%/basket, t=2.18) the eighth clears p<0.05 — about a fortnight. This is the single most informative cue open: it is the first thing in the system that might survive more data. Read `excess_over_benchmark.per_basket`, NOT raw P&L, and mind the two caveats printed beside it (broad-index benchmark, four books tested). | `brain_audit.py --section pnl` |
 | Runner's own mark not yet SEEN carrying `basis` (§4.52) | **2026-08-23's mark**, and nothing sooner: the runner writes one mark per SGT day and today's (`day: 2026-08-22`) was already written before the fix deployed. The code is tested and mutation-verified; it has not yet been OBSERVED. That is the same distinction §4.52 itself was created by, so it gets its own cue rather than an assumption. If the 08-23 mark lands without `basis`, the fix does not work and the register entry is wrong. | `tail -1 data/stock_journal.jsonl` — expect `"basis": "live:10000"` (or `paper`). |
 | ~~Declared book basis not yet seen live~~ | **FIRED 2026-08-22, and the answer was NO — §4.52.** The mark landed without `basis`, which this row had said in advance would mean a live defect rather than a delay. It was: the runner's own journal was a fifth path the mixin never covered. Kept here as the first §4B cue to fire negative and be believed — **a cue is only worth writing if its negative answer is written down too.** | — |
 | Edge calibrator's first verdicts (§4.47) | `MIN_N = 60` at roughly one scoreable day per edge per activation puts the first verdicts about **2 months out (~mid-October 2026)**. When they arrive, read the FIRST batch by hand before trusting the next — a bar chosen on reasoning is still a bar nobody has watched fire. Check `structural` and `n_independent` are populated on every verdict. | `data/edge_calibration.json` → `supported` / `contradicted` leaving 0; `brain_audit.py --section learning`. |

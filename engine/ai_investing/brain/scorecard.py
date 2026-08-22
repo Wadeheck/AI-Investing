@@ -81,6 +81,57 @@ _BENCH = {
 BENCH_SYMBOLS = tuple(sorted(set(_BENCH.values())))
 
 
+# Sector yardsticks, for ATTRIBUTION rather than grading — see
+# `sector_benchmark_for`. Deliberately a separate table from `_BENCH`: that one
+# feeds the live learning signal and is not disturbed here.
+_SECTOR_BENCH = {
+    # semis / big tech — the sleeve's dominant theme
+    "NVDA": "XLK", "AMD": "XLK", "ASML": "XLK", "TSM": "XLK", "INTC": "XLK",
+    "MU": "XLK", "AVGO": "XLK", "MRVL": "XLK", "SMCI": "XLK", "QCOM": "XLK",
+    "000660.KS": "XLK", "005930.KS": "XLK", "2330.TW": "XLK",
+    # solar: the stock against the solar ETF, never against the broad market
+    "JKS": "TAN", "FSLR": "TAN", "ENPH": "TAN", "SEDG": "TAN",
+    # financials
+    "JPM": "XLF", "BAC": "XLF", "GS": "XLF", "C": "XLF", "WFC": "XLF",
+    # energy names against the energy ETF
+    "XOM": "XLE", "CVX": "XLE", "COP": "XLE", "SLB": "XLE",
+}
+
+
+def sector_benchmark_for(symbol: str) -> tuple[str | None, str]:
+    """The yardstick for ATTRIBUTING a realised trade, and how confident it is.
+
+    WHY THIS IS SEPARATE FROM `benchmark_for`. That function feeds the live
+    learning signal (`event_outcomes.excess_ret`), and changing it would
+    silently re-grade history. This one is additive and read-only: it exists so
+    `brain_audit --section pnl` can ask a HARDER question than "did the trade
+    beat SPY".
+
+    THE RULE, and it is the substance:
+
+      A SECTOR OR THEMATIC ETF held outright (`XLE`, `TAN`, `USO`) is measured
+      against the BROAD market. Buying the energy ETF *is* the sector call, so
+      the sector move is the thing being judged, not a factor to strip out.
+
+      A SINGLE STOCK is measured against its SECTOR. NVDA up 6% in a week when
+      XLK is up 5% is not a 6% insight — it is a 1% one. Benchmarking it
+      against SPY credits semiconductor beta as skill, which is exactly how a
+      long book in a rising sector looks talented (§4.6, §4.57).
+
+    Returns `(benchmark, confidence)` where confidence is "sector" when a real
+    sector yardstick was found and "broad" when it fell back — so a caller can
+    report how much of its sample got the harder test rather than assuming all
+    of it did.
+    """
+    sym = (symbol or "").upper()
+    if sym in BENCH_SYMBOLS:
+        return None, "self"
+    b = _SECTOR_BENCH.get(sym)
+    if b:
+        return b, "sector"
+    return benchmark_for(sym), "broad"
+
+
 def benchmark_for(symbol: str, market: str | None = None) -> str | None:
     """The yardstick a call is measured against.
 
