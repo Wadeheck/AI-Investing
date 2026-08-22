@@ -2865,6 +2865,96 @@ fills vs their own sector    0/16              11/16
   and *inverted* for curated research, and it had no way to tell them apart
   because nothing had ever asked it to.
 
+### 4.61 The NN gets its own book — and three ways it could not have been watched *(2026-08-22)*
+
+*(Numbering note: there is no §4.59. It was skipped by an off-by-one when §4.60
+was written. Recorded here so nobody spends time hunting for a missing entry.)*
+
+- **Not a defect report.** `NN_CHALLENGER.md` §8 listed a live per-cycle shadow
+  book as *not built*, named what it would take, and pointed at `runner.py`'s
+  `_run_shadow` as the pattern to follow. This builds it there:
+  `engine/ai_investing/learning/nn_shadow.py`.
+- **What it does.** Every cycle the net sees exactly the context the live engine
+  just used — same signals, same news, same brain field, same curated wiring —
+  forms its own view on every asset, trades a paper book, and journals each call
+  **beside the brain's own call for the same asset on the same cycle**. The
+  comparison is a row lookup, not a join across two systems on a timestamp,
+  which is where this kind of comparison usually rots.
+- **Observed live, not inferred.** First cycle after deploy: **275 decided, 275
+  primary, 12 positions opened, $1,739 cash.** A sampled row carried
+  `macro_linkage+0.26`, so the net is demonstrably reading the curated graph
+  wiring built earlier the same day.
+
+**The three things that would have made it unwatchable, each fixed:**
+
+1. **A net the gate refused was unreachable.** `result["model"]` is the CHOSEN
+   model, so when the deflated-Sharpe gate declined the NN — which it should,
+   and did — the fitted net existed only inside the optimiser and was thrown
+   away. **The one candidate most worth watching was the one nobody could
+   watch.** `result["nn_model"]` now exposes it win or lose, and
+   `--save-nn-shadow` persists it. **Adoption is untouched**: `adopted` and
+   `model_type` are unchanged and still gated on `nn_min_dsr`.
+2. **The persistence path could have reached the live formula.** The systemd
+   unit redirects `PARAMS_PATH`, but a redirect in a unit file is a convention
+   and conventions get edited. `--save-nn-shadow` now **refuses in code** any
+   destination whose path does not contain an `nn_shadow` directory, so a
+   mis-set env var cannot drop an unadopted net where the live engine loads its
+   formula. Verified both ways: refused into `/tmp/live/`, wrote into
+   `/tmp/data/nn_shadow/`.
+3. **The lane held a model loaded at process start.** A net written by Monday's
+   04:00 job would not have been traded until the engine next restarted, and
+   "when does the engine restart" is not a property anyone tracks. `refresh()`
+   stats the net each cycle and reloads on mtime change; the book survives the
+   swap because `_load` restores it from `nn_book.json`. **This fired on its
+   first real opportunity** — `[nn-shadow] picked up a newly fitted net (49
+   params)` — which is the only reason the lane was observed working at all
+   rather than on 2026-08-24.
+
+- **ISOLATION IS STRUCTURAL, five ways, each pinned by a test:** its own
+  `PaperBroker`; its own state under `data/nn_shadow/` and nowhere else (a test
+  asserts a cycle leaves the live data dir byte-identical); its own model object
+  so `runner.model`/`runner.rls` cannot be perturbed; `UserViews()` empty so it
+  is judged on its own read; and a hard `try/except` at the call site.
+  **`_run_shadow` is NOT guarded that way** — a second shadow lane must never be
+  able to cost a live cycle. An unpriced order is dropped, not filled at 0.0,
+  because that sentinel is how `shadow.json` came to hold NaN (§4A).
+- **The counting unit is (symbol, day), designed in from the start.** The engine
+  cycles every ~8 minutes, so a row per decision per cycle would re-log a
+  standing view ~65 times a day against the same forward return — §4.37 exactly.
+  Every row is written; one per (symbol, SGT day) carries `is_primary`.
+  `_primary_symbols_for` reads **disk**, not memory, so a mid-day restart cannot
+  mint a second primary — that defect returning through the back door would look
+  entirely correct row by row. Measured on the live journal: **275 rows, 275
+  primaries, max 1 per (symbol, day).**
+- **FOUR outcomes, because a record that counts only what it took is a
+  brochure:** `captured` / `wrong` / **`missed`** (FLAT while the asset moved
+  >2%) / `avoided`. `missed` is the opportunity cost a P&L-only record cannot
+  show: a book that never trades has no losses and looks disciplined. The 2%
+  threshold is load-bearing — without it every FLAT call scores as a miss and
+  the net is pushed to be permanently long everything.
+- **What the first cycle already shows, and what it does NOT.** The net
+  disagreed with the brain on **157 of 275** calls (57%), is markedly more
+  long-biased (LONG 113 vs 59, FLAT 103 vs 132) and sized **~7× larger** on the
+  row inspected (0.141 vs 0.020, on an E[r] 3.5× the brain's). That is
+  simultaneously what an over-fitted 49-parameter model looks like **and** what a
+  genuinely better model looks like; the disagreement rate cannot separate them.
+  `missed` versus `wrong` can, from 2026-08-27. See the §4B cue.
+- **Deliberately NOT built: online learning for the net.** The journal
+  accumulates the labelled record a future refit can consume, but the net does
+  not update from its own shadow outcomes between weekly runs. §8's first bullet
+  stands: at this sample size an online-updated MLP would fit noise **while
+  looking like it was learning**, which is worse than not learning. More
+  independent observations (Track A) is the fix; a bigger network is not.
+- **Also fixed, found while verifying the above:** the NN challenger's two
+  systemd units existed only on the box. All 35 other `ai-investing-*` units are
+  tracked in `deploy/systemd/`, and these two were the sole exception — while
+  carrying three of the four isolation guarantees. Copied in verbatim and diffed
+  byte-for-byte against the deployed files (`281c7a1`).
+- **Lesson.** A gate that refuses a candidate is doing its job; a system that
+  then *discards* the candidate destroys the only evidence that could show
+  whether the refusal was right. Refusal and erasure are different acts and the
+  code was performing both with one line.
+
 ## 4A. Open defects — known, NOT fixed
 
 The register above is history. This is the live list, and it is the honest answer

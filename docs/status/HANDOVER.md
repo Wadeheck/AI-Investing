@@ -1,6 +1,8 @@
 # Handover — resume here
 
-**Written 2026-08-22. HEAD `39384dd`, deployed and running on the ProDesk.**
+**Updated 2026-08-22 evening. HEAD `519065e`, deployed and running on the
+ProDesk.** *(An earlier version of this file said `39384dd`; the afternoon
+added eleven commits across two concurrent workstreams — see §0.)*
 
 This is the *resume-here* document. It is deliberately short and it points at
 the detail rather than repeating it.
@@ -12,6 +14,70 @@ the detail rather than repeating it.
 | **Why any of it was done** | [`BRAIN_REVIEW_2026-08-21.md`](BRAIN_REVIEW_2026-08-21.md) — the analysis. |
 | **What was done, and what I got wrong** | [`SESSION_REVIEW_2026-08-21.md`](SESSION_REVIEW_2026-08-21.md) — the work record. §2 is the mistakes, §7 is the open split, §11 is the delegated decision. |
 | **How to measure any of this yourself** | [`../design/AUDITING.md`](../design/AUDITING.md), then `scripts/brain_audit.py`. |
+
+---
+
+## 0. What changed on 2026-08-22 afternoon — TWO new subsystems
+
+Both are live on the ProDesk. Both are recorded in full in the register; this
+section is the map, not the detail.
+
+### 0.1 The CURATED tier — §4.60, DIGESTION_SPEC §A12
+
+**You can now hand the brain research you picked yourself, and it is not scored
+like a feed.** Two doors, both landing at full authority (`provenance: "user"`,
+confidence 1.0, no daily budget, and the calibrator may promote but **never
+demote** it):
+
+```bash
+/submit <text>                                              # Telegram, short notes
+scp piece.md prodesk:~/Projects/AI-Investing/data/curated/  # long-form
+python3 scripts/brain_audit.py --section graph              # user_edges / user_nodes
+```
+
+Five gates were measured obstructing this and all five are gone — the worst was
+a **400-character prompt cap that discarded ~90% of a long-form piece before
+anything judged it.** Live as of this session: **33 user edges, 8 user nodes**,
+including a compute-securitisation chain that reaches 39 tradable assets.
+
+**The audit line is the whole control surface, deliberately.** Nothing else will
+tell you if a piece was misread, because the calibrator is forbidden from
+disagreeing with these edges.
+
+### 0.2 The NN shadow book — §4.61, NN_CHALLENGER.md §8
+
+A second workstream built a neural-net challenger for the decision formula
+(`6ad02de`, `e65c78c`, `b5df6ad`). It is **shadow only and has never been
+adopted** — the deflated-Sharpe gate refused it at DSR 0.034 against a 0.75 bar,
+which is the gate working, not failing.
+
+On top of that, the net now has **its own trading book**: it decides on every
+asset every cycle from the same inputs the brain gets, trades a paper book it
+cannot escape, and journals each call beside the brain's own call on the same
+row. First cycle: **275 decisions, 57% disagreement with the brain.**
+
+```bash
+python3 scripts/nn_shadow_report.py     # first gradable rows: 2026-08-27
+```
+
+**It cannot touch what trades.** Five structural barriers, each pinned by a test
+(§4.61). Verified after a full challenger run: `data/formula.json` still carries
+no `model_type`.
+
+### 0.3 The lesson that cost the most time today
+
+**Three separate staleness bugs, one class.** A ProDesk process running
+pre-deploy code for ~90 minutes; a graph file read before the cycle had written
+it; a shadow lane holding a model loaded at process start. Each looked like *"the
+feature does not work"* and was really *"what you are reading is older than what
+you changed."*
+
+> **`git pull` updates files on disk. The running process keeps its old modules.
+> Checking `git rev-parse HEAD` proves nothing about what is executing.**
+
+After any deploy touching `engine/`, compare the service's
+`ActiveEnterTimestamp` against the commit time, restart **once**, then *observe*
+the behaviour in `data/engine.log` rather than inferring it.
 
 ---
 
@@ -376,6 +442,23 @@ countable question with a date attached, the yardstick it will be judged by is
 correct, and the remaining backlog improves a system whose central claim is
 about to be settled either way.
 
+### 6.0 Three dated things are now waiting, not one
+
+The afternoon added two subsystems (§0), and each arrived with its own cue. All
+three are *waits*, and none of them is brought closer by working on it:
+
+| What | When | Read |
+|---|---|---|
+| **The sleeve's eighth basket** | ~a fortnight | `brain_audit.py --section pnl` → `excess_over_benchmark.per_basket` |
+| **The NN shadow's first grades** | **2026-08-27** | `scripts/nn_shadow_report.py` — read `n_independent`, never `graded` |
+| **The curated tier on a real piece** | next time you drop one | `brain_audit.py --section graph` → `user_edges` |
+
+**All three have their negative answer written down in advance** (§4B), which is
+the only reason a cue is worth writing. For the NN specifically: a 57%
+disagreement rate with the brain is what an over-fitted 49-parameter model looks
+like **and** what a genuinely better model looks like. `missed` versus `wrong`
+separates them; the disagreement rate cannot.
+
 ### 6.1 If you want work in the meantime
 
 **The self-wiring BAR** (§4A) — the highest-value open item and genuinely a
@@ -398,4 +481,16 @@ all**, given that nothing can grade it.
 - **Do not size up on the sleeve** if the eighth basket clears p<0.05. One
   significant book among four tested is roughly what chance produces; the
   correct response to the cue firing is *keep measuring*, not *allocate*.
+- **Do not lower `nn_min_dsr`** to get the NN adopted (§4.61). It was refused at
+  DSR 0.034 against a 0.75 bar *while beating the linear model on raw Sharpe* —
+  that gap is the whole point of deflating, and the refusal is the gate working.
+  The net now has its own book precisely so it can be watched without being
+  trusted. NN_CHALLENGER.md §7 says the same thing at length; read it twice
+  before touching the bar.
+- **Do not read the NN's disagreement rate as evidence** of anything. 57% says
+  it is a different model, not a better or worse one.
+- **Do not trust a curated edge because it is confidence 1.0.** That number
+  records who asserted it, not whether it is true — the calibrator is forbidden
+  from demoting it, so `brain_audit --section graph` is the only thing standing
+  between a misreading and permanent wiring.
 
