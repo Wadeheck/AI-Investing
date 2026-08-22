@@ -37,12 +37,28 @@ def _read(name: str) -> dict:
         return {}
 
 
+def _read_path(path: str) -> dict:
+    try:
+        with open(path) as fh:
+            return json.load(fh) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def collect() -> dict:
-    bt, formula = _read("backtest.json"), _read("formula.json")
+    bt = _read("backtest.json")
+    # settings.params_path, NOT data_dir/formula.json: the shadow curation job
+    # redirects PARAMS_PATH so it cannot touch the live formula, and building the
+    # path by hand made this read the (absent) shadow file and report it as the
+    # live model at "version None". Name the file it actually read so which
+    # formula this describes is never a guess.
+    formula = _read_path(settings.params_path)
     nn = bt.get("nn_challenger") or {}
     out = {
         "backtest_updated": bt.get("updated"),
-        "live_model_type": formula.get("model_type", "linear"),
+        "model_path": settings.params_path,
+        "model_present": bool(formula),
+        "live_model_type": formula.get("model_type", "linear") if formula else None,
         "live_model_version": (formula.get("model") or {}).get("version"),
         "adopted_model_type": bt.get("model_type"),
         "nn_attempted": bool(nn),
@@ -83,7 +99,15 @@ def collect() -> dict:
 
 def render(r: dict) -> str:
     L = [f"NN CHALLENGER REPORT  (backtest written {r.get('backtest_updated') or 'never'})", ""]
-    L.append(f"  live model on disk : {r['live_model_type']} (version {r['live_model_version']})")
+    if r["model_present"]:
+        L.append(f"  model at {r['model_path']}")
+        L.append(f"    -> {r['live_model_type']} (version {r['live_model_version']})")
+    else:
+        L.append(f"  no model file at {r['model_path']}")
+        L.append("    -> nothing has been adopted at this path (expected for the "
+                 "shadow job,")
+        L.append("       which redirects PARAMS_PATH precisely so it cannot adopt "
+                 "anything)")
     if not r["nn_attempted"]:
         L += ["", "  The NN challenger has not been run.",
               "  Enable it with LEARN_NN_ENABLED=true and re-run:",
