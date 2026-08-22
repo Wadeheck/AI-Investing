@@ -212,6 +212,7 @@ what is still broken — read that one first if something is wrong now.
 | 4.50 | A cleanup rule I wrote deleted Procter & Gamble from the live graph | ✅ `&` survives normalisation as `and`; node and edge restored; every `is_non_entity` caller must pass a type |
 | 4.51 | "The model under-predicts by 14x" was noise; and every equity claim was sized off one 2% constant | ✅ Gains NOT raised, with the noise floor now audited beside the ratio; `_shock_assets` enriched so vol is the asset's own |
 | 4.52 | The basis cue fired negative: the runner's own equity journal was the fifth path | ✅ `stock_journal.jsonl` marks now declare `basis` + `basis_changed`, seeded from the file |
+| 4.53 | The reach table used to justify a first live order was noise, ranked | ✅ `n_independent` + computed `significant` on every row; the "best where it cannot trade" finding retired |
 
 ### 4.1 The live tagger discarded 57% of the news *(2026-08-03)*
 
@@ -2459,6 +2460,51 @@ invest_journal.jsonl  ... "event": "mark", "basis": "BookBroker:book"  DECLARED
   evening before and false the morning after. **A cue is only worth writing if
   its negative answer is written down too** — that row said in advance what a
   missing field would mean, so there was nothing left to argue about.
+
+### 4.53 The table used to justify a first live order was noise, ranked *(2026-08-22)*
+
+- **Context.** Asked to decide, as a trader would, whether to place the first
+  order on an unproven market path (`O39.SI` — OCBC, 7 symbol-days, hit 0.86).
+  Before deciding I checked what the sample was worth. It is worth nothing, and
+  neither is the rest of the table.
+- **The counting unit, again.** `reach` reported raw **symbol-days** as `n`.
+  These are daily readings of a **5-day forward return**, so consecutive rows
+  overlap almost entirely and the independent count is `n / HORIZON`:
+
+```
+market  raw n   hit    n_ind   p       significant
+KS          9   0.889      2   0.250   False
+SI          8   0.875      2   0.250   False
+HK         16   0.562      3   0.500   False
+US         51   0.529     10   0.623   False
+```
+
+  **Not one row is distinguishable from a coin flip.** Every entry in
+  `correct_but_never_held` — including `O39.SI` — has **n_independent = 1**.
+- **What this retires.** The finding that *"the brain's accuracy ranks INVERSELY
+  with its ability to place the order — best in Korea and Tokyo, both
+  unreachable, worst in the US, its only open market"*. That is a headline of
+  `BRAIN_REVIEW_2026-08-21` §5.1, it is quoted in §4A's non-USD row, and it was
+  the argument for going live on a new venue. It is **noise, ranked** — the
+  markets with the highest hit rates are simply the ones with the fewest
+  observations, which is what small samples do.
+- **Third module with the same defect.** §4.37 fixed pseudo-replication in the
+  scorecard; §4.47 fixed it in the calibrator. This section — **the one actually
+  used to decide which market to trade** — was the seam between them. Seventh
+  instance of one-of-N-paths-fixed, and the first that was about to move money.
+- **The bar, in the unit a reader will have.** A 0.86 hit rate needs **8
+  independent observations** to clear p<0.05 — which is **40 consecutive
+  symbol-days**. `O39.SI` has 7.
+- **Fix.** Every row now carries `n_independent`, `p_value` and a computed
+  `significant` verdict, and `hit` is not published without them. Mutation
+  testing caught two weak guards on the way: a hardcoded `significant: False`
+  passed the first version, and removing the market-level `/ horizon` passed the
+  second because the symbol-level division kept it green — the same
+  one-of-N-paths shape inside the test for one-of-N-paths.
+- **Lesson.** The most dangerous number in this system is a high hit rate on a
+  small sample, because it is indistinguishable from skill precisely where the
+  temptation to act is greatest. **Report `n_independent` beside every rate, at
+  the point of publication.** Three modules, three times, same fix.
 
 ## 4A. Open defects — known, NOT fixed
 

@@ -491,10 +491,29 @@ def reach(s, horizon: int) -> dict:
     """Correct calls the books could not act on — by market, and by whether the
     symbol was EVER held.
 
-    The finding this exists to keep visible: on 2026-08-21 the brain's
-    conviction-long hit-rate was highest in Korea (0.983) and Tokyo (0.985),
-    both unreachable, and LOWEST in the US (0.584), its only open market —
-    inversely ranked with its ability to place the order.
+    THE FINDING THIS USED TO KEEP VISIBLE, AND WHY IT IS NOW RETIRED. This
+    section existed to show that the brain's conviction-long hit-rate ranked
+    INVERSELY with its ability to place the order — best in Korea and Tokyo,
+    both unreachable, worst in the US, its only open market. That claim was
+    used, on 2026-08-22, to argue for a first live order on an unproven market
+    path.
+
+    It does not survive its own sample. These are daily readings of a 5-day
+    forward return, so consecutive rows overlap almost entirely and the
+    independent count is n/HORIZON:
+
+        market  raw n  hit    n_eff   p(n_eff)
+        KS          9  0.889    1.8     0.250
+        SI          8  0.875    1.6     0.750
+        HK         16  0.562    3.2     0.500
+        US         51  0.529   10.2     0.623
+
+    Not one row is distinguishable from a coin flip. The "inverse ranking" was
+    noise, ranked. §4.37 fixed this counting defect in the scorecard and §4.47
+    fixed it in the calibrator; this section — the one actually used to argue
+    about which market to trade — never got it. So every row now carries
+    `n_independent` and a `significant` verdict, and `hit` is not reported
+    without them.
     """
     data = Path(s.brain.db_path).parent
     held: set[str] = set()
@@ -534,12 +553,26 @@ def reach(s, horizon: int) -> dict:
         by_market[market(sym)].append((hit, exc))
         by_symbol[sym].append((hit, exc))
 
+    def _binom_p(k: int, n: int) -> float:
+        """One-sided P(X >= k) under a fair coin. The honest test for a hit
+        rate, and the one §4.37 established: `hit` is Bernoulli, so a t-test
+        degenerates on it."""
+        return sum(math.comb(n, i) for i in range(k, n + 1)) / (2 ** n)
+
     markets = {}
     for m, vals in sorted(by_market.items(), key=lambda kv: -len(kv[1])):
-        markets[m] = {"n": len(vals),
-                      "hit": round(sum(v[0] for v in vals) / len(vals), 3),
-                      "avg_excess_pct": round(
-                          100 * sum(v[1] for v in vals) / len(vals), 2)}
+        n, hit = len(vals), sum(v[0] for v in vals) / len(vals)
+        # Daily readings of a HORIZON-day forward return overlap almost
+        # entirely. n/HORIZON is what the sample is actually worth.
+        n_eff = max(1, round(n / horizon))
+        p = _binom_p(round(hit * n_eff), n_eff)
+        markets[m] = {
+            "n": n,
+            "n_independent": n_eff,
+            "hit": round(hit, 3),
+            "p_value": round(p, 3),
+            "significant": bool(p < 0.05),
+            "avg_excess_pct": round(100 * sum(v[1] for v in vals) / len(vals), 2)}
 
     never = []
     for sym, vals in by_symbol.items():
@@ -548,11 +581,22 @@ def reach(s, horizon: int) -> dict:
         hit = sum(v[0] for v in vals) / len(vals)
         if hit < 0.6:
             continue
-        never.append({"symbol": sym, "days": len(vals), "hit": round(hit, 2),
+        n_eff = max(1, round(len(vals) / horizon))
+        never.append({"symbol": sym, "days": len(vals),
+                      "n_independent": n_eff,
+                      "hit": round(hit, 2),
+                      "p_value": round(_binom_p(round(hit * n_eff), n_eff), 3),
+                      "significant": bool(_binom_p(round(hit * n_eff), n_eff) < 0.05),
                       "avg_excess_pct": round(
                           100 * sum(v[1] for v in vals) / len(vals), 2)})
     return {"by_market": markets,
             "symbols_traded_ever": len(held),
+            "horizon_days": horizon,
+            "note": ("`days` is symbol-days; `n_independent` = days/horizon is what "
+                     "the sample is worth, because daily readings of a forward return "
+                     "overlap. A row with significant=false is NOT a missed "
+                     "opportunity — it is a coin flip that landed heads. Do not size "
+                     "a trade on one."),
             "correct_but_never_held": sorted(
                 never, key=lambda r: -r["avg_excess_pct"] * r["days"])}
 
