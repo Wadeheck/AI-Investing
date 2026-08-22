@@ -135,11 +135,15 @@ def test_curated_items_are_shown_the_entity_ids_they_may_wire_to():
             "source": "reuters"}
 
     pc = ev_mod._prompt([curated], "compute_securitization", g)
-    assert "entities in the graph you MAY wire to" in pc and "blue_owl_capital" in pc, \
+    assert "entity ids that MATCHED" in pc and "blue_owl_capital" in pc, \
         "a curated piece must be told the exact hub ids it can wire to"
+    assert "IGNORE any that matched a common word" in pc, \
+        ("alias matching is substring-based, so `near`/`link` match the words "
+         "'near term' and 'link'. A curated edge is confidence 1.0 and can "
+         "never be demoted, so the shortlist must be a lookup, not an order.")
 
     pw = ev_mod._prompt([wire], "compute_securitization", g)
-    assert "entities in the graph" not in pw, \
+    assert "entity ids that MATCHED" not in pw, \
         "feed items keep the asset exclusion; it is what bounds the prompt"
 
 

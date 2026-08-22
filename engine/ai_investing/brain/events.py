@@ -330,8 +330,19 @@ def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
                     hubs = [n for n in matched
                             if graph.nodes[n].type == "asset"][:12]
                     if hubs:
-                        s += ("\n   (entities in the graph you MAY wire to: "
-                              f"{', '.join(hubs)} — use these exact ids)")
+                        # Same "verify" caveat as the mentions hint above, and
+                        # for a sharper reason. Alias matching is substring-based,
+                        # so ordinary English words collide with ticker slugs:
+                        # this line matched `near` (NEAR protocol) and `link`
+                        # (Chainlink) out of the words "near term" and "link".
+                        # A curated edge is written at confidence 1.0 and the
+                        # calibrator may never demote it, so an unchallenged
+                        # shortlist is exactly where a permanent bad wire would
+                        # come from. The list is a lookup, never an instruction.
+                        s += ("\n   (entity ids that MATCHED this text — use the"
+                              " exact id when the piece really means that firm,"
+                              " and IGNORE any that matched a common word rather"
+                              f" than a company: {', '.join(hubs)})")
             except Exception:
                 pass
         return s
