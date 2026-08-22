@@ -48,11 +48,24 @@ EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency"
 # credibility 1.0 and are never marked noise. See DIGESTION_SPEC §A12.
 CURATED_SOURCES = ("user_curated",)
 
-# Per-item ceiling on curated body text reaching the extractor. 12k chars is
-# ~3k tokens — room for a long-form analysis, while leaving the prompt safe for
-# the local qwen3:8b fallback when the cloud key is exhausted. Compare 400 for a
-# wire item, whose body is a lede restating its own headline.
-CURATED_PROMPT_CHARS = 12000
+# Per-item ceiling on curated body text reaching the extractor, and a TOTAL
+# across every curated item in one prompt.
+#
+# 12k was the first guess and it bound almost immediately: a digest carrying a
+# deal chain, its mechanisms and the corpus cross-check ran 12.5k, and the
+# choice became "cut real analysis" or "raise the number". Cutting analysis to
+# fit a guess is the 400-char bug again with a bigger constant.
+#
+# 20k is ~5k tokens — comfortable for the cloud models that run FIRST
+# (Anthropic > BytePlus > DeepSeek). The local qwen3:8b fallback is the only
+# context-constrained reader, it is a degraded path already, and it is reached
+# only when every cloud key is exhausted.
+#
+# The TOTAL is what actually protects the prompt: one long piece is fine, but
+# forty dropped at once would not be. Per-item alone cannot bound that, and the
+# per-item cap was doing a job it could not do.
+CURATED_PROMPT_CHARS = 20000
+CURATED_PROMPT_TOTAL = 45000
 
 
 def is_curated(source: str) -> bool:
@@ -250,6 +263,11 @@ def credibility(event: dict, all_headlines: list[dict], settings=None) -> float:
 
 
 def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
+    # Remaining TOTAL curated budget for this prompt. Curated items are ordered
+    # first by `build_market_context`, so the newest research gets the budget
+    # and any overflow lands on the oldest — which is the right way round.
+    budget = [CURATED_PROMPT_TOTAL]
+
     def _line(i: int, h: dict) -> str:
         s = f"{i}. [{h.get('source', '?')}] {h['title']}"
         extra = (h.get("body") or h.get("summary") or "").strip()
@@ -261,8 +279,10 @@ def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
         # never rejected — it was never read. Curated content passes whole.
         if extra:                     # body/summary carries the WHO/HOW the
             if is_curated(h.get("source", "")):
-                body = extra[:CURATED_PROMPT_CHARS]
-                if len(extra) > CURATED_PROMPT_CHARS:
+                allow = min(CURATED_PROMPT_CHARS, max(0, budget[0]))
+                body = extra[:allow]
+                budget[0] -= len(body)
+                if len(extra) > allow:
                     # NOT silent. An unbounded prompt overflows the local
                     # qwen3:8b fallback, the call fails, and extraction drops to
                     # `_fallback_extract` — which would lose the whole piece
@@ -270,8 +290,8 @@ def _prompt(headlines: list[dict], node_ids: str, graph=None) -> str:
                     # difference is that this one announces itself, in the
                     # prompt and on the headline, where truncation at 400 did
                     # neither.
-                    body += (f"\n   [TRUNCATED at {CURATED_PROMPT_CHARS} chars of "
-                             f"{len(extra)} — extract what you can from the above]")
+                    body += (f"\n   [TRUNCATED at {allow} chars of {len(extra)} "
+                             f"— extract what you can from the above]")
                     h["curated_truncated"] = len(extra)
             else:
                 body = extra[:400]

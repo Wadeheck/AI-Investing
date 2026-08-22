@@ -69,6 +69,43 @@ def test_a_curated_body_past_the_ceiling_says_so_out_loud():
         "the headline must carry the fact, so a caller can surface it"
 
 
+def test_the_total_curated_budget_bounds_the_prompt_not_the_per_item_cap():
+    """A per-item cap cannot bound a prompt. Forty files dropped at once, each
+    legally under the per-item ceiling, would still overflow — so the per-item
+    number was doing a job it could not do, and shrinking it to compensate just
+    truncates single pieces for a burst that may never happen.
+
+    The TOTAL is the real guard. Curated items are ordered newest-first by
+    `build_market_context`, so the budget goes to the newest research and any
+    overflow lands on the oldest, which is the right way round.
+    """
+    Q = "§§"                       # cannot occur in the prompt boilerplate
+    def mk(n, chars):
+        return {"title": f"t{n}", "source": f"user_curated:f{n}.md",
+                "summary": Q * (chars // 2)}
+
+    heads = [mk(i, 15000) for i in range(5)]        # 75k requested vs 45k budget
+    prompt = ev_mod._prompt(heads, "oil_supply", None)
+    assert prompt.count(Q) * 2 <= ev_mod.CURATED_PROMPT_TOTAL, \
+        "the total budget must bound what reaches the model"
+    assert sum(1 for h in heads if h.get("curated_truncated")) == 2, \
+        "items past the budget must be ANNOUNCED, never dropped silently"
+
+    # and one long piece well under the per-item cap is untouched
+    solo = ev_mod._prompt([mk(9, 15000)], "oil_supply", None)
+    assert solo.count(Q) * 2 == 15000 and "TRUNCATED" not in solo
+
+
+def test_raising_the_ceiling_did_not_loosen_the_wire_cap():
+    """The curated ceiling moved 12k -> 20k because a real digest hit it. That
+    must not leak into feed items, whose 400 chars is correct and is what keeps
+    a 100-headline prompt affordable."""
+    Q = "§§"
+    w = ev_mod._prompt([{"title": "w", "source": "reuters", "summary": Q * 2500}],
+                       "oil_supply", None)
+    assert w.count(Q) * 2 == 400, "a wire body is a lede; 400 is right for it"
+
+
 # --- 2. credibility must not subtract from a human judgement ----------------
 
 def test_curated_content_is_never_damped_by_the_noise_formula():
