@@ -682,13 +682,19 @@ def pnl_significance(s, horizon: int) -> dict:
     §4.56. This is the question the whole system exists to answer, and it had
     never been asked with the counting discipline the rest of the audit uses.
 
-    THE UNIT IS THE BET, NOT THE FILL. The event sleeve's record read 17 trades,
-    +$1,196, t=2.29, p=0.022 — significant. But it enters and exits a BASKET:
-    the 17 fills land on 6 distinct days, three names at a time, and the names
+    THE UNIT IS THE BET, NOT THE FILL. The event sleeve's record reads 16 fills,
+    +$1,146, t=2.19, p=0.045 — significant. But it enters and exits a BASKET:
+    those fills land on 6 distinct days, three names at a time, and the names
     within a basket are correlated (`NVDA, AMD, 000660.KS` is one semis bet
-    wearing three tickers). Counted as baskets it is t=1.74, p=0.082 — not
+    wearing three tickers). Counted as baskets it is t=1.64, p=0.162 — not
     significant. Counted as THEMES (energy, solar/materials, semis) it is n=3,
     at which nothing can be significant.
+
+    (Figures above are the CURRENT ones. The first version of this docstring
+    quoted 17 trades / +$1,196 / p=0.022 / baskets p=0.082 — the pre-bugfix
+    counts and normal-approximation p-values. Corrected 2026-08-22; see
+    AUDITING.md's seventh trap. If you change what this function measures,
+    change these too, or the next reader inherits the same problem.)
 
     Same defect as §4.37, §4.47 and §4.53, now at the portfolio level: the
     thing being counted is not the thing that varies independently.
@@ -810,8 +816,13 @@ def pnl_significance(s, horizon: int) -> dict:
         # directions: raw P&L in a rising sector is beta (§4.6), and raw P&L is
         # NOISIER than excess because the market factor it contains swamps the
         # residual. On the live record the sleeve is not significant raw
-        # (p=0.101) and IS significant on excess (p=0.029) — same trades. The
-        # measure that removes the common factor is the one that can see skill.
+        # (p=0.162) and moves MUCH closer on excess (p=0.080) — same trades.
+        # It does not cross 0.05, and the verdict is still "edge not
+        # demonstrated"; the point is the DIRECTION of the move. Removing the
+        # common factor is what lets a residual be seen at all.
+        # (This comment previously read "IS significant on excess (p=0.029)".
+        # Those were normal-approximation values; the excess figure has never
+        # cleared the bar under Student's t. Corrected 2026-08-22.)
         # SIGNIFICANT AND POSITIVE. The first version tested only significance,
         # and duly reported `crypto_event` — mean excess **-7.44%** — as
         # "beats its benchmark". A two-sided test says "not zero"; it does not

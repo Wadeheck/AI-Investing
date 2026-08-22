@@ -251,9 +251,10 @@ The question the system exists to answer, and the last measurement layer that
 was still flattering itself. Three rules, each of which changed a verdict when
 it was missing:
 
-1. **Count bets, not fills.** The event sleeve's 17 fills land on 6 days, three
+1. **Count bets, not fills.** The event sleeve's 16 fills land on 6 days, three
    correlated names at a time. `NVDA, AMD, 000660.KS` is one semis bet wearing
-   three tickers. Per-fill: p=0.028, significant. Per-basket: not. Same money.
+   three tickers. Per-fill: p=0.045, significant. Per-basket: p=0.162, not.
+   Same money.
 2. **Benchmark, and use the right one.** A single stock is measured against its
    SECTOR (`NVDA` vs `XLK`), because SPY credits semiconductor beta as skill.
    A sector ETF held outright keeps the broad market — buying `XLE` *is* the
@@ -295,3 +296,34 @@ measuring the measurement:
 > the result, and all three were caught by reading its output and asking whether
 > it could possibly be true — a losing book cannot "beat its benchmark", and
 > nothing is p=0.000 at n=3.
+
+### The seventh trap, found 2026-08-22 by re-running the audit
+
+> **Fixing an instrument does not retract the numbers it already published.**
+
+`f1f1c51` published §4.56 with normal-approximation p-values. `3608083` fixed
+the arithmetic in `significance()` — and stopped there. The corrected instrument
+and the stale figures then coexisted for four commits, in four places, including
+**this file** and including the `--section pnl` write-up four lines above the
+rule it was breaking:
+
+```
+                     published    instrument now says
+sleeve per_fill        0.028            0.0447
+sleeve per_basket      0.101            0.1619
+crypto_event per_fill  0.009 (sig)      none — n<5, and significant=false
+```
+
+Every error ran in the flattering direction, because that is what the normal
+approximation does at small n — which is the sixth trap again, one level up.
+
+**This is the one-of-N-paths shape** (HANDOVER §2, register §4.14/§4.23/§4.36/
+§4.49/§4.51/§4.52), reaching the *documents* rather than the code. So the
+standing question — *where else does this pattern live?* — has a second half:
+
+> When a measurement changes, grep for the old number. The instrument is one
+> path; every doc that already quoted it is another.
+
+```bash
+grep -rn "0\.028\|0\.101\|0\.009" docs/ README.md   # what the fix did not reach
+```

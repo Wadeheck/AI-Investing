@@ -2608,7 +2608,7 @@ Q6  "what does the NEGATIVE answer mean?" §4.52                    1
 - **The question the system exists to answer**, asked for the first time with
   the counting discipline the rest of the audit now uses.
 - **The record, as anyone would quote it:** the event sleeve is **+$1,146 over
-  16 fills, t=2.19, p=0.028 — significant.**
+  16 fills, t=2.19, p=0.045 — significant.**
 - **The record, counted as bets:** the sleeve enters and exits a **basket**.
   Those fills land on **6 distinct days**, three names at a time, and the names
   inside a basket are correlated — `NVDA, AMD, 000660.KS` is one semis bet
@@ -2616,8 +2616,8 @@ Q6  "what does the NEGATIVE answer mean?" §4.52                    1
 
 ```
                     n      t       p       significant
-per_fill           16   2.19   0.028   YES
-per_basket          6   1.64   0.101   no
+per_fill           16   2.19   0.0447  YES
+per_basket          6   1.64   0.1619  no
 ```
 
   **Identical money. Only the unit changed.**
@@ -2630,14 +2630,45 @@ per_basket          6   1.64   0.101   no
 event_sleeve   +$1,146   per_fill sig=YES   per_basket sig=no
 crypto            +$33   per_fill sig=no    per_basket sig=no
 investing         -$72   per_fill sig=no    per_basket sig=no
-crypto_event     -$266   per_fill sig=YES   per_basket sig=no
+crypto_event     -$266   per_fill sig=no    per_basket sig=no   (n<5: no p)
 ```
 
 - **`crypto_event` is the sharpest illustration, and it cuts the other way.**
-  Per-fill it is *significantly **losing*** (t=-2.63, p=0.009) — on **three
-  fills across two baskets**. Acting on that number would shut down a book on
-  two observations. **The per-fill figure lies in both directions**, which is
-  why both are printed, always.
+  As first published, per-fill it was *significantly **losing*** (t=-2.63,
+  p=0.009) on **three fills across two baskets** — and acting on that number
+  would have shut down a book on two observations. **The per-fill figure lies in
+  both directions**, which is why both are printed, always.
+- **The instrument no longer makes that claim, and the reason is §4.56's own
+  lesson turned on itself.** Below `MIN_N_FOR_P = 5` it prints no p-value at
+  all, so this row is now `t=-2.63` followed by nothing. The p=0.009 that made
+  it persuasive was the normal approximation applied to three points; Student's
+  t on 2 degrees of freedom gives 0.119, and the honest answer is that neither
+  number should have been printed.
+
+> **CORRECTED 2026-08-22.** The figures above were published by `f1f1c51` using
+> the normal approximation. `3608083` fixed `significance()` to use Student's t
+> and to refuse any p below n=5 — but did not revisit the numbers this entry,
+> HANDOVER §1.5 and AUDITING.md had already printed, so the corrected instrument
+> and the stale figures coexisted for four commits.
+>
+> ```
+>                        published    instrument now says
+> sleeve per_fill          0.028            0.0447
+> sleeve per_basket        0.101            0.1619
+> crypto_event per_fill    0.009 (sig)      none — n<5, significant=false
+> ```
+>
+> **No verdict changes** — 0.0447 still clears 0.05, per_basket still does not,
+> and every book still reads *edge not demonstrated*. What changes is that the
+> per-fill figure the entry knocks down was always marginal rather than
+> comfortable, which makes the argument stronger, not weaker.
+>
+> **Every error ran in the flattering direction**, because that is what the
+> normal approximation does at small n — the sixth trap one level up. And the
+> shape is **one-of-N-paths-fixed** (§4.14, §4.23, §4.36, §4.49, §4.51, §4.52),
+> now reaching the *documents* rather than the code: the instrument was one
+> path, and the three docs quoting it were three more. Recorded as the seventh
+> trap in `AUDITING.md` — *when a measurement changes, grep for the old number.*
 - **Neither figure is benchmarked**, and that is the second half of the honest
   answer. The winning baskets are semis and solar during a period when those ran.
   A long book in a rising sector makes money without skill — §4.6's lesson,

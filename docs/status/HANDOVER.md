@@ -79,14 +79,14 @@ verdict told them apart.
 **Counted properly, no book has demonstrated edge.**
 
 The event sleeve is **+$1,146** and the number anyone would quote is
-*16 fills, t=2.19, p=0.028 — significant*. But the sleeve enters and exits a
+*16 fills, t=2.19, p=0.045 — significant*. But the sleeve enters and exits a
 **basket**: those fills land on **6 days**, three correlated names at a time.
 `NVDA, AMD, 000660.KS` is one semis bet wearing three tickers.
 
 ```
                     n      t       p       significant
-per_fill           16   2.19   0.028   YES
-per_basket          6   1.64   0.101   no      <-- identical money
+per_fill           16   2.19   0.0447  YES
+per_basket          6   1.64   0.1619  no      <-- identical money
 ```
 
 Grouped by theme the six baskets are **three bets** — energy (lost),
@@ -98,12 +98,17 @@ ever be significant.
 | event_sleeve | **+$1,146** | sig | **not sig** |
 | crypto | +$33 | not sig | not sig |
 | investing | −$72 | not sig | not sig |
-| crypto_event | −$266 | sig (LOSING) | **not sig** |
+| crypto_event | −$266 | *no p — n<5* | **not sig** |
 
-`crypto_event` is the sharpest case and it cuts the other way: per-fill it is
-*significantly losing* on **three fills across two baskets**. Acting on that
-would shut a book on two observations. **The per-fill figure lies in both
-directions**, which is why `brain_audit --section pnl` prints both, always.
+`crypto_event` is the sharpest case and it cuts the other way. The first version
+of this instrument called it **significantly losing, p=0.009**, on **three fills
+across two baskets** — and acting on that would have shut a book on two
+observations. The instrument no longer says it: below n=5 it prints no p-value
+at all, so what remains is `t=−2.63` with nothing after it. **Both halves are
+the lesson** — the per-fill figure lies in both directions, and the p-value that
+made it persuasive was the normal approximation flattering a three-point sample.
+`brain_audit --section pnl` now prints per-fill and per-basket, always, and
+neither below n=5.
 
 **This does not say the system loses money.** +$1,146 is real and the direction
 is encouraging. It says 26 days and three thematic bets cannot separate it from

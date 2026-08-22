@@ -260,6 +260,67 @@ def test_the_audit_reports_how_much_got_the_harder_test():
         "the audit does not say how much of the sample got the sector test"
 
 
+def _published_tables():
+    """Every `per_fill / per_basket   n   t   p` row printed in the docs."""
+    import re
+    root = Path(__file__).resolve().parents[2]
+    rows = []
+    for rel in ("docs/status/HANDOVER.md",
+                "docs/status/STATE_OF_THE_SYSTEM.md"):
+        path = root / rel
+        for ln, line in enumerate(path.read_text().splitlines(), 1):
+            m = re.match(r"\s*(per_fill|per_basket)\s+(\d+)\s+(-?[\d.]+)\s+([\d.]+)",
+                         line)
+            if m:
+                rows.append((rel, ln, m.group(1), int(m.group(2)),
+                             float(m.group(3)), float(m.group(4))))
+    return rows
+
+
+def test_published_p_values_are_reproducible_from_their_own_t_and_n():
+    """The SEVENTH trap: fixing an instrument does not retract the numbers it
+    already published.
+
+    `f1f1c51` printed these tables using the normal approximation. `3608083`
+    fixed `significance()` to use Student's t — and stopped there, so the
+    corrected instrument and the stale figures coexisted for four commits in
+    four places, including AUDITING.md's own write-up of the rule it was
+    breaking. Every error ran in the flattering direction:
+
+        sleeve per_fill     published 0.028   ->  0.0447
+        sleeve per_basket   published 0.101   ->  0.1619
+
+    No verdict changed, which is exactly why nobody noticed. This test does not
+    care what the numbers ARE — it asserts each published `p` is the one its own
+    quoted `t` and `n` imply, so a table can never again disagree with the
+    function that produced it.
+    """
+    rows = _published_tables()
+    assert len(rows) >= 4, \
+        f"expected the §1.5 / §4.56 tables in both docs, found {len(rows)} rows"
+    for rel, ln, unit, n, t, p in rows:
+        want = _student_p(abs(t), n - 1)
+        assert abs(want - p) < 0.003, (
+            f"{rel}:{ln} publishes {unit} n={n} t={t} p={p}, but Student's t "
+            f"on {n - 1} df gives p={want:.4f}. If the measurement changed, "
+            f"grep for the old number — the instrument is only one path.")
+
+
+def test_no_doc_publishes_a_p_value_below_five_observations():
+    """`significance()` refuses to print a p below MIN_N_FOR_P=5. A document
+    that prints one anyway has re-introduced the bug in prose.
+
+    The live case: `crypto_event` was published as *significantly losing,
+    p=0.009* on THREE fills. Acting on it would have shut a book on two
+    observations. Student's t on 2 df gives 0.119, and the instrument now gives
+    nothing at all.
+    """
+    for rel, ln, unit, n, t, p in _published_tables():
+        assert n >= 5, (
+            f"{rel}:{ln} publishes {unit} with n={n} and a p-value of {p}. "
+            f"Below n=5 no p-value is meaningful and none should be printed.")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
