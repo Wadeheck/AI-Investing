@@ -1,6 +1,6 @@
 # Handover — resume here
 
-**Written 2026-08-22. HEAD `2b24e58`, deployed and running on the ProDesk.**
+**Written 2026-08-22. HEAD `f1f1c51`, deployed and running on the ProDesk.**
 
 This is the *resume-here* document. It is deliberately short and it points at
 the detail rather than repeating it.
@@ -74,22 +74,65 @@ verdict told them apart.
 
 ---
 
+## 1.5 THE HEADLINE, if you read nothing else — §4.56
+
+**Counted properly, no book has demonstrated edge.**
+
+The event sleeve is **+$1,146** and the number anyone would quote is
+*16 fills, t=2.19, p=0.028 — significant*. But the sleeve enters and exits a
+**basket**: those fills land on **6 days**, three correlated names at a time.
+`NVDA, AMD, 000660.KS` is one semis bet wearing three tickers.
+
+```
+                    n      t       p       significant
+per_fill           16   2.19   0.028   YES
+per_basket          6   1.64   0.101   no      <-- identical money
+```
+
+Grouped by theme the six baskets are **three bets** — energy (lost),
+solar/materials (won), semis (won four baskets running). At n=3 nothing can
+ever be significant.
+
+| book | realised | per_fill | per_basket |
+|---|---|---|---|
+| event_sleeve | **+$1,146** | sig | **not sig** |
+| crypto | +$33 | not sig | not sig |
+| investing | −$72 | not sig | not sig |
+| crypto_event | −$266 | sig (LOSING) | **not sig** |
+
+`crypto_event` is the sharpest case and it cuts the other way: per-fill it is
+*significantly losing* on **three fills across two baskets**. Acting on that
+would shut a book on two observations. **The per-fill figure lies in both
+directions**, which is why `brain_audit --section pnl` prints both, always.
+
+**This does not say the system loses money.** +$1,146 is real and the direction
+is encouraging. It says 26 days and three thematic bets cannot separate it from
+luck — and that anyone quoting the 16-fill t-statistic is counting tickers
+instead of decisions.
+
+**And it is generous, because nothing is benchmarked yet.** The winning baskets
+were semis and solar during a period when those ran. A long book in a rising
+sector makes money without skill (§4.6, still unfixed at book level). **That is
+the next piece of work** — see §6.
+
+---
+
 ## 2. What this session actually did
 
 ```
                      START (e327d65)      NOW (2b24e58)
-register entries          §4.36               §4.52        (16 new)
+register entries          §4.36               §4.56        (20 new)
 §4A open rows              19                  15
 test files                 54                  65
-tests                  one runner only     682, BOTH runners, BOTH machines
+tests                  one runner only     698, BOTH runners, BOTH machines
 ```
 
-**Sixteen defects found and fixed (§4.37–§4.52).** Five of them were found only
+**Twenty defects found and fixed (§4.37–§4.56).** Nine of them were found only
 because an earlier one taught us where to look. Four false alarms are recorded
 at the same length as the fixes, because a review that records only its hits is
 not a measurement.
 
-**Two of the sixteen I caused myself, during this session:**
+**Two of the twenty I caused myself, during this session:**
 - **§4.48** — my `parse_args(argv)` refactor killed the X capture channel for
   two hours, and the guard written in the same commit passed the whole time.
 - **§4.50** — a cleanup rule I wrote deleted **Procter & Gamble** from the live
@@ -153,19 +196,40 @@ while the hit rate rises. That is a graph-wiring outcome, not a sample-size one
 — which is why the old cue ("revisit at 50 settled claims") was also wrong and
 has been corrected.
 
-### 3.2 `O39.SI` — **NOT PLACED, and this one is still yours**
+### 3.2 `O39.SI` — **DECIDED: no. §4.55**
 
-The single qualifying long, blocked only because the live slice is USD-only.
+You handed this one over too. **Do not place it** — not on caution, and not on
+venue risk. On the evidence, which does not exist.
 
-I did not place it, deliberately: **SGX was closed for this entire session.** A
-first-ever order on an unproven market path would have rested overnight and
-filled unattended at an open nobody was watching — the opposite of what the
-order is for. Its whole value is proving submit → fill → stop → exit *while
-someone is watching it*.
+The case rested on 7 symbol-days at hit 0.86. Raw that is p≈0.06 and nearly
+interesting. In the unit that exists — daily readings of a 5-day forward return
+— it is **1 independent observation**, and one observation of a coin is a coin.
 
-**It needs SGT market hours (09:00–17:00 SGT, weekdays), and it is a live-ish
-order on a routed paper account, so I want you to say go before I place it.**
-As of this handover it is **Saturday** — the earliest window is Monday.
+**The bar, stated so it can be met:** a 0.86 hit rate needs **8 independent
+observations** for p<0.05 = **40 consecutive symbol-days**. It has 7.
+
+**§4.53 is the wider finding, and it retires a headline of my own review.** No
+market in the reach table is distinguishable from chance — `KS 0.889 (n_ind=2)`,
+`SI 0.875 (n_ind=2)`, `US 0.529 (n_ind=10)`. The claim that *"the brain is best
+in the markets it cannot trade"* was **noise, ranked**: the best hit rates
+belong to the markets with the fewest observations, which is what small samples
+do.
+
+**What was really being conflated**, and this is the substance:
+
+| | Sized by | Instrument chosen for | Success is |
+|---|---|---|---|
+| **A trade** | edge × conviction | the signal | P&L over many repetitions |
+| **A path validation** | the minimum that proves mechanics | lot/tick clarity, liquidity | submit → fill → stop → exit, observed |
+
+Merging them is how a path test gets sized like a trade and a trade gets
+justified by a path test.
+
+**Still open, and still yours:** the SGX **path validation**, as a separate
+deliberately-minimal test in SGT hours, watched. The venue layer is where this
+system's defects actually live (§4.23 tick snapping, §4.30 a HK fill booked at
+7× price, the unexplained `602035` rejects), so proving it has real value — just
+not value a 1-observation signal should be used to justify.
 
 ### 3.3 Judgement calls I made inside the work, for the record
 
@@ -183,6 +247,12 @@ As of this handover it is **Saturday** — the earliest window is Monday.
 
 §4A is the authority. This is the same list grouped by *what kind of thing it
 is*, because "still open" was hiding four different situations.
+
+### 4.0 THE NEXT PIECE OF WORK — benchmark the books (§6)
+
+Everything below is real. All of it is secondary to knowing whether the thing
+works, and right now the honest answer is *"not demonstrably, and we cannot even
+say how generous that verdict is."* See §6.
 
 ### 4.1 Needs a decision from you (2)
 
@@ -240,7 +310,48 @@ honestly** — and every learning loop it has was reading corrupted grades.
 
 **That is the precondition for improvement, not the improvement.**
 
-**And the thing that should make you trust it less, not more:** fifteen defects
+**And the thing that should make you trust it less, not more:** twenty defects
 in one system that had 645 passing tests, two of them introduced by me during
-the session itself. The defect rate is a function of how hard anyone looks. The
-well is not dry.
+the session itself.
+
+That used to be where this paragraph stopped — "the defect rate is a function of
+how hard anyone looks" — which is true and useless, because it makes quality
+depend on who is on shift. **It is now partly fixed (§4.54).** The twenty were
+not twenty insights: sorted by the QUESTION that surfaced each, **13 of 20 came
+from four questions a script can ask**, and `scripts/defect_sweep.py` asks them.
+
+It earned its place on the first run by finding that §4.51's own fix was
+one-of-N *again*. Then measurement showed those particular siblings were
+dormant — **the sweep asks, it does not convict.**
+
+```bash
+python3 scripts/defect_sweep.py          # the four questions, every time
+python3 scripts/brain_audit.py           # every measurement, read-only
+```
+
+---
+
+## 6. The next piece of work: benchmark the books
+
+**Why this and not the backlog.** §4.56 says no book has demonstrated edge —
+but that verdict is *generous*, because nothing compares a book's P&L against
+what the market it traded did over the same window. The sleeve's winning baskets
+were semis and solar during a period when semis and solar ran. A long book in a
+rising sector makes money without skill.
+
+This is §4.6's lesson — `hit` meant nothing until it was measured as EXCESS over
+a benchmark — never applied at the book level. It is the same missing control as
+§4.44 (no control group) and §4.51 (no noise floor). **Third time, same shape:
+compared with what?**
+
+**What it needs:** for each closed trade, the benchmark return over the SAME
+holding window, then `excess = trade_ret − bench_ret`, then significance on
+excess at the BASKET level (§4.56's unit, not per-fill). `brain/scorecard.py`
+already has `benchmark_for()`; the machinery exists and has simply never been
+pointed at realised P&L.
+
+**Why it is worth more than the backlog** (320 unreviewed edges, 200 inert
+assets, the waits): those improve the system. This tells you whether the system
+is worth improving — and in which direction. It can move +$1,146 from
+*ambiguous* to *informative* in either direction, which nothing else on the list
+can do.
