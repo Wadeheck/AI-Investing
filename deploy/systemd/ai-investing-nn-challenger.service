@@ -1,0 +1,36 @@
+[Unit]
+Description=AI-Investing NN challenger (shadow curation -- reports only, never adopts)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
+
+# The whole point of this job is that it CANNOT replace the brain:
+#   - no --save flag, so ParamStore.save() is never called;
+#   - PARAMS_PATH is redirected anyway, so even an accidental --save could not
+#     touch the live data/formula.json;
+#   - STATE_PATH redirects the output dir, so backtest.json lands in
+#     data/nn_shadow/ instead of clobbering the panel the dashboard reads.
+# BRAIN_DB_PATH and DB_PATH are deliberately NOT overridden: the challenger is
+# meant to see exactly the information the live brain sees.
+Environment=LEARN_NN_ENABLED=true
+Environment=STATE_PATH=/home/eugene/Projects/AI-Investing/data/nn_shadow/state.json
+Environment=PARAMS_PATH=/home/eugene/Projects/AI-Investing/data/nn_shadow/formula.json
+
+# An explicit universe, not the graph-derived one. Backtester._aligned truncates
+# every series to the SHORTEST, so one recently-listed symbol (CRCL, SPCX,
+# HYPE/USD) collapses the whole run to 3 bars and neither candidate ever fits --
+# measured 2026-08-22. These 22 have comparable history and yield ~251 aligned
+# bars. Widen this only after _aligned intersects on dates instead.
+Environment=STOCK_WATCHLIST=SPY,AAPL,MSFT,NVDA,TSLA,XLK,XLE,XLP,GLD,JNJ,KO,JPM,WMT,PEP,MRK,V,MA,DIS,BA,INTC
+Environment=CRYPTO_WATCHLIST=BTC/USD,ETH/USD
+
+ExecStart=/bin/sh -lc "\
+  mkdir -p /home/eugene/Projects/AI-Investing/data/nn_shadow && \
+  echo \"===== $(date -Is) =====\" >> /home/eugene/Projects/AI-Investing/data/nn_shadow/nn_challenger.log && \
+  /home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.backtest.main --optimize \
+    >> /home/eugene/Projects/AI-Investing/data/nn_shadow/nn_challenger.log 2>&1 && \
+  /home/eugene/Projects/AI-Investing/.venv/bin/python \
+    /home/eugene/Projects/AI-Investing/scripts/nn_challenger_report.py \
+    >> /home/eugene/Projects/AI-Investing/data/nn_shadow/nn_challenger.log 2>&1"
+TimeoutStartSec=3600

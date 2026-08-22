@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the NN challenger weekly (shadow only)
+
+[Timer]
+# Mondays 04:00 SGT, off-peak and after the weekend has settled. Weekly because
+# the input that decides this -- independent (symbol, day) observations -- grows
+# by days, not by how often you refit.
+OnCalendar=Sun *-*-* 20:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
