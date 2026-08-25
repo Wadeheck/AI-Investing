@@ -493,3 +493,44 @@ applies — a safe online update for an MLP is a separate, harder problem, and a
 this sample size an online-updated MLP would fit noise while *looking* like it
 was learning. The net learns weekly from history; the shadow book records
 whether that learning was any good.
+
+## 9. NN-v2 research foundation — deployed 2026-08-25
+
+The first shadow lane exposed a research constraint: historical price bars do
+not contain the news, hype, graph, and regime inputs available to a live
+decision. Fitting on those bars with an empty context would train a different
+feature distribution from the one the net sees in production. NN-v2 therefore
+starts by collecting **point-in-time evidence** rather than by adding capacity.
+
+`learning/nn_v2.py` owns an append-only feature store at
+`data/nn_v2/feature_snapshots.jsonl`. Each engine cycle records each priced
+asset's decision timestamp, bar timestamp, price, sentiment, hype flags, graph
+impact, and regime state. This is research data only: the live formula, live
+broker, current NN model, and current shadow book never read it.
+
+NN-v2 also supplies two non-negotiable research primitives before any new
+trainer may be connected:
+
+1. `align_on_common_dates()` joins bars by actual calendar day, never by list
+   position. Different exchange holidays, missing bars, and crypto weekends
+   must be explicitly resampled; silently pairing unequal timestamps is invalid.
+2. `purged_walk_forward_splits()` reserves an embargo between training and
+   validation and a final untouched test block. The final block is assessed once
+   after feature, model, and calibration choices are frozen.
+
+The original shadow paper fills were also hardened. They now pass market stats
+into `RiskManager` and fill through the venue-specific commission/spread and
+square-root-impact model. Its record remains shadow-only, but it is no longer a
+free-mid-price simulation.
+
+### What happens next
+
+NN-v2 must accumulate genuine point-in-time observations before it may train.
+There is intentionally no automatic NN-v2 adoption or replacement timer. Once
+the feature store has enough settled observations across market regimes, the
+next implementation step is a separate, isolated trainer that reads only this
+store, applies calendar-aware purged validation, reports calibration and
+turnover net of costs, and writes to a separate `data/nn_v2/` shadow model path.
+It must clear the existing statistical gate plus its final untouched test before
+it can even be considered for a paper portfolio; it cannot write the live
+formula.

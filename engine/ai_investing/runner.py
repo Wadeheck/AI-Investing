@@ -247,6 +247,14 @@ class Runner:
             print(f"  [nn-shadow] unavailable: {type(exc).__name__}: {exc}")
             self.nn_shadow = None
         self._nn_report: dict = {}
+        # Independent NN-v2 research data. It is append-only and never read by
+        # the live model, order path, or existing NN shadow book.
+        try:
+            from ai_investing.learning.nn_v2 import PointInTimeFeatureStore
+            self.nn_v2_features = PointInTimeFeatureStore(settings.state_path)
+        except Exception as exc:
+            print(f"  [nn-v2] feature store unavailable: {type(exc).__name__}: {exc}")
+            self.nn_v2_features = None
 
         # --- bounded slice of a live account (LIVE_CAPITAL_BASE) ---------------
         self._ledger = None
@@ -912,6 +920,9 @@ class Runner:
         # able to cost a live cycle, so anything it raises is printed and
         # swallowed. Everything it writes lives under data/nn_shadow/.
         try:
+            if self.nn_v2_features is not None:
+                self.nn_v2_features.capture(context=context, bars_by_key=bars_by_key,
+                                            assets=self.assets, prices=prices)
             if self.nn_shadow is None or not self.nn_shadow.available:
                 raise _NNInactive
             self._nn_report = self.nn_shadow.run(
