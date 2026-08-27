@@ -1,0 +1,10 @@
+[Unit]
+Description=Run NNv3 Challenger every 15 minutes
+Requires=nn_v3.service
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

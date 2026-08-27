@@ -106,7 +106,7 @@ class YFinanceDataProvider(DataProvider):
             import yfinance  # type: ignore
         except ImportError:
             return []
-        period = "1y" if self.timeframe.endswith(("d", "wk", "mo")) else "60d"  # intraday needs a short window
+        period = ("max" if limit >= 1000 else "1y") if self.timeframe.endswith(("d", "wk", "mo")) else "60d"  # intraday needs a short window
         df = yfinance.Ticker(asset.symbol).history(period=period, interval=self.timeframe)
         bars: list[Bar] = []
         for ts, row in df.iterrows():

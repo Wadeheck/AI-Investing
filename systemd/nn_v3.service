@@ -1,0 +1,15 @@
+[Unit]
+Description=NNv3 Challenger Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/eugene/Projects/AI-Investing/engine/ai_investing/learning/nn_v3_runner.py
+User=eugene
+Group=eugene
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+Environment=PYTHONPATH=/home/eugene/Projects/AI-Investing
+Environment=HOME=/home/eugene
+
+[Install]
+WantedBy=multi-user.target

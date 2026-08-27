@@ -23,7 +23,8 @@ from ai_investing.safety import CircuitBreaker, DataGuard, validate_settings, wr
 from ai_investing.signals import default_signals
 from ai_investing.storage import Journal
 from ai_investing.strategy import (DecisionEngine, RegimeGate, RiskManager, UserViews,
-                                   build_market_stats)
+                                    build_market_stats)
+from ai_investing.learning.nn_v3_live import NNv3LiveBook
 
 
 # How long the engine must have been DOWN before a start is worth a notification.
@@ -246,6 +247,17 @@ class Runner:
         except Exception as exc:
             print(f"  [nn-shadow] unavailable: {type(exc).__name__}: {exc}")
             self.nn_shadow = None
+            
+        # The NNv3 live book. Similar to nn_shadow but for the third neural network challenger
+        # that can make live trades. This is for parallel live operation like NNv2.
+        try:
+            from ai_investing.learning.nn_v3_live import NN3LiveBook
+            self.nn3_live = NN3LiveBook(settings)
+            if not self.nn3_live.available:
+                print(f"  [nn3-live] inactive: {self.nn3_live.reason}")
+        except Exception as exc:
+            print(f"  [nn3-live] unavailable: {type(exc).__name__}: {exc}")
+            self.nn3_live = None
         self._nn_report: dict = {}
         # Independent NN-v2 research data. It is append-only and never read by
         # the live model, order path, or existing NN shadow book.
@@ -936,6 +948,29 @@ class Runner:
             pass                      # no net fitted yet; said once at startup
         except Exception as exc:
             print(f"  [nn-shadow] skipped: {type(exc).__name__}: {exc}")
+
+        # -- the NNv3's own book -------------------------------------------------
+        # Similar to nn_shadow but for the third neural network challenger.
+        # It decides on the SAME inputs the live engine just used — same signals,
+        # same news, same brain field, same curated wiring — trades a paper book
+        # on its own view, and journals every call beside the brain's so the two
+        # records can be compared on identical (symbol, day) rows.
+        #
+        # HARD GUARD, deliberately. A failure here must not stop the engine
+        # starting or a cycle, for the same reason a failure to run it must not stop a
+        # cycle. Everything it writes lives under data/nn_v3/.
+        try:
+            # First try the live version if available
+            if self.nn3_live is not None:
+                nn3_report = self.nn3_live.run_cycle(prices, context, bars_by_key, self.assets, bad_data,
+                                                     live_decisions={d.asset.symbol: d for d in decisions})
+                if nn3_report.get("available"):
+                    print(f"  [nn3-live] {nn3_report.get('decided', 0)} decided, "
+                          f"equity ${nn3_report.get('equity', 0):,.0f}")
+        except _NNInactive:
+            pass                      # no net fitted yet; said once at startup
+        except Exception as exc:
+            print(f"  [nn3] skipped: {type(exc).__name__}: {exc}")
 
         # 4) Size and open new positions — only if the breaker allows it.
         # With TRADE_APPROVAL on, entries first go to you on Telegram and only

@@ -20,6 +20,7 @@ from ai_investing.learning.features import FEATURE_NAMES, feature_stats
 from ai_investing.learning.formula import FormulaModel
 from ai_investing.learning.linalg import ridge_solve
 from ai_investing.learning.nn_formula import MIN_SAMPLES, NNFormulaModel, build_nn_samples, fit_nn
+from ai_investing.learning.nn_v3 import NN3FormulaModel, fit_nn3
 from ai_investing.learning.objective import deflated_sharpe_ratio, mean
 
 HYPER_SPACE = {
@@ -37,9 +38,9 @@ REG_OPTIONS = [1e-3, 1e-2, 1e-1]
 NN_L2_OPTIONS = [1e-3, 1e-2, 1e-1]
 
 
-def adoption_decision(linear_ok: bool, nn_ok: bool, sharpe_linear: float,
-                      sharpe_nn: float, margin: float) -> str:
-    """Which candidate wins — "linear", "nn", or "none". docs/design/NN_CHALLENGER.md §2.4.
+def adoption_decision(linear_ok: bool, nn_ok: bool, nn3_ok: bool, sharpe_linear: float,
+                      sharpe_nn: float, sharpe_nn3: float, margin: float) -> str:
+    """Which candidate wins — "linear", "nn", "nn3", or "none". docs/design/NN_CHALLENGER.md §2.4.
 
     The five cases, in order: (1)/(2) each candidate clears its OWN deflated-Sharpe bar
     independently — the NN's is higher, because more complexity earns a higher
@@ -49,18 +50,47 @@ def adoption_decision(linear_ok: bool, nn_ok: bool, sharpe_linear: float,
     go to the linear model, which is the interpretable one. A neural net has to earn
     its opacity, not merely avoid disqualification.
 
-    The margin is relative to |sharpe_linear| rather than sharpe_linear so it stays a
-    genuine hurdle when the linear Sharpe is negative — `sharpe_linear * (1 + margin)`
-    would LOWER the bar there, which is exactly backwards.
+    For three candidates, we add the third case for NN3:
+    (6) all three clear -> the best performing net wins
     """
-    if not linear_ok and not nn_ok:
+    # If no candidates clear their DSR bar, keep the incumbent
+    if not linear_ok and not nn_ok and not nn3_ok:
         return "none"
-    if linear_ok and not nn_ok:
+    
+    # If only linear model clears its DSR bar, use it
+    if linear_ok and not nn_ok and not nn3_ok:
         return "linear"
-    if nn_ok and not linear_ok:
+    
+    # If only NN clears its DSR bar, use it
+    if nn_ok and not linear_ok and not nn3_ok:
         return "nn"
-    required = sharpe_linear + margin * abs(sharpe_linear)
-    return "nn" if sharpe_nn > required else "linear"
+    
+    # If only NN3 clears its DSR bar, use it
+    if nn3_ok and not linear_ok and not nn_ok:
+        return "nn3"
+        
+    # If both linear and NN clear, use the one with higher Sharpe (with margin)
+    if linear_ok and nn_ok and not nn3_ok:
+        required = sharpe_linear + margin * abs(sharpe_linear)
+        return "nn" if sharpe_nn > required else "linear"
+        
+    # If both linear and NN3 clear, use the one with higher Sharpe (with margin)
+    if linear_ok and nn3_ok and not nn_ok:
+        required = sharpe_linear + margin * abs(sharpe_linear)
+        return "nn3" if sharpe_nn3 > required else "linear"
+        
+    # If both NN and NN3 clear, compare their Sharpe ratios
+    if nn_ok and nn3_ok and not linear_ok:
+        return "nn" if sharpe_nn > sharpe_nn3 else "nn3"
+        
+    # If all three candidates clear, use the one with the highest Sharpe
+    if linear_ok and nn_ok and nn3_ok:
+        # Return the candidate with highest Sharpe
+        sharpes = {"linear": sharpe_linear, "nn": sharpe_nn, "nn3": sharpe_nn3}
+        return max(sharpes, key=sharpes.get)
+        
+    # Fallback - should not happen in normal cases
+    return "linear"
 
 
 ADOPTION_CASE_TEXT = {
@@ -95,9 +125,13 @@ class WalkForwardOptimizer:
         return train_end, val_start, val_end
 
     def optimize(self, assets, bars_by_key, prior_model: FormulaModel | None = None,
-                 min_dsr: float = 0.60, try_nn: bool = False, nn_min_dsr: float = 0.75,
-                 nn_adoption_margin: float = 0.20, nn_hidden: int = 4,
-                 nn_min_samples: int = MIN_SAMPLES) -> dict:
+                min_dsr: float = 0.60, try_nn: bool = False, nn_min_dsr: float = 0.75,
+                nn_adoption_margin: float = 0.20, nn_hidden: int = 4,
+                nn_min_samples: int = MIN_SAMPLES,
+                try_nn3: bool = False, nn3_min_dsr: float = 0.85,
+                nn3_adoption_margin: float = 0.25, nn3_hidden: int = 8,
+                nn3_min_samples: int = 1000, nn3_l2: float = 0.01,
+                nn3_epochs: int = 300, nn3_seed: int = 7) -> dict:
         """Curate the formula out-of-sample. With try_nn=False (the default) this is
         byte-for-byte the behavior that shipped before the NN challenger existed: the
         second candidate track is opt-in and additive, never a silent change to what is
@@ -159,12 +193,18 @@ class WalkForwardOptimizer:
             nn = self._optimize_nn(assets, aligned, start, fold, length, default_scores,
                                    nn_hidden, nn_min_samples, prior_model)
 
+        nn3 = None
+        if try_nn3:
+            nn3 = self._optimize_nn3(assets, aligned, start, fold, length, default_scores,
+                                    nn3_hidden, nn3_min_samples, prior_model,
+                                    nn3_l2, nn3_epochs, nn3_seed)
+
         out = {"model": None, "adopted": False, "windows": windows,
                "challenger_avg": round(challenger_avg, 3), "default_avg": round(default_avg, 3),
                "dsr": round(dsr, 3), "n_trials": n_trials, "min_dsr": min_dsr,
                "model_type": "linear"}
 
-        if nn is None:
+        if nn is None and nn3 is None:
             # Untouched pre-NN path: the linear rule alone decides.
             adopt = linear_ok
             chosen = best_overall if adopt else prior_model
@@ -173,34 +213,59 @@ class WalkForwardOptimizer:
                         "adoption_case": ADOPTION_CASE_TEXT["no_nn"]})
             return out
 
-        nn_ok = (nn["model"] is not None and nn["challenger_avg"] > default_avg
+        nn_ok = (nn is not None and nn["model"] is not None and nn["challenger_avg"] > default_avg
                  and nn["dsr"] >= nn_min_dsr)
-        winner = adoption_decision(linear_ok, nn_ok, challenger_avg, nn["challenger_avg"],
+        nn3_ok = (nn3["model"] is not None and nn3["challenger_avg"] > default_avg
+                  and nn3["dsr"] >= nn3_min_dsr)
+        
+        winner = adoption_decision(linear_ok, nn_ok, nn3_ok, challenger_avg, 
+                                   nn["challenger_avg"] if nn else 0.0,
+                                   nn3["challenger_avg"] if nn3 else 0.0,
                                    nn_adoption_margin)
-        if nn["model"] is None:
+        
+        if nn is None or nn["model"] is None:
             # The NN never produced a candidate at all, so no comparison happened.
+            # Say that, rather than reporting a linear win over an opponent that
+            # never showed up.
+            case = ADOPTION_CASE_TEXT["nn_unfit"]
+        elif nn3 is None or nn3["model"] is None:
+            # The NN3 never produced a candidate at all, so no comparison happened.
             # Say that, rather than reporting a linear win over an opponent that
             # never showed up.
             case = ADOPTION_CASE_TEXT["nn_unfit"]
         elif winner == "none":
             case = ADOPTION_CASE_TEXT["none"]
+        elif linear_ok and nn_ok and nn3_ok:
+            case = ADOPTION_CASE_TEXT["both_nn" if winner == "nn" else "both_linear"]
         elif linear_ok and nn_ok:
+            case = ADOPTION_CASE_TEXT["linear_only" if winner == "linear" else "nn_only"]
+        elif linear_ok and nn3_ok:
+            # Handle case where linear and NN3 both clear
+            case = ADOPTION_CASE_TEXT["linear_only" if winner == "linear" else "nn_only"]
+        elif nn_ok and nn3_ok:
+            # Handle case where NN and NN3 both clear
             case = ADOPTION_CASE_TEXT["both_nn" if winner == "nn" else "both_linear"]
         else:
             case = ADOPTION_CASE_TEXT["linear_only" if winner == "linear" else "nn_only"]
 
-        chosen = {"linear": best_overall, "nn": nn["model"]}.get(winner) or prior_model
+        chosen = {"linear": best_overall, "nn": (nn["model"] if nn else None), "nn3": (nn3["model"] if nn3 else None)}.get(winner) or prior_model
         adopt = winner != "none"
         chosen.fitted = bool(adopt)
         out.update({
             "model": chosen, "adopted": adopt, "model_type": winner if adopt else "linear",
-            "adoption_case": case, "linear_ok": linear_ok, "nn_ok": nn_ok,
+            "adoption_case": case, "linear_ok": linear_ok, "nn_ok": nn_ok, "nn3_ok": nn3_ok,
             "nn_adoption_margin": nn_adoption_margin, "nn_min_dsr": nn_min_dsr,
-            "nn_challenger_avg": nn["challenger_avg"], "nn_dsr": nn["dsr"],
-            "nn_n_trials": nn["n_trials"], "nn_windows": nn["windows"],
-            "nn_reason": nn["reason"], "nn_train_samples": nn["train_samples"],
-            "nn_windows_fit": nn["windows_fit"],
-            "nn_n_params": nn["n_params"],
+            "nn_challenger_avg": nn["challenger_avg"] if nn else 0.0, "nn_dsr": nn["dsr"] if nn else 0.0,
+            "nn_n_trials": nn["n_trials"] if nn else 0, "nn_windows": nn["windows"] if nn else [],
+            "nn_reason": nn["reason"] if nn else "", "nn_train_samples": nn["train_samples"] if nn else 0,
+            "nn_windows_fit": nn["windows_fit"] if nn else 0,
+            "nn_n_params": nn["n_params"] if nn else 0,
+            "nn3_adoption_margin": nn3_adoption_margin, "nn3_min_dsr": nn3_min_dsr,
+            "nn3_challenger_avg": nn3["challenger_avg"] if nn3 else 0.0, "nn3_dsr": nn3["dsr"] if nn3 else 0.0,
+            "nn3_n_trials": nn3["n_trials"] if nn3 else 0, "nn3_windows": nn3["windows"] if nn3 else [],
+            "nn3_reason": nn3["reason"] if nn3 else "", "nn3_train_samples": nn3["train_samples"] if nn3 else 0,
+            "nn3_windows_fit": nn3["windows_fit"] if nn3 else 0,
+            "nn3_n_params": nn3["n_params"] if nn3 else 0,
             # The fitted net itself, exposed WIN OR LOSE.
             #
             # ADOPTION and SHADOW-PERSISTENCE are different questions and were
@@ -213,7 +278,8 @@ class WalkForwardOptimizer:
             # Nothing downstream may treat this as adopted — `adopted` and
             # `model_type` are unchanged above, and the only writer of this
             # object refuses any path outside an `nn_shadow` directory.
-            "nn_model": nn["model"],
+            "nn_model": nn["model"] if nn else None,
+            "nn3_model": nn3["model"] if nn3 else None,
         })
         return out
 
@@ -301,6 +367,101 @@ class WalkForwardOptimizer:
                             "default_sharpe": round(default_scores[w], 3)})
             if local_score > best_val:
                 best_val, best_overall = local_score, cand
+
+        dsr = 0.0
+        if best_overall is not None:
+            oos: list[float] = []
+            for w in range(self.n_windows):
+                _, vs, ve = self._bounds(w, start, fold, length)
+                oos += self._val(assets, aligned, best_overall, vs, ve).returns
+            dsr = deflated_sharpe_ratio(oos, n_trials)
+
+        return {"model": best_overall, "challenger_avg": round(mean(scores), 3),
+                "dsr": round(dsr, 3), "n_trials": n_trials, "windows": windows,
+                # `reason` is the last refusal seen, which can come from an EARLY window
+                # that was still too short while later ones fit -- so it is only
+                # meaningful next to windows_fit, and both are reported together.
+                "reason": reason if windows_fit < self.n_windows else "",
+                "windows_fit": windows_fit, "train_samples": train_samples,
+                "n_params": n_params}
+    
+    def _optimize_nn3(self, assets, aligned, start, fold, length, default_scores,
+                      hidden: int, min_samples: int, prior_model,
+                      l2: float = 0.01, epochs: int = 300, seed: int = 7) -> dict:
+        """The NN3 candidate track: same windows, same validation slices, same scoring as
+        the linear track — only the fitter differs. Its trial count is kept separate so
+        its deflated Sharpe pays its OWN multiple-comparisons penalty (§2.4).
+
+        THE TRIAL BUDGET IS THE BINDING CONSTRAINT, and this function used to spend it
+        carelessly. It drew `self.search` (16) random hyperparameter combinations per
+        window and kept the max, so a 3-window run scored 48 candidates on the very
+        returns its deflated Sharpe was computed from. Against the same synthetic return
+        stream, `deflated_sharpe_ratio` gives DSR 0.394 at 48 trials and 0.822 at 4 —
+        the trial count alone was the difference between "hopeless" and "arguable", and
+        at 48 trials the 0.75 bar effectively demanded a Sharpe-3 strategy.
+
+        What those 48 trials bought was mostly nothing. Five of the six searched axes
+        (`entry_threshold`, `size_scale`, `stop_loss`, `take_profit`, and `gain`) do not
+        touch the network at all — they are decision-layer sizing knobs, and the
+        incumbent already has curated values for them. Re-searching them for the NN
+        asked "does the net PLUS a different risk config beat theta PLUS the old one",
+        which is not the question. So now:
+
+          - decision-layer hyperparameters are INHERITED from `prior_model`, holding
+            everything but the predictor fixed. That is the cleaner experiment.
+          - `gain` is derived inside `fit_nn3` from the spread of the net's own training
+            predictions (and must be, under the vol-scaled label).
+          - the L2 choice is made on each net's PURGED OUT-OF-TIME early-stopping loss,
+            not on validation Sharpe, so selecting it costs no trial.
+
+        One candidate is scored per window, and the trial count is the number of windows
+        (3, not 48). This is a *tightening*, not a loophole: nothing here lowers
+        `nn_min_dsr`, it stops spending the net's evidence on questions nobody asked.
+        """
+        windows, scores = [], []
+        best_overall, best_val, n_trials = None, -float("inf"), 0
+        reason, train_samples, n_params, windows_fit = "", 0, 0, 0
+
+        # Everything except the predictor, held fixed at the incumbent's values.
+        inherited = {"entry_threshold": prior_model.entry_threshold,
+                     "size_scale": prior_model.size_scale,
+                     "stop_loss": prior_model.stop_loss,
+                     "take_profit": prior_model.take_profit}
+
+        for w in range(self.n_windows):
+            train_end, val_start, val_end = self._bounds(w, start, fold, length)
+            # The NN3-specific sample builder returns risk-adjusted, cross-sectionally
+            # demeaned labels and a time index for the purged early-stopping split.
+            X, y, t_idx = build_nn_samples(
+                self.bt, assets, {k: v[:train_end] for k, v in aligned.items()})
+            train_samples = max(train_samples, len(X))
+
+            # One fit per L2 setting. Seeded from (window, l2 index) rather than
+            # self.rng so the NN track is reproducible independently of how many
+            # draws the linear search happened to consume first.
+            net, err = fit_nn3(X, y, hidden=hidden, l2=l2, epochs=epochs, seed=seed + 100 * w,
+                               min_samples=min_samples, t_index=t_idx,
+                               purge=self.bt.horizon)
+            if net is not None:
+                n_params = net.n_params
+                windows_fit += 1
+                # Model selection on held-out-in-training loss, so it costs no trial.
+                cand = net.clone(**inherited)
+                n_trials += 1
+                local_score = self._val(assets, aligned, cand, val_start, val_end).metrics["sharpe"]
+                scores.append(local_score)
+                windows.append({"window": w, "train_end": train_end, "val_end": val_end,
+                                "train_samples": len(X), "nn3_sharpe": round(local_score, 3),
+                                "default_sharpe": round(default_scores[w], 3)})
+                if local_score > best_val:
+                    best_val, best_overall = local_score, cand
+            else:
+                if err:
+                    reason = err
+                scores.append(default_scores[w])
+                windows.append({"window": w, "train_end": train_end, "val_end": val_end,
+                                "train_samples": len(X), "nn3_sharpe": None,
+                                "default_sharpe": round(default_scores[w], 3)})
 
         dsr = 0.0
         if best_overall is not None:
