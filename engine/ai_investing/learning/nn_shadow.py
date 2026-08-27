@@ -203,6 +203,8 @@ class NNShadowBook:
         day = _sgt_day(now)
         bad = bad_data or set()
         active = [a for a in assets if a.key not in bad and a.key in bars_by_key]
+        from ai_investing.strategy.market import build_market_stats
+        self._market = build_market_stats({a.key: bars_by_key[a.key] for a in active}, lookback=20)
 
         primaries = self._primary_symbols_for(day)
         rows, decisions = [], []
@@ -246,12 +248,12 @@ class NNShadowBook:
         # in risk plumbing wearing the label of a difference in model.
         try:
             port = self.broker.portfolio()
-            for o in self.risk.stop_orders(port, prices):
+            for o in self.risk.stop_orders(port, prices, market=self._market):
                 self._fill(o, prices)
             port = self.broker.portfolio()
             equity = port.equity(prices)
             for o in self.risk.size_orders(decisions, port, prices, equity,
-                                           model=self.model):
+                                           market=self._market, model=self.model):
                 self._fill(o, prices)
             atomic.write_json(os.path.join(self.dir, BOOK), self.broker.state())
         except Exception as exc:
@@ -268,7 +270,15 @@ class NNShadowBook:
         mid = prices.get(order.asset.key)
         if not mid or mid != mid:
             return
-        self.broker.submit(order, mid)
+        from ai_investing.execution.costs import CostModel, market_cost_model, market_of_symbol
+        stats = getattr(self, "_market", {}).get(order.asset.key)
+        asset_class = getattr(getattr(order.asset, "asset_class", None), "value", "stock")
+        costs = market_cost_model(CostModel(), market_of_symbol(
+            order.asset.symbol, asset_class))
+        effective = costs.effective_price(getattr(order, "side", None), mid, getattr(order, "qty", 0.0),
+                                          stats.adv if stats else None,
+                                          stats.vol if stats else None)
+        self.broker.submit(order, effective)
 
     # -- journal -------------------------------------------------------------
     def _path(self, name: str) -> str:
