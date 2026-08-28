@@ -1,5 +1,22 @@
 # State of the system
 
+## NN challenger update — 2026-08-28
+
+NNv3 and NNv4 now run as isolated paper lanes beside the existing books. NNv4
+is documented in [`design/NNV4.md`](../design/NNV4.md): 18 point-in-time
+inputs, an 18→12→6→3 multi-head MLP, held-out Platt calibration, OOD
+attenuation, and a ±25% paper target cap. Both NN lanes record one primary
+decision per `(symbol, SGT day)` and settle it after five days into separate
+append-only outcome ledgers. The linear brain has a separate evidence dataset
+only; its RLS/relearning code was not changed.
+
+The ThinkStation P40 owns scheduled retraining. NNv3 candidates require better
+walk-forward DSR; NNv4 candidates require better held-out validation loss. The
+ProDesk remains inference-only. First review is after 10–14 days for pipeline
+health, meaningful performance review is after 30 days, and stronger promotion
+review is after 60–90 days. Until then, NN results are evidence, not proof of
+tradable edge.
+
 *Honest engineering status as of 2026-08-05. Written to be read by someone who
 has not been watching — including a future me. Where something is unproven it
 says so; where a number is soft it says why.*

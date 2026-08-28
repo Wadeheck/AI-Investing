@@ -38,8 +38,7 @@ REG_OPTIONS = [1e-3, 1e-2, 1e-1]
 NN_L2_OPTIONS = [1e-3, 1e-2, 1e-1]
 
 
-def adoption_decision(linear_ok: bool, nn_ok: bool, nn3_ok: bool, sharpe_linear: float,
-                      sharpe_nn: float, sharpe_nn3: float, margin: float) -> str:
+def adoption_decision(linear_ok: bool, nn_ok: bool, *args) -> str:
     """Which candidate wins — "linear", "nn", "nn3", or "none". docs/design/NN_CHALLENGER.md §2.4.
 
     The five cases, in order: (1)/(2) each candidate clears its OWN deflated-Sharpe bar
@@ -53,6 +52,17 @@ def adoption_decision(linear_ok: bool, nn_ok: bool, nn3_ok: bool, sharpe_linear:
     For three candidates, we add the third case for NN3:
     (6) all three clear -> the best performing net wins
     """
+    # Keep the pre-NN3 five-argument API working for existing reports/tests.
+    # New callers pass (nn3_ok, sharpe_linear, sharpe_nn, sharpe_nn3, margin).
+    if len(args) == 3:
+        nn3_ok = False
+        sharpe_linear, sharpe_nn, margin = args
+        sharpe_nn3 = float("-inf")
+    elif len(args) == 5:
+        nn3_ok, sharpe_linear, sharpe_nn, sharpe_nn3, margin = args
+    else:
+        raise TypeError("adoption_decision expects legacy 5 or NN3 7 arguments")
+
     # If no candidates clear their DSR bar, keep the incumbent
     if not linear_ok and not nn_ok and not nn3_ok:
         return "none"
@@ -213,9 +223,9 @@ class WalkForwardOptimizer:
                         "adoption_case": ADOPTION_CASE_TEXT["no_nn"]})
             return out
 
-        nn_ok = (nn is not None and nn["model"] is not None and nn["challenger_avg"] > default_avg
+        nn_ok = (nn is not None and nn.get("model") is not None and nn["challenger_avg"] > default_avg
                  and nn["dsr"] >= nn_min_dsr)
-        nn3_ok = (nn3["model"] is not None and nn3["challenger_avg"] > default_avg
+        nn3_ok = (nn3 is not None and nn3.get("model") is not None and nn3["challenger_avg"] > default_avg
                   and nn3["dsr"] >= nn3_min_dsr)
         
         winner = adoption_decision(linear_ok, nn_ok, nn3_ok, challenger_avg, 
@@ -223,12 +233,12 @@ class WalkForwardOptimizer:
                                    nn3["challenger_avg"] if nn3 else 0.0,
                                    nn_adoption_margin)
         
-        if nn is None or nn["model"] is None:
+        if nn is None or nn.get("model") is None:
             # The NN never produced a candidate at all, so no comparison happened.
             # Say that, rather than reporting a linear win over an opponent that
             # never showed up.
             case = ADOPTION_CASE_TEXT["nn_unfit"]
-        elif nn3 is None or nn3["model"] is None:
+        elif nn3 is None or nn3.get("model") is None:
             # The NN3 never produced a candidate at all, so no comparison happened.
             # Say that, rather than reporting a linear win over an opponent that
             # never showed up.

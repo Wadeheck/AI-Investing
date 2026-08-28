@@ -1,0 +1,12 @@
+[Unit]
+Description=AI-Investing isolated NNv3/NNv4 P40 retraining
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -u engine/ai_investing/learning/nn_retrain.py
+Environment=PYTHONPATH=engine
+Nice=10
+
+[Install]
+WantedBy=default.target

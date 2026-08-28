@@ -11,8 +11,8 @@ challenger and is completely isolated from the live decision model. This means:
 6. It uses the same architecture as the other neural networks but with different parameters
 
 Architecture:
-- 10→8→8→1 network (10 input features, 2 hidden layers of 8 neurons each, 1 output)
-- GELU activation function
+- 10→8→1 network (10 input features, one hidden layer of 8 neurons, 1 output)
+- tanh activation function (the same function during fitting and inference)
 - L2 regularization with configurable strength
 - Early stopping with deterministic seeding
 - Feature normalization
@@ -21,14 +21,13 @@ Architecture:
 from __future__ import annotations
 
 import math
+import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional
 
-import numpy as np
-
+from ai_investing.indicators import pct_returns, stdev
 from ai_investing.learning.features import FEATURE_NAMES, feature_stats
-from ai_investing.learning.formula import FormulaModel
 
 
 # Default hyperparameters for NN-v3
@@ -80,12 +79,12 @@ class NN3FormulaModel:
         if not self.W1:
             return 0.0   # unfit net is inert, same safe default as an all-zero θ
         x = self._normalize(feats)
-        h = [self._gelu(sum(w * xi for w, xi in zip(row, x)) + b)
+        h = [math.tanh(sum(w * xi for w, xi in zip(row, x)) + b)
              for row, b in zip(self.W1, self.b1)]
         return sum(w * hi for w, hi in zip(self.W2, h)) + self.b2
 
     def conviction(self, feats: dict[str, float]) -> float:
-        return self._gelu(self.gain * self.raw(feats))
+        return math.tanh(self.gain * self.raw(feats))
 
     def target_from_conviction(self, c: float) -> float:
         sign = 1.0 if c >= 0 else -1.0
@@ -142,11 +141,6 @@ class NN3FormulaModel:
         d.update(overrides)
         return NN3FormulaModel.from_dict(d)
 
-    def _gelu(self, x: float) -> float:
-        """Gaussian Error Linear Unit activation function."""
-        return x * 0.5 * (1 + math.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * x**3)))
-
-
 # -- training ---------------------------------------------------------------
 # Free parameters must stay under roughly n_samples/10 (the same rule of thumb the
 # rest of this codebase uses for how much evidence a fit needs). 49 params -> ~500 rows.
@@ -185,14 +179,9 @@ def build_nn_samples(backtester, assets, bars_by_key: dict) -> tuple[list[list[f
             features = backtester.fx.build(results, bars[:t + 1])
             forward_return = ((bars[t + backtester.horizon].close - bars[t].close) / bars[t].close
                               if bars[t].close else 0.0)
-            returns = [bar.close for bar in bars[max(0, t - 20):t + 1]]
-            # Use the same volatility normalization as nn_formula.py
-            if len(returns) >= 2:
-                sigma = (returns[-1] - returns[0]) / returns[0] if returns[0] != 0 else 0.0
-                if sigma == 0:
-                    sigma = 0.01  # Avoid zero volatility
-            else:
-                sigma = 0.01
+            closes = [bar.close for bar in bars[max(0, t - 20):t + 1]]
+            # Scale by realized return volatility, not directional price change.
+            sigma = stdev(pct_returns(closes)) * (backtester.horizon ** 0.5)
             label = max(-3.0, min(3.0, forward_return / sigma)) if sigma > 1e-9 else 0.0
             X.append(backtester.fx.vector(features))
             y.append(label)
@@ -238,6 +227,65 @@ def _time_split(t_index: list[int], purge: int) -> tuple[list[int], list[int]]:
     return train, val
 
 
+def _fit_nn3_torch(X_train, y_train, X_val, y_val, *, hidden, l2, epochs, seed,
+                   fmean, fstd, device):
+    """Fit the small NN3 MLP on CUDA when the host exposes a compatible GPU.
+
+    The network is intentionally kept tiny; GPU use is primarily to keep the
+    ProDesk free for the live engine while the ThinkStation does the repeated
+    walk-forward fits. Only plain Python lists are persisted, so this backend
+    does not change the live model contract.
+    """
+    import torch
+    import torch.nn as nn
+
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+    net = nn.Sequential(nn.Linear(len(X_train[0]), hidden), nn.Tanh(), nn.Linear(hidden, 1)).to(device)
+    optimizer = torch.optim.SGD(net.parameters(), lr=0.01, weight_decay=l2)
+    tx = torch.tensor(X_train, dtype=torch.float32, device=device)
+    ty = torch.tensor(y_train, dtype=torch.float32, device=device).reshape(-1, 1)
+    vx = torch.tensor(X_val, dtype=torch.float32, device=device)
+    vy = torch.tensor(y_val, dtype=torch.float32, device=device).reshape(-1, 1)
+    loss_fn = nn.MSELoss()
+    best_loss, best_state, bad_epochs = float("inf"), None, 0
+    for _ in range(epochs):
+        optimizer.zero_grad(set_to_none=True)
+        loss = loss_fn(net(tx), ty)
+        if not torch.isfinite(loss):
+            break
+        loss.backward()
+        optimizer.step()
+        with torch.no_grad():
+            val_loss = float(loss_fn(net(vx), vy).detach().cpu())
+        if not math.isfinite(val_loss):
+            break
+        if val_loss < best_loss - 1e-12:
+            best_loss = val_loss
+            best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+            if bad_epochs >= 20:
+                break
+    if best_state is None:
+        return None, "NN3 training did not converge"
+    net.load_state_dict(best_state)
+    first, last = net[0], net[2]
+    W1 = first.weight.detach().cpu().tolist()
+    b1 = first.bias.detach().cpu().tolist()
+    W2 = last.weight.detach().cpu().reshape(-1).tolist()
+    b2 = float(last.bias.detach().cpu().item())
+    preds = net(tx).detach().cpu().reshape(-1).tolist()
+    mu = sum(preds) / len(preds)
+    sd = (sum((p - mu) ** 2 for p in preds) / max(1, len(preds) - 1)) ** 0.5
+    gain = 1.0 / sd if sd > 1e-9 else 1.0
+    return NN3FormulaModel(hidden=hidden, W1=W1, b1=b1, W2=W2, b2=b2, gain=gain,
+                           feature_mean=fmean, feature_std=fstd, fitted=True,
+                           val_loss=best_loss), ""
+
+
 def fit_nn3(X: list[list[float]], y: list[float], hidden: int = DEFAULT_HIDDEN,
            l2: float = DEFAULT_L2, epochs: int = DEFAULT_EPOCHS, seed: int = DEFAULT_SEED,
            min_samples: int = DEFAULT_MIN_SAMPLES,
@@ -275,6 +323,24 @@ def fit_nn3(X: list[list[float]], y: list[float], hidden: int = DEFAULT_HIDDEN,
     Xn_train = [norm(r) for r in X_train]
     Xn_val = [norm(r) for r in X_val]
 
+    # NN3_DEVICE=cpu forces the portable reference implementation. In auto
+    # mode, use the P40 when CUDA is usable; never silently select the small
+    # Quadro when CUDA_VISIBLE_DEVICES has been configured by the service.
+    device_name = os.environ.get("NN3_DEVICE", "auto").lower()
+    if device_name != "cpu":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+                fitted, reason = _fit_nn3_torch(
+                    Xn_train, y_train, Xn_val, y_val, hidden=hidden, l2=l2,
+                    epochs=epochs, seed=seed, fmean=fmean, fstd=fstd, device=device)
+                if fitted is not None or device_name == "cuda":
+                    return fitted, reason
+        except (ImportError, RuntimeError, ValueError) as exc:
+            if device_name == "cuda":
+                return None, f"NN3 CUDA training failed: {exc}"
+
     # Set random seed for deterministic behavior
     rng = random.Random(seed)
     scale = 1.0 / math.sqrt(n_feat)
@@ -300,8 +366,6 @@ def fit_nn3(X: list[list[float]], y: list[float], hidden: int = DEFAULT_HIDDEN,
             gb2 += d
             for j in range(hidden):
                 gW2[j] += d * h[j]
-                # Using GELU derivative: d/dx GELU(x) = 0.5 * (1 + tanh(√(2/π) * (x + 0.044715 * x^3))) + x * √(2/π) * (0.044715 * 3 * x^2) * (1 - tanh²(√(2/π) * (x + 0.044715 * x^3)))
-                # For simplicity, we'll use the derivative of tanh with our activation
                 dz = d * W2[j] * (1.0 - h[j] * h[j])   # tanh' = 1 - tanh^2
                 gb1[j] += dz
                 row = gW1[j]

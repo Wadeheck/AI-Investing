@@ -4,12 +4,19 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/home/eugene/Projects/AI-Investing/engine/ai_investing/learning/nn_v3_runner.py
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -u /home/eugene/Projects/AI-Investing/engine/ai_investing/learning/nn_v3_runner.py
 User=eugene
 Group=eugene
 WorkingDirectory=/home/eugene/Projects/AI-Investing
 Environment=PYTHONPATH=/home/eugene/Projects/AI-Investing
 Environment=HOME=/home/eugene
+Environment=NN3_DEVICE=cpu
+# Training is expected to move to the ThinkStation P40. These limits keep a
+# mistakenly local run from starving the ProDesk engine.
+Nice=10
+CPUQuota=25%
+MemoryMax=2G
+TimeoutStartSec=2h
 
 [Install]
 WantedBy=multi-user.target

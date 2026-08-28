@@ -1,5 +1,24 @@
 # Running this unattended
 
+## NN challenger training — ThinkStation P40
+
+The ProDesk runs NN inference and isolated paper books only. The ThinkStation
+P520 owns scheduled NNv3/NNv4 training through the enabled user timer:
+
+```bash
+systemctl --user status ai-investing-nn-retrain.timer
+systemctl --user status ai-investing-nn-retrain.service
+journalctl --user -u ai-investing-nn-retrain.service -n 100 --no-pager
+nvidia-smi
+```
+
+The job runs daily around 04:30 SGT with a randomized delay, uses the P40,
+recalibrates NNv4, applies purged validation, and preserves the incumbent when
+the candidate fails its gate. It does not edit the linear brain's relearning
+implementation. Review NN operations after 10–14 days, performance after 30
+days, and model selection more seriously after 60–90 days. Only settled,
+distinct primary `(symbol, day)` observations count.
+
 *For a headless mini PC reachable only over SSH. Written 2026-08-03, after a
 session in which an 11.9h silent outage, a corrupted-unit portfolio, and a
 whole-book price blackout were all found by accident rather than by alarm.*

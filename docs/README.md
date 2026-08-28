@@ -141,6 +141,8 @@ Durable design intent. Changes only when the design changes.
   never adopted, and structurally unable to change what trades.** Its §7 is the
   one to read: the net beat the linear model on raw out-of-sample Sharpe and the
   deflated-Sharpe gate refused it anyway. Read before touching `nn_min_dsr`.
+- **NNV4.md** — detailed NNv4 implementation, calibration/OOD controls, P40
+  training, outcome feedback, promotion gates, and review schedule.
 - **STRATEGY.md** — policy design across the four books.
 - **SHARED_ACCOUNT.md** — `SHARED_STOCK_ACCOUNT`: several books safely sharing
   the one real Longbridge account. **Built and tested; still switched off.**

@@ -1,5 +1,21 @@
 # Handover — resume here
 
+## Current NN handover — 2026-08-28
+
+The NN work has moved beyond the original NN shadow design. NNv3 and NNv4 are
+deployed as isolated paper lanes; NNv4's complete as-built specification is
+[`../design/NNV4.md`](../design/NNV4.md). Both lanes journal one primary
+`(symbol, SGT day)` decision and settle it after five days into an append-only
+market-relative outcome ledger. The linear brain has a separate outcome
+dataset for future research, but its existing relearning/RLS code was not
+changed.
+
+The ThinkStation P40 owns the enabled daily retraining timer. NNv3 promotion
+requires improved walk-forward DSR; NNv4 promotion requires improved held-out
+validation loss. The ProDesk is inference-only. Review pipeline health after
+10–14 days, performance after 30 days, and stronger model selection after
+60–90 days. Until then all NN results remain paper evidence, not proof of edge.
+
 **Updated 2026-08-22 evening. HEAD `519065e`, deployed and running on the
 ProDesk.** *(An earlier version of this file said `39384dd`; the afternoon
 added eleven commits across two concurrent workstreams — see §0.)*
@@ -493,4 +509,3 @@ all**, given that nothing can grade it.
   records who asserted it, not whether it is true — the calibrator is forbidden
   from demoting it, so `brain_audit --section graph` is the only thing standing
   between a misreading and permanent wiring.
-

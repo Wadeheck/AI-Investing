@@ -8,7 +8,7 @@ and cannot change the live brain, `data/formula.json`, or NNv2 state.
 
 ## Components
 
-- `engine/ai_investing/learning/nn_v3.py`: deterministic 10→8→8→1 GELU model,
+- `engine/ai_investing/learning/nn_v3.py`: deterministic 10→8→1 tanh model,
   normalized features, L2 regularization, purged time split, early stopping, and
   a 1,000-sample minimum.
 - `nn_v3_runner.py`: fetches the configured full universe, requests long daily
@@ -16,7 +16,7 @@ and cannot change the live brain, `data/formula.json`, or NNv2 state.
   only a fitted challenger.
 - `nn_v3_live.py`: loads `data/nn_v3/formula.json`, refreshes when its mtime
   changes, makes decisions on the engine's current inputs, and journals a separate
-  paper book.
+  paper book plus a five-day primary-only outcome ledger.
 - `runner.py`: invokes the live lane inside a hard failure guard after the normal
   engine decisions. NNv3 errors cannot stop a live cycle.
 - `systemd/nn_v3.service` and `systemd/nn_v3.timer`: weekly Monday 04:00 SGT
@@ -56,3 +56,14 @@ grep -E "nn3-live" data/engine.log
 The full-universe ProDesk run produced 243 eligible assets, 1,096 aligned bars,
 250,533 samples, and a valid 97-parameter NN3 model. The obsolete NNv3 shadow
 implementation was removed; NNv3 now has one authoritative live paper lane.
+
+## Maturation and review
+
+NNv3 records the original feature vector and prediction for each primary
+`(symbol, SGT day)`. After five days it appends realized and market-relative
+outcomes to `data/nn_v3/outcomes.jsonl`; duplicate cycles are not counted.
+ThinkStation P40 retraining recalculates the model and only promotes a
+candidate when its out-of-sample walk-forward DSR improves. The ProDesk never
+trains NNv3. Review after 10–14 days for operational correctness, after 30
+days for the first meaningful performance review, and after 60–90 days for a
+stronger promotion decision.

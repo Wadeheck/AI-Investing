@@ -1,5 +1,12 @@
 # A neural-net challenger for the decision formula
 
+> **Current implementation note (2026-08-28):** NNv4 and the NNv3 live lane
+> extend this original challenger design. The detailed NNv4 as-built record is
+> [`NNV4.md`](NNV4.md). The current lanes now capture primary decisions and
+> settle five-day market-relative outcomes; the linear RLS relearning path is
+> intentionally unchanged. Historical sections below describe the original
+> design and remain useful for its walk-forward principles.
+
 **Status: BUILT and DEPLOYED (shadow only), 2026-08-22.** Commits `6ad02de`
 (implementation) and `e65c78c` (report fix). Running on ProDesk as a weekly
 shadow job that structurally cannot change what trades. It has never been

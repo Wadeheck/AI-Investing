@@ -87,6 +87,8 @@ class NN3LiveBook:
             return
         self._load(starting_cash if starting_cash is not None
                    else getattr(settings, "starting_cash", 10000.0))
+        from ai_investing.learning.outcome_ledger import OutcomeLedger
+        self.outcomes = OutcomeLedger(self.dir, SHADOW_DIR, HORIZON_DAYS)
 
     # -- construction --------------------------------------------------------
     def _load(self, starting_cash: float) -> None:
@@ -139,6 +141,14 @@ class NN3LiveBook:
         self.engine = DecisionEngine(default_signals(), model=self.model,
                                      user_views=UserViews())
         self.risk = RiskManager(self.settings.risk)
+        # Do not treat the model loaded during construction as a new model on
+        # every engine cycle. Without this, refresh() rebuilt the paper broker
+        # repeatedly and made a healthy lane look like it was constantly
+        # reloading.
+        try:
+            self._net_mtime = os.path.getmtime(path)
+        except OSError:
+            self._net_mtime = None
 
     @property
     def available(self) -> bool:
@@ -219,6 +229,7 @@ class NN3LiveBook:
                 primaries.add(a.symbol)
             rows.append({
                 "ts": now.isoformat(), "day": day, "symbol": a.symbol,
+                "asset_key": a.key, "asset_class": a.asset_class.value,
                 "is_primary": is_primary,
                 "nn3": {
                     "direction": d.direction.name,
@@ -226,6 +237,7 @@ class NN3LiveBook:
                     "expected_return": round(float(d.expected_return), 6),
                     "confidence": round(float(d.confidence), 4),
                     "rationale": d.rationale[:220],
+                    "ood_multiplier": 1.0,
                 },
                 # The brain's own call on the same asset, same cycle, same
                 # inputs. Written here so "did the net see something the brain
@@ -236,10 +248,13 @@ class NN3LiveBook:
                     "expected_return": round(float(live.expected_return), 6),
                 },
                 "price": prices.get(a.key),
+                "features": d.features,
+                "model_version": getattr(self.model, "version", None),
                 "state": "open" if is_primary else "replica",
             })
 
         self._append(rows)
+        settled = self.outcomes.settle(self._path(DECISIONS), prices, assets, now)
 
         # trade the paper book — stops first, then sizing, exactly as the live
         # lane does, so the comparison is like-for-like rather than a difference
@@ -259,7 +274,8 @@ class NN3LiveBook:
 
         return {"available": True, "decided": len(decisions),
                 "primaries": sum(1 for r in rows if r["is_primary"]),
-                "equity": round(self.broker.portfolio().equity(prices), 2)}
+                "equity": round(self.broker.portfolio().equity(prices), 2),
+                "settled": settled}
 
     def _fill(self, order, prices: dict) -> None:
         """No price, no fill. The 0.0-sentinel that put NaN into `shadow.json`

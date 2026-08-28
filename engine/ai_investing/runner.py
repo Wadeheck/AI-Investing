@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ai_investing.alerts import get_notifier
 from ai_investing.util import atomic
@@ -258,6 +258,25 @@ class Runner:
         except Exception as exc:
             print(f"  [nn3-live] unavailable: {type(exc).__name__}: {exc}")
             self.nn3_live = None
+        try:
+            from ai_investing.learning.nn_v4_live import NN4LiveBook
+            self.nn4_live = NN4LiveBook(settings)
+            if not self.nn4_live.available:
+                print(f"  [nn4-live] inactive: {self.nn4_live.reason}")
+        except Exception as exc:
+            print(f"  [nn4-live] unavailable: {type(exc).__name__}: {exc}")
+            self.nn4_live = None
+        # Separate, append-only evidence for the linear brain.  This is
+        # intentionally not connected to _learn/RLS: it prepares future
+        # research without changing today's relearning behavior.
+        try:
+            from ai_investing.learning.outcome_ledger import OutcomeLedger
+            self.linear_outcomes = OutcomeLedger(
+                os.path.join(os.path.dirname(os.path.abspath(settings.state_path)), "linear_brain"),
+                "linear_brain", 5)
+        except Exception as exc:
+            print(f"  [linear-outcomes] unavailable: {type(exc).__name__}: {exc}")
+            self.linear_outcomes = None
         self._nn_report: dict = {}
         # Independent NN-v2 research data. It is append-only and never read by
         # the live model, order path, or existing NN shadow book.
@@ -917,6 +936,26 @@ class Runner:
         for d in decisions:
             self.journal.record_decision(d)
 
+        # Evidence capture only.  Do not call or modify the existing linear
+        # relearning path here; this stream is for a future, explicitly gated
+        # learner and is isolated from data/claims.json and RLS state.
+        try:
+            if self.linear_outcomes is not None:
+                linear_dir = self.linear_outcomes.root
+                linear_journal = os.path.join(linear_dir, "decisions.jsonl")
+                day = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+                rows = [{"ts": datetime.now(timezone.utc).isoformat(), "day": day,
+                         "symbol": d.asset.symbol, "asset_key": d.asset.key,
+                         "is_primary": True, "brain": {"direction": d.direction.name,
+                         "target_weight": float(d.target_weight),
+                         "expected_return": float(d.expected_return)},
+                         "price": prices.get(d.asset.key), "features": d.features}
+                        for d in decisions]
+                self.linear_outcomes.append_decisions(linear_journal, rows)
+                self.linear_outcomes.settle(linear_journal, prices, self.assets)
+        except Exception as exc:
+            print(f"  [linear-outcomes] capture skipped: {type(exc).__name__}: {exc}")
+
         # -- the NN's own book -------------------------------------------------
         # It decides on the SAME inputs the live engine just used — same signals,
         # same news, same brain field, same curated wiring — trades a paper book
@@ -971,6 +1010,15 @@ class Runner:
             pass                      # no net fitted yet; said once at startup
         except Exception as exc:
             print(f"  [nn3] skipped: {type(exc).__name__}: {exc}")
+
+        try:
+            if self.nn4_live is not None:
+                nn4_report = self.nn4_live.run_cycle(prices, context, bars_by_key, self.assets, bad_data,
+                                                     live_decisions={d.asset.symbol: d for d in decisions})
+                if nn4_report.get("available"):
+                    print(f"  [nn4-live] {nn4_report.get('decided', 0)} decided, equity ${nn4_report.get('equity', 0):,.0f}")
+        except Exception as exc:
+            print(f"  [nn4] skipped: {type(exc).__name__}: {exc}")
 
         # 4) Size and open new positions — only if the breaker allows it.
         # With TRADE_APPROVAL on, entries first go to you on Telegram and only

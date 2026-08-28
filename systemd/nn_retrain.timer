@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic isolated NN challenger retraining
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=900
+Unit=nn_retrain.service
+
+[Install]
+WantedBy=timers.target

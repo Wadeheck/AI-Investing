@@ -109,13 +109,24 @@ def main():
         print("NNv3: no model fitted: " + str(result.get("nn3_reason", "insufficient data")), file=sys.stdout, flush=True)
         return 0
     path = os.path.join(out, "formula.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    candidate = path + ".candidate"
+    with open(candidate, "w") as f:
         json.dump({"model_type":"nn3", "model":model.to_dict(),
                    "updated":datetime.now(timezone.utc).isoformat(),
                    "nn3_dsr":result.get("nn3_dsr"),
                    "nn3_windows_fit":result.get("nn3_windows_fit")}, f, indent=2)
-    os.replace(tmp, path)
-    print("NNv3: saved isolated model to " + path, file=sys.stdout, flush=True)
+    prior = None
+    try:
+        with open(path) as f: prior = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    old_dsr = (prior or {}).get("nn3_dsr")
+    new_dsr = result.get("nn3_dsr")
+    if old_dsr is None or (new_dsr is not None and float(new_dsr) > float(old_dsr)):
+        os.replace(candidate, path)
+        print("NNv3: promoted isolated model to " + path, file=sys.stdout, flush=True)
+    else:
+        os.unlink(candidate)
+        print(f"NNv3: rejected candidate dsr={new_dsr} <= incumbent={old_dsr}", file=sys.stdout, flush=True)
     return 0
 if __name__ == "__main__": raise SystemExit(main())
