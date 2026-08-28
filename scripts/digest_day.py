@@ -146,6 +146,10 @@ def derive_impulses() -> None:
     try:
         r = subprocess.run([sys.executable, str(merge)], cwd=str(merge.parent),
                            capture_output=True, text=True, timeout=900)
+        if r.returncode:
+            detail = (r.stderr or r.stdout or "no diagnostic output").strip()
+            raise RuntimeError(f"impulse rebuild failed (exit {r.returncode}): "
+                               f"{detail[-1200:]}")
         tail = [l for l in (r.stdout or "").splitlines() if "impulses_v2" in l]
         print(f"    {tail[-1].strip() if tail else f'exit {r.returncode}'}")
     except (OSError, subprocess.SubprocessError) as exc:

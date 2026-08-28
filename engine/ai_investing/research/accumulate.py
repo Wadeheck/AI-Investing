@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ai_investing.brain.store import BrainStore          # noqa: E402
+from ai_investing.brain.store import BrainStore, article_id  # noqa: E402
 from ai_investing.config import Settings                 # noqa: E402
 from ai_investing.data import altfeeds                   # noqa: E402
 from ai_investing.data.news import fetch_headlines       # noqa: E402
@@ -41,6 +41,19 @@ def run_once(settings: Settings, store: BrainStore) -> int:
     heads = fetch_headlines(settings)
     n_rss = len(heads)
     heads += altfeeds.fetch_all(settings)
+    # This service archives headlines; it must not mark them as digested in the
+    # shared brain DB. Otherwise it can win a race with the live runner and make
+    # new RSS stories invisible to the brain. Archive IDs provide local,
+    # durable dedupe without claiming live-brain consumption.
+    archived = set()
+    if ARCHIVE.exists():
+        for line in ARCHIVE.open(errors="replace"):
+            try:
+                for h in json.loads(line).get("headlines", []):
+                    archived.add(article_id(h.get("title", ""), h.get("source", "")))
+            except (json.JSONDecodeError, AttributeError):
+                continue
+    heads = [h for h in heads if article_id(h.get("title", ""), h.get("source", "")) not in archived]
     fresh, seen_before = store.filter_new(heads)
     n_bodies = 0
     if fresh:
@@ -59,10 +72,6 @@ def run_once(settings: Settings, store: BrainStore) -> int:
             fh.write(json.dumps({"date": now.date().isoformat(),
                                  "ts": now.isoformat(timespec="seconds"),
                                  "headlines": clean}) + "\n")
-        # Archived = this pipeline's terminal stage: mark so the next poll
-        # doesn't re-append the same stories. (Later batch digestion reads the
-        # ARCHIVE, not the store, so nothing is lost by marking here.)
-        store.mark_digested(fresh)
     log(f"pulled {len(heads)} ({n_rss} rss + {len(heads) - n_rss} alt) | "
         f"new {len(fresh)} | bodies {n_bodies} | seen-before {seen_before} | "
         f"store {store.stats().get('articles', '?')} articles")

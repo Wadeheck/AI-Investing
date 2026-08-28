@@ -496,7 +496,7 @@ def main() -> int:
         except json.JSONDecodeError:
             pass
     ok &= row(f"digest for {yday}", n_ev > 0, f"{n_ev} events" if n_ev else "NOT DIGESTED")
-    imp_last = last_day(D("news_impulses_v2.jsonl"))
+    imp_last = last_day(D("digest_v2", "news_impulses_v2.jsonl"))
     ok &= row("impulses (brain food)", imp_last in (yday, today), f"current through {imp_last}")
 
     # --- live engine ---
