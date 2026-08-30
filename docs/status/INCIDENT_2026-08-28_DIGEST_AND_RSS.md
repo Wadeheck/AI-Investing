@@ -65,3 +65,27 @@ deduplication change. Neither warning is permitted to halt the brain.
 Derived-data jobs may fail loudly and preserve their last valid output. They
 must not be a dependency that systemd uses to stop or gate the live trading
 engine.
+
+## Follow-up — live health alerts (2026-08-30)
+
+Two Telegram alerts were investigated on the ProDesk:
+
+- USO and SMCI sell orders were submitted while the US market was closed and
+  remained venue-pending. The live book retains the positions and re-queries
+  each order at the start of every cycle; a fill is booked, while an expiry or
+  rejection releases the pending claim. NVDA and AAPL were also pending at the
+  time of inspection.
+- The formula-learning row was a false alarm. `daily_status.py` read the
+  retired `ParamStore` update counter, while the live event strategy writes to
+  `LearningSpine` (`data/learning_state.json`). The check now reads the live
+  spine, uses the largest policy sample count to avoid counting the same
+  risk-conditioned observations twice, and reports the spine's open claims.
+
+Verification on ProDesk after the fix:
+
+```text
+formula learning: 7 sample(s) all-time, 4 close(s) in 7d, 12 claim(s) open
+```
+
+The stale venue-order warning remains genuine until Longport reports a
+terminal order state.

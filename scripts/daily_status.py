@@ -331,13 +331,19 @@ def check_learning() -> bool:
     try:
         sys.path.insert(0, os.path.join(ROOT, "engine"))
         from ai_investing.config import Settings
-        from ai_investing.learning import ParamStore
-        _model, rls = ParamStore(Settings().params_path).load()
-        n = rls.updates if rls else 0
+        # The live strategies write outcomes through LearningSpine.  ParamStore
+        # is the retired linear learner and can remain at zero while the live
+        # formula learner is progressing, which made this check page falsely.
+        from ai_investing.learning.spine import LearningSpine
+        spine = LearningSpine(Settings())
+        policies = spine.report().get("policies") or {}
+        # A risk-conditioned policy mirrors the same observations as its base
+        # policy, so use the largest policy count rather than double-counting.
+        n = max((int(row.get("n", 0) or 0) for row in policies.values()), default=0)
     except Exception:                                         # noqa: BLE001
         return True
     try:
-        claims = len((json.load(open(D("open_claims.json"))) or {}).get("open") or {})
+        claims = int(spine.report().get("open_claims", 0) or 0)
     except (OSError, json.JSONDecodeError):
         claims = 0
     # Not an alarm on its own: a book that has not closed anything cannot have
