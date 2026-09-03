@@ -17,6 +17,42 @@ health, meaningful performance review is after 30 days, and stronger promotion
 review is after 60–90 days. Until then, NN results are evidence, not proof of
 tradable edge.
 
+## NN health verification — 2026-09-03
+
+Read-only pass over the running ProDesk NN lanes (no processes, files, or
+services touched). Verdict: **all three NN lanes (`nn-shadow`, `nn3-live`,
+`nn4-live`) are healthy, live, and journaling — none is stale or stuck.**
+
+* Evidence — every engine cycle prints all three lanes, and each reports
+  `275 decided` with equity that drifts cycle-to-cycle (not frozen), e.g.
+  `nn-shadow 10,278 → 10,273 → 10,264 → 10,256`. None prints the failure
+  markers the runner emits on an inactive/skipped/unavailable lane.
+* Journaling — each lane appends fresh decision rows to its own
+  `data/nn_{v3,v4,shadow}/nn_decisions.jsonl` every cycle. Watched `nn_v3`
+  grow by exactly 275 rows with a fresh write timestamp on the next cycle.
+
+### Informational: `nn-shadow 275 decided, 0 primary` is expected, not a stall
+
+`nn-shadow` consistently reports `0 primary` decisions. This is a **journaling
+label, not a fault.** Per `engine/ai_investing/learning/nn_shadow.py`, a symbol
+is counted "primary" only the *first* time it is decided on a given SGT day;
+every subsequent same-day row for that symbol is logged as `"replica"`. So once
+each symbol has had its primary row for the day, the per-cycle print naturally
+shows `0 primary` for the rest of that SGT day. Reading `0 primary` as "the
+shadow net isn't trading" would be a misdiagnosis — the lane is deciding and
+journaling all ~275 symbols every cycle.
+
+### Informational: `θv1 (learned from 0 trades)` is the training side, already done
+
+Every cycle header reads `θv1 (learned from 0 trades)` / "the formula has NEVER
+updated (0 samples). 13 position(s) awaiting a close, oldest 16.7d — θ is still
+its hand-set priors." This is **not** an NN health problem. Retraining was
+already completed on the ThinkStation P40; the ProDesk is inference-only by
+design. Zero RLS samples here reflects that no open position has *closed and
+been credited* yet — the RLS/relearning gate needs settled outcomes, and the
+open-claim ages (~13–17d) are the reason, not a stall. Treat it as the training
+side of the pipeline, deliberately separate from the healthy inference lanes.
+
 *Honest engineering status as of 2026-08-05. Written to be read by someone who
 has not been watching — including a future me. Where something is unproven it
 says so; where a number is soft it says why.*
