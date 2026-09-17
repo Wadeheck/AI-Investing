@@ -14,7 +14,12 @@ import sys
 
 def main() -> int:
     env = os.environ.copy()
-    env.update({"CUDA_VISIBLE_DEVICES": "0", "NN3_DEVICE": "cuda", "NN4_DEVICE": "cuda"})
+    # "auto" rather than "cuda": the P40 is preferred, but the retrain must not
+    # silently fail when the GPU is down (driver not loaded, device nodes absent,
+    # a kernel upgrade that hasn't been rebooted). "auto" picks cuda when
+    # available and the CPU reference implementation otherwise — the same fallback
+    # each challenger already ships for its own "auto" default.
+    env.update({"CUDA_VISIBLE_DEVICES": "0", "NN3_DEVICE": "auto", "NN4_DEVICE": "auto"})
     base = os.path.dirname(os.path.abspath(__file__))
     results = []
     for name in ("nn_v3_runner.py", "nn_v4_runner.py"):
