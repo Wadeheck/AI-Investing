@@ -76,8 +76,33 @@ def digest(date: str, settings, graph, dry: bool) -> int:
     node_ids = ", ".join(f"{n.id} [{n.label}]" if getattr(n, "label", "") else n.id
                          for n in graph.nodes.values() if n.type != "asset")
     brief = BRIEF.read_text()
+    # Checkpoint / resume. The live corpus grew past ~2,000 headlines a day
+    # (~80 LLM calls at ~1 min each), which blew through the old 1h service
+    # timeout — and a timeout then discarded the WHOLE day's work, so the next
+    # run re-digested it from scratch and the digest could never catch up.
+    # Save progress after every batch and resume from it: a kill now costs at
+    # most the current batch, not the day.
+    partial_path = OUT_DIR / f"{date}.json.partial"
     events: list[dict] = []
-    for i in range(0, len(heads), CHUNK):
+    start = 0
+    if partial_path.exists() and not dry:
+        try:
+            saved = json.loads(partial_path.read_text(errors="replace")) or {}
+            events = list(saved.get("events") or [])
+            start = int(saved.get("done") or 0)
+            if start:
+                print(f"  {date}: resuming from headline {start} of {len(heads)} "
+                      f"({len(events)} event(s) already extracted)", flush=True)
+        except (json.JSONDecodeError, TypeError, ValueError, OSError):
+            partial_path.unlink(missing_ok=True)
+            events, start = [], 0
+    if start >= len(heads):
+        # A partial that claims to be finished but never made it to the final
+        # file (killed between last batch and the write) — digest it again.
+        start = 0
+        events = []
+
+    for i in range(start, len(heads), CHUNK):
         batch = heads[i:i + CHUNK]
         lines = "\n".join(
             f"{j}. [{h.get('ts','')[11:16]}Z | {h.get('source','?')}] {h.get('title','')}"
@@ -97,12 +122,15 @@ def digest(date: str, settings, graph, dry: bool) -> int:
         got = parsed.get("events")
         if isinstance(got, list):
             events.extend(e for e in got if isinstance(e, dict))
+        atomic.write_json(partial_path, {"events": events, "done": i + len(batch)},
+                          indent=1)
 
     if dry:
         print(f"  {date}: {len(heads)} headlines would be digested in "
               f"{(len(heads)+CHUNK-1)//CHUNK} calls")
         return 0
     if not events:
+        partial_path.unlink(missing_ok=True)
         print(f"  {date}: model returned no usable events — NOT writing an empty "
               f"file (an empty day reads as 'nothing happened')")
         return 1
@@ -117,6 +145,7 @@ def digest(date: str, settings, graph, dry: bool) -> int:
     atomic.write_json(OUT_DIR / f"{date}.json",
                       {"events": events, "redigest": [],
                        "source": "scripts/digest_day.py"}, indent=1)
+    partial_path.unlink(missing_ok=True)
     signed = sum(1 for e in events if abs(float(e.get("polarity", 0) or 0)) > 1e-9)
     tagged = sum(1 for e in events if e.get("nodes"))
     print(f"  {date}: {len(events)} events written "

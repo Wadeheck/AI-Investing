@@ -6,4 +6,9 @@ WorkingDirectory=/home/eugene/Projects/AI-Investing
 # --catch-up 3 rather than a single day: a missed run must self-heal, and an
 # undigested day is silently read downstream as "nothing happened".
 ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python scripts/digest_day.py --catch-up 3
-TimeoutStartSec=3600
+# The live corpus grew past ~2,000 headlines/day (~80 LLM calls at ~1min each),
+# which blew through the old 1h timeout and — because the digest had no
+# checkpointing — re-did the whole day from scratch on every kill, so it could
+# never catch up. digest_day.py now checkpoints after every batch and resumes,
+# so a generous timeout is safe: a kill only costs the current batch.
+TimeoutStartSec=14400

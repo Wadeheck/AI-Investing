@@ -566,6 +566,14 @@ class BookBroker(BrokerAdapter):
                          filled_price=px if px > 0 else float(rec["price"]),
                          reason="late fill (resolved from pending)")
             self._apply_fill(fill, float(rec["price"]))
+            # A fill that actually landed at the venue is real by definition:
+            # clear any lingering "simulated" flag, exactly as the synchronous
+            # FILL path does (`submit` -> FILLED). The async path skipped this,
+            # so a formerly-simulated symbol that bought real shares a cycle
+            # later stayed "simulated" and reconciliation read the account's
+            # real holding as unclaimed, halting live trading (§ 2331.HK,
+            # 2026-09-17).
+            self.sim_keys.discard(rec["key"])
             rec["filled_qty"] = cum
             self.resolved_keys.add(rec["key"])
 

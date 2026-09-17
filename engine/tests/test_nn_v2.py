@@ -1,4 +1,8 @@
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_investing.learning.nn_v2 import align_on_common_dates, purged_walk_forward_splits
 from ai_investing.models import Bar

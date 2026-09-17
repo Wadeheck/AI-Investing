@@ -664,6 +664,39 @@ def test_a_venue_fill_clears_the_simulated_flag():
     assert "stock:2331.HK" in b.working_positions(), "and is claimed against it"
 
 
+def test_a_late_fill_clears_the_simulated_flag_too():
+    """The synchronous FILL path clears `sim_keys`; the asynchronous path
+    (submit returns PENDING, `resolve_pending` books it a cycle later) did not.
+    An investing book that closed a simulated position and then bought real
+    shares a cycle later stayed "simulated" forever, so reconciliation read the
+    account's real holding as unclaimed and halted live trading (§ 2331.HK,
+    2026-09-17)."""
+    from ai_investing.brokers.lots import LotBook
+    shared = FakeStock(mode="pend")
+    b = _book(stock=shared)
+    _buy(b, HKEX, 100.0, 10.0)                            # simulated: HK unreachable
+    assert b.sim_keys == {"stock:2331.HK"}
+
+    b.lots = LotBook("/nonexistent", {"2331.HK": 100})    # now reachable
+    _sell(b, HKEX, 100.0, 10.0)                           # close the sim thesis locally
+    assert b.get_positions() == {}, "simulated position is closed"
+    assert b.sim_keys == {"stock:2331.HK"}, "flag lingers after the close"
+
+    o = _buy(b, HKEX, 100.0, 10.0)                        # fresh real buy -> PENDING
+    assert o.status is OrderStatus.PENDING
+    saved = json.loads(json.dumps(b.ledger_state()))      # engine restarts here
+    shared.settle("ord1", 100.0, 10.0)
+
+    b2 = BookBroker("investor", BookLedger.from_dict(saved["ledger"], base=100_000.0),
+                    stock_broker=shared, pending=saved["pending"],
+                    sim_keys=saved["sim_keys"])
+    b2.resolve_pending()
+    assert "stock:2331.HK" not in b2.sim_keys, \
+        "a real late fill must stop being simulated"
+    assert b2.working_positions()["stock:2331.HK"].qty == 100.0, \
+        "the real holding is now claimed against the account"
+
+
 def test_closing_a_simulated_position_never_reaches_the_venue():
     """`routes_to_venue` answers "can an order for this SYMBOL reach the
     account today", not "did the account ever receive the shares this order
