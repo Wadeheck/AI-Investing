@@ -609,6 +609,15 @@ def main() -> int:
                       f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
                       f" — busiest projects to {proj:.0f}% by day end ({basis}"
                       f"{'' if why is None else ', not alerting: ' + why})")
+            # A REFUSAL IS THE CAP WORKING — and the brain going blind at the
+            # same time. The row above reports SPEND; this one reports what the
+            # cap cost: calls the chain turned away rather than bill for, after
+            # which the tagger runs on the keyword floor until 00:00 UTC.
+            refused = int(u.get("refused", 0) or 0)
+            ok &= row("LLM budget refusals", not refused,
+                      f"{refused} call(s) refused at the free cap — tagging on "
+                      f"the keyword floor until 00:00 UTC"
+                      if refused else "none")
         else:
             row("LLM free allowance", True, "no calls yet today")
     except (OSError, json.JSONDecodeError):

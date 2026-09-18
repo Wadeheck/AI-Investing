@@ -117,14 +117,21 @@ def _record_usage(settings, model: str, tokens: int) -> None:
 
 
 _FREE_BUDGET_USE = 0.90        # rotate away once an endpoint is 90% spent
+_HARD_BUDGET_USE = 1.00        # never call an endpoint past its free allowance
 
 
-def _over_free_budget(settings, model: str) -> bool:
-    """Has this endpoint used up (most of) today's free allowance?
+def _spent(settings, model: str, use: float, reserve: int = 0) -> Optional[bool]:
+    """Is this endpoint at `use` of today's free allowance, plus `reserve`?
 
-    Deliberately fails OPEN: if usage cannot be read, the endpoint is treated as
-    available. Blocking a model because a metering file is unreadable would stop
-    the brain reading the news, which is far worse than an unmetered call.
+    Three-valued on purpose: True/False when the meter can be read, None when it
+    cannot — because the two callers need opposite failure directions. Rotation
+    fails OPEN (an unreadable meter must not stop the brain reading the news);
+    the cost gate fails CLOSED (an unreadable meter cannot prove a call is free,
+    and the entire point of the gate is that it never bills).
+
+    `reserve` is the worst case of the call about to be made. The meter is read
+    BEFORE a call and written AFTER it, so without a reserve the call that
+    crosses the line has already crossed it.
     """
     cap = getattr(settings, "llm_daily_free_tokens", 0) or 0
     if cap <= 0:
@@ -132,11 +139,107 @@ def _over_free_budget(settings, model: str) -> bool:
     try:
         with open(_usage_path(settings)) as fh:
             data = json.load(fh)
+    except FileNotFoundError:
+        # The meter is created by the first call of the day, so an ABSENT file
+        # really does mean "nothing spent today". Failing closed here would
+        # blackout the brain on a fresh install over a file that is simply not
+        # due to exist yet.
+        return False
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        # Present but unreadable is different: the meter exists and cannot be
+        # trusted, so the two callers disagree (see the docstring).
+        return None
+    try:
         if data.get("day") != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
             return False
-        return float(data.get("by_model", {}).get(model, 0)) >= cap * _FREE_BUDGET_USE
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        used = float(data.get("by_model", {}).get(model, 0))
+        return used + reserve >= cap * use
+    except (AttributeError, ValueError, TypeError):
+        return None
+
+
+def _over_free_budget(settings, model: str) -> bool:
+    """Has this endpoint used up (most of) today's free allowance?
+
+    ROTATION ONLY — see `_at_free_cap` for the check that actually stops spend.
+    Deliberately fails OPEN: if usage cannot be read, the endpoint is treated as
+    available. Blocking a model because a metering file is unreadable would stop
+    the brain reading the news, which is far worse than an unmetered call.
+    """
+    return _spent(settings, model, _FREE_BUDGET_USE) is True
+
+
+def _at_free_cap(settings, model: str, reserve: int = 0) -> bool:
+    """May this endpoint be called WITHOUT the provider starting to charge?
+
+    This is the cost gate, and it fails CLOSED: a meter we cannot read is
+    treated as spent, because a call we cannot prove is free is exactly the call
+    that bills silently.
+
+    `reserve` is a FLOOR on the true worst case — it is the response cap, and the
+    prompt is not counted here — so the gate stops just short of the line rather
+    than exactly on it.
+    """
+    return _spent(settings, model, _HARD_BUDGET_USE, reserve) is not False
+
+
+def llm_budget_exhausted(settings) -> bool:
+    """Is every endpoint in both chains out of free allowance for today?
+
+    For the batch digests, which must not start — or continue — a day they
+    cannot finish. See scripts/crypto_wave_digest.py: a day that ran out of
+    budget mid-way used to be written as an empty amendment and then counted as
+    permanently digested.
+    """
+    if not getattr(settings, "byteplus_api_key", ""):
         return False
+    models = set()
+    for chain in (getattr(settings, "byteplus_chain_fast", None) or [],
+                  getattr(settings, "byteplus_chain_smart", None) or []):
+        models.update(m for m in chain if m)
+    for m in (getattr(settings, "byteplus_model_fast", ""),
+              getattr(settings, "byteplus_model_smart", "")):
+        if m:
+            models.add(m)
+    if not models:
+        return False
+    return all(_at_free_cap(settings, m) for m in models)
+
+
+_REFUSAL_LOGGED: dict = {}
+
+
+def _note_budget_refusal(settings) -> None:
+    """Record that a call was REFUSED at the cap rather than billed.
+
+    Refusing is the point — the alternative is a bill — but a brain that has
+    stopped reading is a degradation, and this project's recurring defect is the
+    system knowing and nobody being told. Counted in llm_usage.json so
+    daily_status.py surfaces it, and logged at most once an hour because the
+    per-cycle tagger would otherwise write this line every few minutes.
+    """
+    try:
+        path = _usage_path(settings)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = {}
+        if os.path.exists(path):
+            with open(path) as fh:
+                data = json.load(fh)
+        if data.get("day") != day:
+            data = {"day": day, "by_model": {}, "by_hour": {}}
+        data["refused"] = int(data.get("refused", 0)) + 1
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=1)
+        os.replace(tmp, path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    if _REFUSAL_LOGGED.get("hour") != hour:
+        _REFUSAL_LOGGED["hour"] = hour
+        print("  [llm] free allowance exhausted on every endpoint — refusing "
+              "calls rather than billing; tagging degrades to keyword matching "
+              "until 00:00 UTC")
 
 
 def _byteplus_chain(settings, tier: str) -> list[str]:
@@ -168,7 +271,24 @@ def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
     # theoretical. Order is preserved among endpoints that still have room, so
     # the best-scoring model is still preferred while it is free.
     spare = [m for m in chain if not _over_free_budget(settings, m)]
-    for model in (spare or chain):
+    # ...but a PREFERENCE IS NOT A CAP. This used to fall back to the full chain
+    # once every endpoint passed 90%, and the chain's head is the endpoint that
+    # accumulated FIRST -- i.e. the most spent -- so a guard meant to rotate AWAY
+    # from a spent endpoint routed straight back into it. On 2026-09-18 that put
+    # ep-...vgxfw at 122.7%, 1.16M tokens past its allowance, before anyone read
+    # the page. Only endpoints still inside their free allowance may be called,
+    # with the call's own worst case reserved; if none qualifies the call is
+    # REFUSED and the caller degrades rather than bills.
+    free = [m for m in chain if not _at_free_cap(settings, m, max_tokens)]
+    if not free:
+        _note_budget_refusal(settings)
+        return None
+    # `spare` ORDERS this list; it does not admit anything to it. Applying the
+    # rotation check as the filter would let its deliberate fail-open stand in
+    # for the cost gate -- an unreadable meter would then read as "room here"
+    # and the call would go out anyway. Stable sort, so the chain's own order
+    # still decides ties.
+    for model in sorted(free, key=lambda m: m not in spare):
         if now - _ENDPOINT_COOLDOWN.get(model, 0.0) < _COOLDOWN_S:
             continue
         try:

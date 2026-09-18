@@ -36,7 +36,8 @@ sys.path.insert(0, str(ROOT / "engine"))
 
 from ai_investing.brain.graph import KnowledgeGraph          # noqa: E402
 from ai_investing.config import Settings                     # noqa: E402
-from ai_investing.data.news import _call_llm, _extract_json  # noqa: E402
+from ai_investing.data.news import (                         # noqa: E402
+    _call_llm, _extract_json, llm_budget_exhausted)
 from ai_investing.util import atomic                         # noqa: E402
 
 BRIEF = ROOT / "docs" / "data-pipeline" / "SONNET_DIGEST_BRIEF.md"
@@ -101,6 +102,14 @@ def digest(date: str, settings, graph, dry: bool) -> int:
         # file (killed between last batch and the write) — digest it again.
         start = 0
         events = []
+    if not dry and llm_budget_exhausted(settings):
+        # The chain refuses to call at the cap, so every batch would return
+        # nothing and the day would be written as "nothing happened" — the
+        # exact empty day the guard below exists to prevent. Leave the
+        # checkpoint alone and let the next run (after the reset) resume.
+        print(f"  {date}: free LLM allowance exhausted — not digesting "
+              f"({len(heads)} headline(s) still to do)", flush=True)
+        return 1
 
     for i in range(start, len(heads), CHUNK):
         batch = heads[i:i + CHUNK]
@@ -124,6 +133,15 @@ def digest(date: str, settings, graph, dry: bool) -> int:
             events.extend(e for e in got if isinstance(e, dict))
         atomic.write_json(partial_path, {"events": events, "done": i + len(batch)},
                           indent=1)
+        if llm_budget_exhausted(settings):
+            # Ran out mid-day. The partial stays on disk, so the next run
+            # resumes at this headline instead of re-buying the whole day --
+            # and nothing is written to the final file, because a partial day
+            # is indistinguishable from a quiet one once it is filed.
+            print(f"  {date}: allowance ran out after {i + len(batch)} of "
+                  f"{len(heads)} headlines — checkpoint kept, day NOT written",
+                  flush=True)
+            return 1
 
     if dry:
         print(f"  {date}: {len(heads)} headlines would be digested in "

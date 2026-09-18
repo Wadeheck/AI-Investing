@@ -35,7 +35,8 @@ sys.path.insert(0, str(ROOT / "engine"))
 
 from ai_investing.brain.graph import KnowledgeGraph          # noqa: E402
 from ai_investing.config import Settings                     # noqa: E402
-from ai_investing.data.news import _call_llm, _extract_json  # noqa: E402
+from ai_investing.data.news import (                         # noqa: E402
+    _call_llm, _extract_json, llm_budget_exhausted)
 from ai_investing.util import atomic                         # noqa: E402
 
 BRIEF = ROOT / "docs" / "data-pipeline" / "SONNET_DIGEST_BRIEF.md"
@@ -109,6 +110,15 @@ def digest_day(date: str, settings, graph, dry: bool) -> bool:
                               {"events": [], "amendments": [],
                                "source": "scripts/crypto_wave_digest.py"}, indent=1)
         return True
+    if not dry and llm_budget_exhausted(settings):
+        # Without this the day would be digested with ZERO usable events and the
+        # amendment file written anyway -- which marks the day permanently done
+        # (see the "empty output IS valid here" note below) and silently drops
+        # every staged headline for it. Refusing to start is the only safe move;
+        # the day stays pending until the allowance resets.
+        print(f"  {date}: free LLM allowance exhausted — day left pending",
+              flush=True)
+        return False
     exist = existing_events(date)
     node_ids = ", ".join(f"{n.id} [{n.label}]" if getattr(n, "label", "") else n.id
                          for n in graph.nodes.values() if n.type != "asset")
@@ -137,6 +147,15 @@ def digest_day(date: str, settings, graph, dry: bool) -> bool:
             events.extend(e for e in parsed["events"] if isinstance(e, dict))
         if isinstance(parsed.get("amendments"), list):
             amendments.extend(a for a in parsed["amendments"] if isinstance(a, dict))
+        if llm_budget_exhausted(settings):
+            # The chain refused this call, so `parsed` is empty for the REST of
+            # the day too. Writing now would file a day that looks deliberately
+            # empty (which is a legal outcome here) while actually being
+            # truncated -- permanently, since the file marks the day done.
+            print(f"  {date}: allowance ran out after {i} of {len(heads)} "
+                  f"headlines — NOT writing a partial amendment; the day stays "
+                  f"pending and is retried after the reset", flush=True)
+            return False
     if dry:
         print(f"  {date}: {len(heads)} staged headlines, {len(exist)} existing events "
               f"-> {(len(heads)+CHUNK-1)//CHUNK} call(s)")
@@ -190,7 +209,18 @@ def main(argv=None) -> int:
     settings = Settings()
     graph = KnowledgeGraph.load(settings.brain.graph_path)
     AMEND_OUT.mkdir(parents=True, exist_ok=True)
-    done = sum(1 for d in todo if digest_day(d, settings, graph, args.dry_run))
+    # digest_day returns False ONLY for the budget guard, and once the allowance
+    # is gone it is gone for every remaining day -- so stop rather than print the
+    # same refusal once per day in the batch.
+    done = 0
+    for d in todo:
+        if digest_day(d, settings, graph, args.dry_run):
+            done += 1
+        else:
+            left = len(todo) - done
+            print(f"stopping: {left} day(s) left pending until the allowance "
+                  f"resets at 00:00 UTC", flush=True)
+            break
 
     if not args.dry_run and done:
         print("merging amendments into ledger + impulses ...", flush=True)
