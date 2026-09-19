@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from typing import Optional
@@ -112,7 +113,84 @@ def _record_usage(settings, model: str, tokens: int) -> None:
         with open(tmp, "w") as fh:
             json.dump(data, fh, indent=1)
         os.replace(tmp, path)
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        # The request has already reached the provider. Keep the in-flight
+        # reservation stranded rather than allowing another call whose spend
+        # cannot be reconciled with the meter.
+        raise RuntimeError("LLM usage meter could not be updated") from exc
+
+
+@contextmanager
+def _usage_lock(settings):
+    """Serialize meter read/modify/call cycles across engine and digest jobs."""
+    import fcntl
+    path = _usage_path(settings) + ".lock"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _request_token_reserve(prompt: str, max_tokens: int) -> int:
+    """Conservative upper bound for one provider request.
+
+    The free allowance counts input and output tokens. UTF-8 byte length is an
+    intentionally conservative upper bound for the input token count, while
+    ``max_tokens`` bounds the completion. It may leave some free capacity
+    unused, but it cannot approve a request merely because its output cap fits.
+    """
+    return max(1, len(prompt.encode("utf-8")) + max(0, int(max_tokens)))
+
+
+def _reserve_usage(settings, model: str, tokens: int) -> None:
+    """Make an in-flight request count before the network call starts."""
+    if not tokens:
+        return
+    path = _usage_path(settings)
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        data = {}
+        if os.path.exists(path):
+            with open(path) as fh:
+                data = json.load(fh)
+        if data.get("day") != day:
+            data = {"day": day, "by_model": {}, "by_hour": {}}
+        data.setdefault("by_model", {})
+        data.setdefault("reserved_by_model", {})
+        data["reserved_by_model"][model] = (
+            data["reserved_by_model"].get(model, 0) + int(tokens))
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=1)
+        os.replace(tmp, path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        raise RuntimeError("LLM usage meter is not writable")
+
+
+def _release_usage_reserve(settings, model: str, tokens: int) -> None:
+    """Remove a completed/failed request's pessimistic reservation."""
+    if not tokens:
+        return
+    path = _usage_path(settings)
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        reserved = data.setdefault("reserved_by_model", {})
+        remaining = int(reserved.get(model, 0)) - int(tokens)
+        if remaining > 0:
+            reserved[model] = remaining
+        else:
+            reserved.pop(model, None)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=1)
+        os.replace(tmp, path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        # A stranded reservation fails closed until the next UTC reset. That is
+        # safer than retrying a request whose spend cannot be reconciled.
         pass
 
 
@@ -153,6 +231,7 @@ def _spent(settings, model: str, use: float, reserve: int = 0) -> Optional[bool]
         if data.get("day") != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
             return False
         used = float(data.get("by_model", {}).get(model, 0))
+        used += float(data.get("reserved_by_model", {}).get(model, 0))
         return used + reserve >= cap * use
     except (AttributeError, ValueError, TypeError):
         return None
@@ -176,9 +255,9 @@ def _at_free_cap(settings, model: str, reserve: int = 0) -> bool:
     treated as spent, because a call we cannot prove is free is exactly the call
     that bills silently.
 
-    `reserve` is a FLOOR on the true worst case — it is the response cap, and the
-    prompt is not counted here — so the gate stops just short of the line rather
-    than exactly on it.
+    `reserve` is a FLOOR on the true worst case. Callers pass the UTF-8 input
+    bound plus the response cap, so the gate stops before the request can cross
+    the line rather than discovering the overrun after the provider bills it.
     """
     return _spent(settings, model, _HARD_BUDGET_USE, reserve) is not False
 
@@ -279,25 +358,39 @@ def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
     # the page. Only endpoints still inside their free allowance may be called,
     # with the call's own worst case reserved; if none qualifies the call is
     # REFUSED and the caller degrades rather than bills.
-    free = [m for m in chain if not _at_free_cap(settings, m, max_tokens)]
-    if not free:
-        _note_budget_refusal(settings)
-        return None
+    reserve = _request_token_reserve(prompt, max_tokens)
     # `spare` ORDERS this list; it does not admit anything to it. Applying the
     # rotation check as the filter would let its deliberate fail-open stand in
     # for the cost gate -- an unreadable meter would then read as "room here"
     # and the call would go out anyway. Stable sort, so the chain's own order
     # still decides ties.
-    for model in sorted(free, key=lambda m: m not in spare):
+    for model in sorted(chain, key=lambda m: m not in spare):
         if now - _ENDPOINT_COOLDOWN.get(model, 0.0) < _COOLDOWN_S:
             continue
         try:
-            out = _call_byteplus(prompt, settings, model, max_tokens, json_mode)
+            # The lock covers the final meter check and the entire request. A
+            # live engine cycle and a scheduled digest can therefore not both
+            # approve the same remaining allowance concurrently.
+            with _usage_lock(settings):
+                if _at_free_cap(settings, model, reserve):
+                    continue
+                _reserve_usage(settings, model, reserve)
+                out = _call_byteplus(prompt, settings, model, max_tokens,
+                                     json_mode)
+                # An exception leaves the reservation in place deliberately:
+                # the provider may have received/billed the request even when
+                # the client saw an error. It clears automatically next UTC day.
+                if out is not None:
+                    _release_usage_reserve(settings, model, reserve)
             if out:
                 return out
         except Exception as exc:                       # noqa: BLE001 - try next
             last_exc = exc
             _ENDPOINT_COOLDOWN[model] = now
+    if not last_exc and all(_at_free_cap(settings, m, reserve) for m in chain):
+        with _usage_lock(settings):
+            _note_budget_refusal(settings)
+        return None
     if last_exc is not None:
         raise last_exc
     return None

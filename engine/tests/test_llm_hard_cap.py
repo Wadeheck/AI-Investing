@@ -147,6 +147,33 @@ def test_the_call_that_would_cross_the_line_is_refused():
         assert spy2.calls == ["vgxfw"], spy2.calls
 
 
+def test_prompt_tokens_are_reserved_not_just_the_completion():
+    """A large digest prompt must not fit merely because max_tokens fits."""
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _Settings(tmp, ("vgxfw",), cap=1_000)
+        _meter(tmp, {"vgxfw": 800})
+        spy = _Spy()
+        p = _Patch().attr(news, "_call_byteplus", spy)
+        try:
+            out = news._call_byteplus_chain("x" * 950, s, "fast", 100, False)
+        finally:
+            p.undo()
+        assert out is None and spy.calls == [], spy.calls
+
+
+def test_in_flight_reservation_is_counted_and_released():
+    """A second process cannot approve a request while the first is in flight."""
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _Settings(tmp, ("vgxfw",), cap=1_000)
+        _meter(tmp, {"vgxfw": 800})
+        reserve = news._request_token_reserve("x" * 100, 100)
+        with news._usage_lock(s):
+            news._reserve_usage(s, "vgxfw", reserve)
+            assert news._at_free_cap(s, "vgxfw", 1) is True
+            news._release_usage_reserve(s, "vgxfw", reserve)
+        assert news._at_free_cap(s, "vgxfw", 1) is False
+
+
 def test_a_refusal_is_recorded_and_surfaced():
     """Refusing is the point, but a brain that stopped reading is a
     degradation -- daily_status.py reports it and the watchdog pages on it."""
