@@ -266,6 +266,17 @@ class Runner:
         except Exception as exc:
             print(f"  [nn4-live] unavailable: {type(exc).__name__}: {exc}")
             self.nn4_live = None
+        # NNv5 is an isolated residual challenger. It learns only the
+        # incremental prediction over the linear brain and has its own paper
+        # broker and outcome ledger. It never enters the live order path.
+        try:
+            from ai_investing.learning.nn_v5_live import NN5LiveBook
+            self.nn5_live = NN5LiveBook(settings)
+            if not self.nn5_live.available:
+                print(f"  [nn5-live] inactive: {self.nn5_live.reason}")
+        except Exception as exc:
+            print(f"  [nn5-live] unavailable: {type(exc).__name__}: {exc}")
+            self.nn5_live = None
         # Separate, append-only evidence for the linear brain.  This is
         # intentionally not connected to _learn/RLS: it prepares future
         # research without changing today's relearning behavior.
@@ -1019,6 +1030,15 @@ class Runner:
                     print(f"  [nn4-live] {nn4_report.get('decided', 0)} decided, equity ${nn4_report.get('equity', 0):,.0f}")
         except Exception as exc:
             print(f"  [nn4] skipped: {type(exc).__name__}: {exc}")
+
+        try:
+            if self.nn5_live is not None:
+                nn5_report = self.nn5_live.run_cycle(prices, context, bars_by_key, self.assets, bad_data,
+                                                     live_decisions={d.asset.symbol: d for d in decisions})
+                if nn5_report.get("available"):
+                    print(f"  [nn5-live] {nn5_report.get('decided', 0)} decided, equity ${nn5_report.get('equity', 0):,.0f}")
+        except Exception as exc:
+            print(f"  [nn5] skipped: {type(exc).__name__}: {exc}")
 
         # 4) Size and open new positions — only if the breaker allows it.
         # With TRADE_APPROVAL on, entries first go to you on Telegram and only

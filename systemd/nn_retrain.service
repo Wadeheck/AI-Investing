@@ -1,11 +1,22 @@
 [Unit]
-Description=AI-Investing isolated NNv3/NNv4 P40 retraining
+Description=AI-Investing isolated NN challenger retraining
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/eugene/Projects/AI-Investing
 ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -u engine/ai_investing/learning/nn_retrain.py
 Environment=PYTHONPATH=engine
+# The ProDesk may run this job without PyTorch/CUDA; NNv5 has a deterministic
+# CPU fallback and consumes the engine's continuously refreshed cache.
+Environment=NN5_DEVICE=cpu
+Environment=NN5_BARS_CACHE=data/last_good_bars_stock.json
+Environment=NN5_HIDDEN=8
+Environment=NN5_MIN_SAMPLES=3000
+Environment=NN_RETRAIN_LANES=nn_v5
+# This host owns daily research training. Use point-in-time real daily bars;
+# the ProDesk remains inference-only and paper-only for all NN lanes.
+Environment=DATA_PROVIDER=yfinance
+Environment=CRYPTO_WATCHLIST=NONE
 Nice=10
 
 [Install]
