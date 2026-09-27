@@ -39,9 +39,44 @@ days the strategy did nothing. Only positions the engine opened are counted.
 from __future__ import annotations
 
 import math
+import json
+import os
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 from ai_investing.models import Asset, AssetClass, Portfolio, Position
+
+
+class ExecutionLedger:
+    """Append-only, idempotent record of confirmed incremental executions."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._ids: set[str] = set()
+        try:
+            with open(path, errors="replace") as fh:
+                for line in fh:
+                    try:
+                        execution_id = json.loads(line).get("execution_id")
+                        if execution_id:
+                            self._ids.add(str(execution_id))
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        continue
+        except OSError:
+            pass
+
+    def append(self, record: dict) -> bool:
+        execution_id = str(record.get("execution_id") or "")
+        if not execution_id or execution_id in self._ids:
+            return False
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        row = dict(record)
+        row.setdefault("schema_version", 1)
+        row.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
+        with open(self.path, "a") as fh:
+            fh.write(json.dumps(row, allow_nan=False, sort_keys=True) + "\n")
+        self._ids.add(execution_id)
+        return True
 
 
 @dataclass

@@ -111,6 +111,7 @@ class Order:
     # order you cannot reconstruct is an order you cannot learn from.
     submitted_price: Optional[float] = None
     submitted_qty: Optional[float] = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass

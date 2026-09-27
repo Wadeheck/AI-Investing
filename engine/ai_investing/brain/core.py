@@ -208,34 +208,43 @@ class Brain:
         # LLM-proposed edges: append with provenance, capped confidence (see graph.py)
         now = datetime.now(timezone.utc).isoformat()
         added_edges = 0
-        for ev in events:
-            if ev.get("is_noise"):
-                continue
-            # Curated events were already wired, at full authority and with no
-            # `[:2]` rate limit, before propagation ran. `[:2]` is a throttle on
-            # an extractor reading a firehose; applied to hand-picked research it
-            # discarded everything an in-depth piece said after its second
-            # relationship — and depth is the entire reason it was submitted.
-            if ev.get("curated"):
-                continue
-            for pe in (ev.get("proposed_edges") or [])[:2]:
-                try:
-                    if self.graph.propose_edge(pe["src"], pe["dst"], pe.get("type", "influences"),
-                                               int(pe.get("sign", 1)), float(pe.get("weight", 0.3)),
-                                               float(ev.get("confidence", 0.3)),
-                                               ev.get("summary", ""), now):
-                        added_edges += 1
-                except (KeyError, TypeError, ValueError):
+        llm_edge_candidates = sum(
+            len(ev.get("proposed_edges") or [])
+            for ev in events if not ev.get("is_noise") and not ev.get("curated"))
+        allow_llm_edge_admission = os.getenv("BRAIN_ALLOW_LLM_EDGE_ADMISSION", "0").lower() in {
+            "1", "true", "yes"
+        }
+        if allow_llm_edge_admission:
+            for ev in events:
+                if ev.get("is_noise") or ev.get("curated"):
                     continue
+                # Curated events were already wired, at full authority and with no
+                # `[:2]` rate limit, before propagation ran. `[:2]` is a throttle on
+                # an extractor reading a firehose; applied to hand-picked research it
+                # discarded everything an in-depth piece said after its second
+                # relationship — and depth is the entire reason it was submitted.
+                for pe in (ev.get("proposed_edges") or [])[:2]:
+                    try:
+                        if self.graph.propose_edge(pe["src"], pe["dst"], pe.get("type", "influences"),
+                                                   int(pe.get("sign", 1)), float(pe.get("weight", 0.3)),
+                                                   float(ev.get("confidence", 0.3)),
+                                                   ev.get("summary", ""), now):
+                            added_edges += 1
+                    except (KeyError, TypeError, ValueError):
+                        continue
 
         # Deal wiring: digested deals grow the relationship graph itself —
         # private hubs auto-created, owns/supplies legs accrued — so money
         # circles surface structurally without per-company code (brain/deals.py).
-        try:
-            from ai_investing.brain import deals as deals_mod
-            deal_report = deals_mod.apply_deals(self.graph, events, ts=now)
-        except Exception:
-            deal_report = {}
+        if allow_llm_edge_admission:
+            try:
+                from ai_investing.brain import deals as deals_mod
+                deal_report = deals_mod.apply_deals(self.graph, events, ts=now)
+            except Exception:
+                deal_report = {}
+        else:
+            deal_report = {"admission_quarantined": True,
+                           "edge_candidates": llm_edge_candidates}
 
         # Integrity layer: hardcoded patterns (auditor walks, withdrawal halts…)
         # + the digester's open-ended `integrity` judgments (novel mechanisms).
@@ -339,6 +348,8 @@ class Brain:
         state["user_edges_added"] = added_user_edges
         state["user_nodes_added"] = added_user_nodes
         state["user_edges_total"] = len(self.graph.user_edges())
+        state["llm_edge_admission"] = "enabled" if allow_llm_edge_admission else "quarantined"
+        state["llm_edge_candidates"] = llm_edge_candidates
         self._persist(state, added_edges + added_user_edges + added_user_nodes
                       + len(deal_report.get("nodes_created", []))
                       + len(deal_report.get("edges_added", []))

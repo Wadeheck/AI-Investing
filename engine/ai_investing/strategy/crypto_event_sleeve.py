@@ -135,6 +135,10 @@ CRYPTO_EVENT_WINTER_GATE = os.environ.get("CRYPTO_EVENT_WINTER_GATE", "1").lower
 # 2026-08-17. See module docstring "SHORTS" section before flipping either.
 CRYPTO_EVENT_SHORT = os.environ.get("CRYPTO_EVENT_SHORT", "0").lower() in ("1", "true", "yes")
 CRYPTO_EVENT_SHORT_WINTER = os.environ.get("CRYPTO_EVENT_SHORT_WINTER", "1").lower() in ("1", "true", "yes")
+# The review found a losing recorded event lane. Preserve its state and exits,
+# but quarantine new entries until execution-level reconstruction and a fresh
+# forward test explicitly re-enable risk.
+CRYPTO_EVENT_NEW_RISK = os.environ.get("CRYPTO_EVENT_NEW_RISK", "0").lower() in ("1", "true", "yes")
 
 
 class CryptoEventSleeve(BookBasisMixin):
@@ -333,6 +337,10 @@ class CryptoEventSleeve(BookBasisMixin):
             cands.sort(reverse=True)
             trust = self.ledger.size_multiplier("crypto_event", regime) if self.ledger else 1.0
             for _, im, sym, row in cands[:room]:
+                if not CRYPTO_EVENT_NEW_RISK:
+                    self._log("risk_quarantined", symbol=sym, shock=round(im, 4),
+                              reason="new crypto-event risk disabled by review")
+                    continue
                 base = min(eq * trust / max(1, CRYPTO_EVENT_N),
                            self.broker.get_cash() * 0.9)
                 # VOL-TARGETED SIZING (crypto-specific — see module docstring):

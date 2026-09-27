@@ -72,7 +72,7 @@ from datetime import datetime, timezone
 
 from ai_investing.brokers.base import BrokerAdapter
 from ai_investing.execution import fees as fee_model
-from ai_investing.execution.capital import BookLedger, asset_from_mark
+from ai_investing.execution.capital import BookLedger, ExecutionLedger, asset_from_mark
 from ai_investing.models import AssetClass, Order, OrderStatus, OrderType, Position, Side
 
 # A stock short is refused, not merely capped, while the account is shared.
@@ -150,7 +150,7 @@ class BookBroker(BrokerAdapter):
                  stock_broker: BrokerAdapter | None = None,
                  pending: list | None = None, allow_short: bool = False,
                  base_currency: str = "USD", lots=None,
-                 sim_keys=None):
+                 sim_keys=None, execution_path: str | None = None):
         self.book_id = book_id
         self.ledger = ledger
         self.base_currency = base_currency
@@ -164,6 +164,8 @@ class BookBroker(BrokerAdapter):
         # accounting, which is a useful thing to be able to run.
         self.stock_broker = stock_broker
         self.live = bool(getattr(stock_broker, "live", False))
+        self.execution_ledger = (ExecutionLedger(execution_path)
+                                 if execution_path else None)
         # The working view. Seeded from the ledger's marks (these books are
         # rebuilt from disk every cycle, so this is the only restore path) and
         # mutated by fills as the cycle runs. `ledger.marks` itself is touched
@@ -393,6 +395,7 @@ class BookBroker(BrokerAdapter):
                 "exchange": order.asset.exchange, "quote": order.asset.quote,
                 "side": order.side.value, "qty": float(qty),
                 "price": float(price), "filled_qty": 0.0,
+                "filled_notional": 0.0,
                 "ts": datetime.now(timezone.utc).isoformat(), "checks": 0})
         return result
 
@@ -452,7 +455,41 @@ class BookBroker(BrokerAdapter):
             return
         signed = filled if order.side is Side.BUY else -filled
         if charge_fees:
-            self.ledger.charge(fee_model.fill_fee(order.side, filled, px))
+            fee = fee_model.fill_fee(order.side, filled, px)
+            self.ledger.charge(fee)
+        else:
+            fee = 0.0
+
+        if self.execution_ledger is not None:
+            meta = dict(getattr(order, "metadata", {}) or {})
+            broker_order_id = (order.id or order.client_order_id or
+                               meta.get("broker_order_id") or "")
+            execution_id = (meta.get("execution_id") or
+                            f"{self.book_id}:{broker_order_id}:{key}:"
+                            f"{order.side.value}:{filled:.12g}:{px:.12g}:{id(order)}")
+            self.execution_ledger.append({
+                "execution_id": execution_id,
+                "broker_order_id": broker_order_id or None,
+                "client_order_id": order.client_order_id,
+                "book": self.book_id,
+                "symbol": order.asset.symbol,
+                "asset_key": key,
+                "asset_class": order.asset.asset_class.value,
+                "signed_qty": signed,
+                "quantity": filled,
+                "side": order.side.value,
+                "currency": order.asset.quote,
+                "executed_price": px,
+                "notional": filled * px,
+                "fees": fee,
+                "funding": float(meta.get("funding", 0.0) or 0.0),
+                "fx_rate": meta.get("fx_rate"),
+                "decision_id": meta.get("decision_id"),
+                "event_id": meta.get("event_id"),
+                "model_id": meta.get("model_id"),
+                "exchange_ts": (meta.get("exchange_ts") or meta.get("filled_at") or
+                                 (order.ts.isoformat() if order.ts else None)),
+            })
 
         pos = self._working.get(key)
         if pos is None:
@@ -557,14 +594,21 @@ class BookBroker(BrokerAdapter):
         # The venue reports CUMULATIVE executed quantity, so book only the delta.
         # A partial that fills further over three cycles must not be booked three
         # times over.
-        new = cum - float(rec.get("filled_qty", 0.0) or 0.0)
+        previous_qty = float(rec.get("filled_qty", 0.0) or 0.0)
+        previous_notional = float(rec.get("filled_notional", 0.0) or 0.0)
+        new = cum - previous_qty
         if new > 1e-9:
             asset = asset_from_mark(rec["key"], rec)
             side = Side.BUY if rec["side"] == Side.BUY.value else Side.SELL
+            incremental_px = ((cum * px - previous_notional) / new
+                              if px > 0 else float(rec["price"]))
             fill = Order(asset, side, new, status=OrderStatus.FILLED,
                          filled_qty=new,
-                         filled_price=px if px > 0 else float(rec["price"]),
-                         reason="late fill (resolved from pending)")
+                         filled_price=incremental_px,
+                         id=rec.get("id"),
+                         reason="late fill (resolved from pending)",
+                         metadata={"broker_order_id": rec.get("id"),
+                                   "exchange_ts": rec.get("exchange_ts")})
             self._apply_fill(fill, float(rec["price"]))
             # A fill that actually landed at the venue is real by definition:
             # clear any lingering "simulated" flag, exactly as the synchronous
@@ -575,6 +619,8 @@ class BookBroker(BrokerAdapter):
             # 2026-09-17).
             self.sim_keys.discard(rec["key"])
             rec["filled_qty"] = cum
+            rec["filled_notional"] = (cum * px if px > 0
+                                       else previous_notional + new * incremental_px)
             self.resolved_keys.add(rec["key"])
 
         if s == "filled" or (new > 1e-9 and cum >= float(rec["qty"]) - 1e-9):
@@ -762,10 +808,14 @@ def build_book_broker(book_id: str, settings, state: dict, base_cash: float,
         sim = list(note["carried_simulated"])
     else:
         ledger = BookLedger(base=float(base_cash))
+    state_path = getattr(settings, "state_path", None)
+    execution_path = (os.path.join(os.path.dirname(os.path.abspath(state_path)),
+                                   "execution_ledger.jsonl")
+                      if state_path else None)
     return BookBroker(book_id, ledger, stock_broker=stock_broker,
                       pending=pending, allow_short=allow_short,
                       base_currency=getattr(settings, "base_currency", "USD"),
-                      lots=lots, sim_keys=sim), note
+                      lots=lots, sim_keys=sim, execution_path=execution_path), note
 
 
 # -- aggregate reconciliation ------------------------------------------------

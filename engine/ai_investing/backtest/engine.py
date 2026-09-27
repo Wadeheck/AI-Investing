@@ -50,10 +50,26 @@ class Backtester:
         self.fx = FeatureExtractor()
 
     def _aligned(self, bars_by_key: dict[str, list[Bar]]) -> tuple[dict[str, list[Bar]], int]:
+        """Align bars by their actual timestamps, never by array position.
+
+        The old tail-truncation silently paired a 13 April bar with a 31 March
+        bar whenever one market had a missing session. That contaminates both
+        features and purge boundaries. Exact common timestamps intentionally
+        discard unavailable observations until the research paths gain explicit
+        per-market as-of calendars; an incomplete row is safer than a fabricated
+        cross-section.
+        """
         if not bars_by_key:
+            self._alignment_timestamps = []
             return {}, 0
-        length = min(len(v) for v in bars_by_key.values())
-        return {k: v[-length:] for k, v in bars_by_key.items()}, length
+        by_key = {}
+        for key, bars in bars_by_key.items():
+            by_key[key] = {bar.ts: bar for bar in bars if getattr(bar, "ts", None) is not None}
+        common = set.intersection(*(set(index) for index in by_key.values())) if by_key else set()
+        timestamps = sorted(common)
+        self._alignment_timestamps = timestamps
+        aligned = {key: [index[ts] for ts in timestamps] for key, index in by_key.items()}
+        return aligned, len(timestamps)
 
     def build_samples(self, assets: list[Asset], bars_by_key: dict[str, list[Bar]]):
         aligned, length = self._aligned(bars_by_key)

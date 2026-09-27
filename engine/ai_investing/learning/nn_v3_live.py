@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ai_investing.learning.features import FeatureExtractor  # noqa: F401  (contract)
+from ai_investing.learning.outcome_ledger import artifact_model_id
 from ai_investing.models import SignalDirection, Order, OrderStatus, Side
 from ai_investing.util import atomic
 
@@ -122,6 +123,7 @@ class NN3LiveBook:
         except (KeyError, TypeError, ValueError) as exc:
             self.reason = f"cannot load NN3 model: {exc}"
             return
+        self.model_id = artifact_model_id(path, "nn3")
 
         state = atomic.read_json(os.path.join(self.dir, BOOK))
         if isinstance(state, dict):
@@ -231,6 +233,17 @@ class NN3LiveBook:
                 "ts": now.isoformat(), "day": day, "symbol": a.symbol,
                 "asset_key": a.key, "asset_class": a.asset_class.value,
                 "is_primary": is_primary,
+                "model_id": self.model_id,
+                "prediction_id": f"{self.model_id}:{a.key}:{day}",
+                "prediction": {
+                    "direction": d.direction.name,
+                    "target_weight": round(float(d.target_weight), 5),
+                    "expected_return": round(float(d.expected_return), 6),
+                    "confidence": round(float(d.confidence), 4),
+                    "ood_multiplier": 1.0,
+                },
+                "decision_ts": now.isoformat(),
+                "feature_cutoff_ts": now.isoformat(),
                 "nn3": {
                     "direction": d.direction.name,
                     "target_weight": round(float(d.target_weight), 5),
@@ -304,6 +317,14 @@ class NN3LiveBook:
         try:
             with open(self._path(DECISIONS), "a") as fh:
                 for r in rows:
+                    r.setdefault("schema_version", 2)
+                    try:
+                        decision_ts = datetime.fromisoformat(
+                            str(r.get("decision_ts") or r.get("ts")))
+                        r.setdefault("scheduled_exit_ts", (decision_ts + timedelta(
+                            days=HORIZON_DAYS)).isoformat())
+                    except (TypeError, ValueError):
+                        pass
                     fh.write(json.dumps(r) + "\n")
         except OSError as exc:
             print(f"  [nn3-live] journal write failed: {type(exc).__name__}: {exc}")
@@ -323,7 +344,7 @@ class NN3LiveBook:
                         r = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if r.get("day") == day and r.get("is_primary"):
+                    if r.get("day") == day and r.get("is_primary") and int(r.get("schema_version", 0)) >= 2:
                         out.add(r.get("symbol"))
         except OSError:
             pass

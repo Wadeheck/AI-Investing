@@ -99,6 +99,7 @@ class NNShadowBook:
         """
         from ai_investing.brokers.paper import PaperBroker
         from ai_investing.learning.nn_formula import NNFormulaModel
+        from ai_investing.learning.outcome_ledger import artifact_model_id
         from ai_investing.strategy.decision import DecisionEngine
         from ai_investing.strategy.risk import RiskManager
         from ai_investing.strategy.user_views import UserViews
@@ -120,6 +121,7 @@ class NNShadowBook:
         except (KeyError, TypeError, ValueError) as exc:
             self.reason = f"cannot load NN model: {exc}"
             return
+        self.model_id = artifact_model_id(path, "nn_shadow")
 
         state = atomic.read_json(os.path.join(self.dir, BOOK))
         if isinstance(state, dict):
@@ -221,7 +223,18 @@ class NNShadowBook:
                 primaries.add(a.symbol)
             rows.append({
                 "ts": now.isoformat(), "day": day, "symbol": a.symbol,
+                "asset_key": a.key, "asset_class": a.asset_class.value,
                 "is_primary": is_primary,
+                "model_id": self.model_id,
+                "prediction_id": f"{self.model_id}:{a.key}:{day}",
+                "prediction": {
+                    "direction": d.direction.name,
+                    "target_weight": round(float(d.target_weight), 5),
+                    "expected_return": round(float(d.expected_return), 6),
+                    "confidence": round(float(d.confidence), 4),
+                },
+                "decision_ts": now.isoformat(),
+                "feature_cutoff_ts": now.isoformat(),
                 "nn": {
                     "direction": d.direction.name,
                     "target_weight": round(float(d.target_weight), 5),
@@ -290,6 +303,14 @@ class NNShadowBook:
         try:
             with open(self._path(DECISIONS), "a") as fh:
                 for r in rows:
+                    r.setdefault("schema_version", 2)
+                    try:
+                        decision_ts = datetime.fromisoformat(
+                            str(r.get("decision_ts") or r.get("ts")))
+                        r.setdefault("scheduled_exit_ts", (decision_ts + timedelta(
+                            days=HORIZON_DAYS)).isoformat())
+                    except (TypeError, ValueError):
+                        pass
                     fh.write(json.dumps(r) + "\n")
         except OSError as exc:
             print(f"  [nn-shadow] journal write failed: {type(exc).__name__}: {exc}")
@@ -309,7 +330,7 @@ class NNShadowBook:
                         r = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if r.get("day") == day and r.get("is_primary"):
+                    if r.get("day") == day and r.get("is_primary") and int(r.get("schema_version", 0)) >= 2:
                         out.add(r.get("symbol"))
         except OSError:
             pass
@@ -372,7 +393,11 @@ def grade(settings, price_lookup, horizon: int = HORIZON_DAYS,
             out["pending"] += 1
             continue
         ret_pct = (settle - entry) / entry * 100.0
-        nn = r.get("nn") or {}
+        # Repaired rows carry one explicit prediction payload. Legacy rows may
+        # still have the old `nn` key and remain readable for provenance.
+        explicit = r.get("prediction")
+        nn = (explicit if int(r.get("schema_version", 0)) >= 2 and isinstance(explicit, dict)
+              and explicit else r.get("nn")) or {}
         d = nn.get("direction")
         out["graded"] += 1
 

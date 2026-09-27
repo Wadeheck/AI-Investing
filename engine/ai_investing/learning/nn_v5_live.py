@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from ai_investing.brokers.paper import PaperBroker
 from ai_investing.execution.costs import CostModel, market_cost_model, market_of_symbol
 from ai_investing.learning.nn_v5 import NN5ResidualModel
-from ai_investing.learning.outcome_ledger import OutcomeLedger
+from ai_investing.learning.outcome_ledger import OutcomeLedger, artifact_model_id
 from ai_investing.models import SignalDirection
 from ai_investing.strategy.decision import DecisionEngine
 from ai_investing.strategy.market import build_market_stats
@@ -39,6 +39,7 @@ class NN5LiveBook:
         try: self.model = NN5ResidualModel.from_dict(payload["model"])
         except (KeyError, TypeError, ValueError) as exc:
             self.reason = f"cannot load NNv5 model: {exc}"; return
+        self.model_id = artifact_model_id(path, "nn5")
         state = atomic.read_json(os.path.join(self.dir, BOOK))
         try: self.broker = PaperBroker.from_state(state, allow_short=self.settings.risk.allow_short) if isinstance(state, dict) else None
         except (KeyError, TypeError, ValueError): self.broker = None
@@ -73,13 +74,21 @@ class NN5LiveBook:
                 live = (live_decisions or {}).get(asset.symbol)
                 rows.append({"ts": now.isoformat(), "day": day, "symbol": asset.symbol,
                     "asset_key": asset.key, "asset_class": asset.asset_class.value,
-                    "is_primary": primary, "nn5": {"direction": d.direction.name,
+                    "is_primary": primary, "model_id": self.model_id,
+                    "prediction_id": f"{self.model_id}:{asset.key}:{day}",
+                    "prediction": {"direction": d.direction.name,
+                    "target_weight": float(d.target_weight), "expected_return": float(d.expected_return),
+                    "confidence": float(d.confidence), "residual": self.model.residual(d.features)},
+                    "decision_ts": now.isoformat(), "feature_cutoff_ts": now.isoformat(),
+                    "nn5": {"direction": d.direction.name,
                     "target_weight": float(d.target_weight), "expected_return": float(d.expected_return),
                     "confidence": float(d.confidence), "residual": self.model.residual(d.features)},
                     "brain": None if live is None else {"direction": live.direction.name,
                     "target_weight": float(live.target_weight), "expected_return": float(live.expected_return)},
                     "price": prices.get(asset.key), "features": d.features,
                     "model_version": self.model.version, "state": "open" if primary else "replica"})
+                rows[-1]["schema_version"] = 2
+                rows[-1]["scheduled_exit_ts"] = (now + timedelta(days=HORIZON)).isoformat()
             except Exception as exc: print(f"  [nn5-live] {asset.symbol}: {type(exc).__name__}: {exc}")
         self._append(rows); settled = self.outcomes.settle(os.path.join(self.dir, DECISIONS), prices, assets, now)
         try:
@@ -107,6 +116,6 @@ class NN5LiveBook:
             for line in open(path, errors="replace"):
                 if f'"day": "{day}"' not in line: continue
                 row = json.loads(line)
-                if row.get("day") == day and row.get("is_primary"): out.add(row.get("symbol"))
+                if row.get("day") == day and row.get("is_primary") and int(row.get("schema_version", 0)) >= 2: out.add(row.get("symbol"))
         except (OSError, json.JSONDecodeError): pass
         return out

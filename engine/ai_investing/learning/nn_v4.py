@@ -36,20 +36,24 @@ DEFAULT_EPOCHS = 300
 DEFAULT_MIN_SAMPLES = 2000
 
 
-def build_nn4_features(asset, bars, signals, context=None):
+def build_nn4_features(asset, bars, signals, context=None, benchmark_return=0.0,
+                       horizon=5):
     """Create the live feature vector using only bars available at decision time."""
     extractor = FeatureExtractor()
     results = [s.evaluate(asset, bars, context or {}) for s in signals]
     f = extractor.build(results, bars); closes = [b.close for b in bars]
     def ret(n):
         return closes[-1] / closes[-1 - n] - 1.0 if len(closes) > n and closes[-1 - n] else 0.0
-    vol = stdev(pct_returns(closes[-21:])) if closes else 0.0
+    vol = (stdev(pct_returns(closes[-21:])) * (horizon ** 0.5)
+           if closes else 0.0)
+    short_vol = (stdev(pct_returns(closes[-11:])) * (horizon ** 0.5)
+                 if len(closes) > 11 else vol)
     high = max(closes[-60:]) if closes else 0.0
     f.update({"return_1d": ret(1), "return_5d": ret(5), "return_20d": ret(20),
               "return_60d": ret(60), "realized_vol": vol,
-              "vol_change": stdev(pct_returns(closes[-11:])) - vol if len(closes) > 11 else 0.0,
+              "vol_change": short_vol - vol,
               "drawdown_60d": closes[-1] / high - 1.0 if high else 0.0,
-              "relative_strength": ret(20)})
+              "relative_strength": ret(20) - float(benchmark_return or 0.0)})
     return f, results
 
 
@@ -87,10 +91,18 @@ def build_nn4_samples(backtester, assets, bars_by_key: dict):
     by_time = {}
     for i, row in enumerate(rows): by_time.setdefault(row[3], []).append(i)
     X = [r[0] for r in rows]; returns = [r[1] for r in rows]; risks = [r[2] for r in rows]
-    positive = [1.0 if r > 0 else 0.0 for r in returns]
     for ids in by_time.values():
         med = sorted(returns[i] for i in ids)[len(ids) // 2]
-        for i in ids: returns[i] -= med
+        idx20 = NN4_FEATURE_NAMES.index("return_20d")
+        idxrs = NN4_FEATURE_NAMES.index("relative_strength")
+        med20 = sorted(X[i][idx20] for i in ids)[len(ids) // 2]
+        for i in ids:
+            returns[i] -= med
+            # Relative strength is excess 20-day return, using the same
+            # cross-section as the target. The old live feature duplicated
+            # return_20d and the old target trained positivity before demeaning.
+            X[i][idxrs] = X[i][idx20] - med20
+    positive = [1.0 if r > 0 else 0.0 for r in returns]
     return X, returns, positive, risks, [r[3] for r in rows]
 
 

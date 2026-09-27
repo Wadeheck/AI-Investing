@@ -337,7 +337,10 @@ class Runner:
                                        pending=saved.get("pending") or [],
                                        base_currency=settings.base_currency,
                                        lots=self.lots,
-                                       sim_keys=saved.get("sim_keys") or [])
+                                       sim_keys=saved.get("sim_keys") or [],
+                                       execution_path=os.path.join(
+                                           os.path.dirname(os.path.abspath(settings.state_path)),
+                                           "execution_ledger.jsonl"))
             print(f"  LIVE BOOK  ${settings.live_capital_base:,.0f} slice of the account, "
                   f"realised so far ${self._ledger.realized:,.2f} — "
                   f"{len(self._live_universe())} USD symbols tradable"
@@ -952,12 +955,21 @@ class Runner:
         # learner and is isolated from data/claims.json and RLS state.
         try:
             if self.linear_outcomes is not None:
+                from ai_investing.learning.outcome_ledger import artifact_model_id
                 linear_dir = self.linear_outcomes.root
                 linear_journal = os.path.join(linear_dir, "decisions.jsonl")
                 day = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+                model_id = artifact_model_id(self.settings.params_path, "linear")
                 rows = [{"ts": datetime.now(timezone.utc).isoformat(), "day": day,
                          "symbol": d.asset.symbol, "asset_key": d.asset.key,
-                         "is_primary": True, "brain": {"direction": d.direction.name,
+                         "is_primary": True, "model_id": model_id,
+                         "prediction_id": f"{model_id}:{d.asset.key}:{day}",
+                         "prediction": {"direction": d.direction.name,
+                         "target_weight": float(d.target_weight),
+                         "expected_return": float(d.expected_return)},
+                         "decision_ts": datetime.now(timezone.utc).isoformat(),
+                         "feature_cutoff_ts": datetime.now(timezone.utc).isoformat(),
+                         "brain": {"direction": d.direction.name,
                          "target_weight": float(d.target_weight),
                          "expected_return": float(d.expected_return)},
                          "price": prices.get(d.asset.key), "features": d.features}

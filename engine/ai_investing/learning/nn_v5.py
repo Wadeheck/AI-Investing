@@ -154,8 +154,17 @@ def fit_nn5(X, y, baseline: FormulaModel, *, hidden=DEFAULT_HIDDEN,
     minimum_split = max(20, min(50, min_samples // 4))
     if len(train) < minimum_split or len(val) < minimum_split:
         return None, "insufficient purged train/validation data for NN5"
-    Xn, mean, std = _normalise([X[i] for i in train])
-    Xv = [[(v - m) / s if s > 1e-9 else 0.0 for v, m, s in zip(X[i], mean, std)] for i in val]
+    extended_train = []
+    for i in train:
+        f = dict(zip(NN5_FEATURE_NAMES, X[i]))
+        extended_train.append(X[i] + [baseline.raw(f), baseline.conviction(f), baseline.target_weight(f)])
+    extended_val = []
+    for i in val:
+        f = dict(zip(NN5_FEATURE_NAMES, X[i]))
+        extended_val.append(X[i] + [baseline.raw(f), baseline.conviction(f), baseline.target_weight(f)])
+    Xn, mean, std = _normalise(extended_train)
+    Xv = [[(v - m) / s if s > 1e-9 else 0.0
+           for v, m, s in zip(row, mean, std)] for row in extended_val]
     try:
         import torch
         import torch.nn as nn
@@ -163,44 +172,42 @@ def fit_nn5(X, y, baseline: FormulaModel, *, hidden=DEFAULT_HIDDEN,
         selected = device or os.environ.get("NN5_DEVICE", "auto")
         if selected == "auto": selected = "cuda" if torch.cuda.is_available() else "cpu"
         dev = torch.device(selected)
-        net = nn.Sequential(nn.Linear(len(Xn[0]) + 3, hidden), nn.Tanh(), nn.Linear(hidden, 1)).to(dev)
+        net = nn.Sequential(nn.Linear(len(Xn[0]), hidden), nn.Tanh(), nn.Linear(hidden, 1)).to(dev)
         opt = torch.optim.AdamW(net.parameters(), lr=0.01, weight_decay=1e-3)
-        raw_x = []
-        for i in train:
-            f = dict(zip(NN5_FEATURE_NAMES, X[i])); raw_x.append(X[i] + [baseline.raw(f), baseline.conviction(f), baseline.target_weight(f)])
-        raw_v = []
-        for i in val:
-            f = dict(zip(NN5_FEATURE_NAMES, X[i])); raw_v.append(X[i] + [baseline.raw(f), baseline.conviction(f), baseline.target_weight(f)])
-        tx = torch.tensor(raw_x, dtype=torch.float32, device=dev)
-        vx = torch.tensor(raw_v, dtype=torch.float32, device=dev)
+        tx = torch.tensor(Xn, dtype=torch.float32, device=dev)
+        vx = torch.tensor(Xv, dtype=torch.float32, device=dev)
         ty = torch.tensor([y[i] for i in train], dtype=torch.float32, device=dev).reshape(-1, 1)
         vy = torch.tensor([y[i] for i in val], dtype=torch.float32, device=dev).reshape(-1, 1)
         best, state, bad = float("inf"), None, 0
         for _ in range(epochs):
-            opt.zero_grad(set_to_none=True); loss = nn.functional.huber_loss(net(tx), ty)
+            opt.zero_grad(set_to_none=True); loss = nn.functional.mse_loss(net(tx), ty)
             loss.backward(); opt.step()
-            with torch.no_grad(): vl = float(nn.functional.huber_loss(net(vx), vy).cpu())
+            with torch.no_grad(): vl = float(nn.functional.mse_loss(net(vx), vy).cpu())
             if vl < best - 1e-8:
                 best, bad, state = vl, 0, {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
             else:
                 bad += 1
                 if bad >= 25: break
         if state is None: return None, "NN5 training did not converge"
-        # The incumbent is the zero-residual model.  A lower training loss is
-        # irrelevant if the residual net cannot beat that baseline on the
-        # purged validation slice it never trained on.
-        def huber(v): return 0.5 * v * v if abs(v) <= 1.0 else abs(v) - 0.5
-        baseline_loss = sum(huber(y[i]) for i in val) / len(val)
-        if best >= baseline_loss - 1e-10:
+        # Score the predictor exactly as it is deployed: residual gate and
+        # clipping are part of the policy, not post-hoc presentation logic.
+        residual_scale = max(0.005, min(0.10, (sum(abs(v) for v in y) / len(y)) * 2.0))
+        gate = 0.5
+        net.load_state_dict(state)
+        raw_preds = net(vx).detach().cpu().reshape(-1).tolist()
+        deployed_loss = sum((gate * max(-residual_scale, min(residual_scale, p)) - y[i]) ** 2
+                            for i, p in zip(val, raw_preds)) / len(val)
+        baseline_loss = sum(y[i] * y[i] for i in val) / len(val)
+        if deployed_loss >= baseline_loss - 1e-10:
             return None, (f"NN5 residual did not beat incumbent validation loss "
-                          f"({best:.8g} >= {baseline_loss:.8g})")
-        net.load_state_dict(state); first, last = net[0], net[2]
+                          f"({deployed_loss:.8g} >= {baseline_loss:.8g})")
+        first, last = net[0], net[2]
         return NN5ResidualModel(
             hidden=hidden, W1=first.weight.detach().cpu().tolist(),
             b1=first.bias.detach().cpu().tolist(), W2=last.weight.detach().cpu().reshape(-1).tolist(),
-            b2=float(last.bias.detach().cpu().item()), feature_mean=None, feature_std=None,
+            b2=float(last.bias.detach().cpu().item()), feature_mean=mean, feature_std=std,
             baseline=baseline.to_dict(), residual_scale=max(0.005, min(0.10, (sum(abs(v) for v in y) / len(y)) * 2.0)),
-            fitted=True, val_loss=best, baseline_val_loss=baseline_loss), ""
+            gate=gate, fitted=True, val_loss=deployed_loss, baseline_val_loss=baseline_loss), ""
     except (ImportError, RuntimeError, ValueError) as exc:
         # The ProDesk is intentionally inference-first and has no CUDA stack.
         # Reuse the project's deterministic pure-Python MLP trainer there so
@@ -215,15 +222,24 @@ def fit_nn5(X, y, baseline: FormulaModel, *, hidden=DEFAULT_HIDDEN,
                                       min_samples=min_samples, t_index=t_index, purge=purge)
             if fallback is None:
                 return None, "NN5 CPU fallback: " + reason
-            zero = sum((y[i] * y[i]) / 2.0 for i in val) / len(val)
-            if fallback.val_loss is None or fallback.val_loss >= zero - 1e-10:
-                return None, "NN5 CPU residual did not beat incumbent validation loss"
             scale = max(0.005, min(0.10, (sum(abs(v) for v in y) / len(y)) * 2.0))
+            candidate = NN5ResidualModel(hidden=hidden, W1=fallback.W1, b1=fallback.b1,
+                                         W2=fallback.W2, b2=fallback.b2,
+                                         feature_mean=fallback.feature_mean,
+                                         feature_std=fallback.feature_std,
+                                         baseline=baseline.to_dict(), residual_scale=scale)
+            deployed = [candidate.residual(dict(zip(NN5_FEATURE_NAMES, X[i])))
+                        for i in val]
+            deployed_loss = sum((candidate.gate * p - y[i]) ** 2
+                                for i, p in zip(val, deployed)) / len(val)
+            zero = sum(y[i] * y[i] for i in val) / len(val)
+            if deployed_loss >= zero - 1e-10:
+                return None, "NN5 CPU residual did not beat incumbent validation loss"
             return NN5ResidualModel(hidden=hidden, W1=fallback.W1, b1=fallback.b1,
                                     W2=fallback.W2, b2=fallback.b2,
                                     feature_mean=fallback.feature_mean,
                                     feature_std=fallback.feature_std,
                                     baseline=baseline.to_dict(), residual_scale=scale,
-                                    fitted=True, val_loss=fallback.val_loss,
+                                    gate=0.5, fitted=True, val_loss=deployed_loss,
                                     baseline_val_loss=zero), ""
         return None, f"NN5 training backend failed: {exc}"
