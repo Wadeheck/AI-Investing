@@ -39,10 +39,11 @@ paper or live brokers. It also produces a **global briefing** to keep you inform
 - **momentum** — fast vs slow SMA trend, tempered by RSI extremes.
 - **mean_reversion** — fades statistical extremes (z-score vs a volatility band).
 - **sentiment** — per-asset news sentiment scored by an LLM. Routing is
-  **quality-first with a local fallback**: three authorized BytePlus endpoints
-  in a failover chain (Seed-2.0-pro → DeepSeek-V3.2 → Seed-2.0-lite), each with
-  a free daily allowance. Reading the world is the one job worth paying for —
-  a local 8B model was doing it and was discarding 57% of what it read.
+  **local-first** through the authenticated Mac mini gateway: fast work uses
+  `qwen3.5:9b` and briefings use `qwen3.5:27b`. If the local gateway is
+  unavailable, the configured BytePlus DeepSeek-V3.2 endpoint and its
+  authorized failover chain remain available, with the existing hard spend cap.
+  See [`docs/status/LOCAL_LLM_INTEGRATION.md`](docs/status/LOCAL_LLM_INTEGRATION.md).
 - **political_hype** — **the anti-manipulation edge.** Detects sharp price+volume
   pumps, *especially* when they coincide with promotional or political news (a
   president/official hyping an asset, meme-coin launches), and returns a **negative

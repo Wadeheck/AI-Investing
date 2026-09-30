@@ -420,7 +420,9 @@ about the portfolio from the ThinkStation's `data/`; ask the ProDesk.
 The live ProDesk uses the Mac mini's private Tailscale-served local LLM gateway
 through `LOCAL_LLM_URL`, with the authenticated local model first and DeepSeek
 retained as the cloud fallback. The gateway is tailnet-only; it is not exposed
-through Tailscale Funnel.
+through Tailscale Funnel. The model assignment, queue path, fallback order, and
+verification evidence are recorded in
+[`LOCAL_LLM_INTEGRATION.md`](LOCAL_LLM_INTEGRATION.md).
 
 ### Migration recipe (kept, in case it is ever needed again)
 
