@@ -417,7 +417,10 @@ books. The repo, `.env` and `data/` are still present for development — which
 means `data/` here is a **stale snapshot**, not the live record. Never reason
 about the portfolio from the ThinkStation's `data/`; ask the ProDesk.
 
-`LOCAL_LLM_URL` is empty, so no GPU or Ollama is needed.
+The live ProDesk uses the Mac mini's private Tailscale-served local LLM gateway
+through `LOCAL_LLM_URL`, with the authenticated local model first and DeepSeek
+retained as the cloud fallback. The gateway is tailnet-only; it is not exposed
+through Tailscale Funnel.
 
 ### Migration recipe (kept, in case it is ever needed again)
 

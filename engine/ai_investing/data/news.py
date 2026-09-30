@@ -3,11 +3,11 @@
 Everything here is best-effort and degrades gracefully: no network or no API key
 just yields an empty/neutral context, and the engine keeps running on price signals.
 
-Provider priority (cost-first): LOCAL open-source model via Ollama (FREE — e.g.
-qwen3.6:27b, preferred whenever the server is up and LLM_PREFER_LOCAL=true) >
-Anthropic Claude > BytePlus ModelArk > DeepSeek > none. A failed local call falls
-through to the cloud chain transparently. All APIs are called directly over
-urllib so no SDK install is required.
+Provider priority (cost-first): LOCAL open-source model via the Ollama-compatible
+gateway (FREE — e.g. qwen3.5:27b, preferred whenever the server is up and
+LLM_PREFER_LOCAL=true) > the configured BytePlus DeepSeek-V3.2 access point >
+other configured cloud providers > none. A failed local call falls through
+transparently. All APIs are called directly over urllib so no SDK is required.
 
 Feed fetching uses conditional GET (ETag / If-Modified-Since) with a small disk
 cache, so polling every 5 minutes costs ~zero bandwidth when nothing changed.
@@ -41,7 +41,8 @@ _COOLDOWN_S = 300.0
 
 # local server availability is probed at most once per this many seconds
 _LOCAL_PROBE_TTL = 600.0
-_local_probe: dict = {"ts": 0.0, "ok": False}
+_local_probe: dict = {"ts": 0.0, "ok": False, "fingerprint": None}
+_NO_LOCAL_JSON_MODE: set[str] = set()
 
 
 def _call_claude(prompt: str, settings, max_tokens: int = 1500) -> Optional[str]:
@@ -437,33 +438,119 @@ def _call_byteplus(prompt: str, settings, model: str, max_tokens: int = 1500,
         raise
 
 
+def _local_is_gateway(settings) -> bool:
+    """Whether local inference should use the OpenAI-compatible gateway.
+
+    ``auto`` keeps existing native-Ollama installs working. An API key or a
+    URL ending in ``/v1`` is sufficient to select gateway mode.
+    """
+    mode = str(getattr(settings, "local_llm_mode", "auto") or "auto").lower()
+    if mode in {"gateway", "openai", "openai-compatible"}:
+        return True
+    if mode in {"ollama", "native"}:
+        return False
+    url = str(getattr(settings, "local_llm_url", "") or "").rstrip("/")
+    return bool(getattr(settings, "local_llm_api_key", "")) or url.endswith("/v1")
+
+
+def _local_gateway_url(settings) -> str:
+    url = str(settings.local_llm_url).rstrip("/")
+    return url if url.endswith("/v1") else url + "/v1"
+
+
+def _local_headers(settings, task: str = "") -> dict[str, str]:
+    headers = {"content-type": "application/json", "x-local-ai-project": "ai_investing"}
+    if task:
+        headers["x-local-ai-task"] = task
+    key = getattr(settings, "local_llm_api_key", "")
+    if key:
+        headers["authorization"] = f"Bearer {key}"
+    return headers
+
+
 def local_llm_available(settings) -> bool:
-    """Is the local Ollama server up? Cheap probe, cached for 10 minutes."""
+    """Is the local Ollama or gateway server up? Probe at most every 10 minutes."""
     if not settings.local_llm_url:
         return False
     now = time.time()
-    if now - _local_probe["ts"] < _LOCAL_PROBE_TTL:
+    gateway = _local_is_gateway(settings)
+    fingerprint = (
+        str(settings.local_llm_url), gateway,
+        getattr(settings, "local_llm_model", ""),
+        getattr(settings, "local_llm_model_fast", ""),
+        bool(getattr(settings, "local_llm_api_key", "")),
+    )
+    if (now - _local_probe["ts"] < _LOCAL_PROBE_TTL
+            and _local_probe.get("fingerprint") == fingerprint):
         return _local_probe["ok"]
     ok = False
     try:
-        req = urllib.request.Request(settings.local_llm_url.rstrip("/") + "/api/tags")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            names = [m.get("name", "") for m in json.loads(resp.read().decode()).get("models", [])]
-        ok = settings.local_llm_model in names or bool(names)
+        if gateway:
+            req = urllib.request.Request(
+                _local_gateway_url(settings) + "/models",
+                headers=_local_headers(settings),
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                models = json.loads(resp.read().decode()).get("data", [])
+            names = [m.get("id", "") for m in models if isinstance(m, dict)]
+        else:
+            req = urllib.request.Request(settings.local_llm_url.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                names = [m.get("name", "") for m in json.loads(resp.read().decode()).get("models", [])]
+        ok = (settings.local_llm_model in names
+              or settings.local_llm_model_fast in names
+              or bool(names))
     except Exception:
         ok = False
-    _local_probe.update(ts=now, ok=ok)
+    _local_probe.update(ts=now, ok=ok, fingerprint=fingerprint)
     return ok
 
 
 def _call_local(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
                 json_mode: bool = False) -> Optional[str]:
-    """Ollama /api/chat. The fast tier (per-cycle digestion volume) runs the small
-    model; the smart tier (daily briefing) runs the big one. think=False
-    suppresses qwen3's reasoning stream; json_mode forces a valid JSON object
-    (small models like to drop the outer braces otherwise)."""
-    payload: dict = {
-        "model": settings.local_llm_model if tier == "smart" else settings.local_llm_model_fast,
+    """Call native Ollama or the local OpenAI-compatible gateway.
+
+    The fast tier handles per-cycle volume; the smart tier handles briefings
+    and deeper event analysis. Both paths suppress Qwen reasoning output.
+    """
+    model = settings.local_llm_model if tier == "smart" else settings.local_llm_model_fast
+    if _local_is_gateway(settings):
+        payload: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+        if json_mode and model not in _NO_LOCAL_JSON_MODE:
+            payload["response_format"] = {"type": "json_object"}
+        task = "briefing" if tier == "smart" else ("event_tagging" if json_mode else "sentiment")
+
+        def _post(body_payload: dict) -> str:
+            body = json.dumps(body_payload).encode()
+            req = urllib.request.Request(
+                _local_gateway_url(settings) + "/chat/completions",
+                data=body, method="POST", headers=_local_headers(settings, task),
+            )
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                result = json.loads(resp.read().decode())
+            choices = result.get("choices") or [{}]
+            content = (choices[0].get("message") or {}).get("content", "")
+            if isinstance(content, list):
+                content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+            return str(content or "").strip()
+
+        try:
+            return _post(payload)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 400 and "response_format" in payload:
+                _NO_LOCAL_JSON_MODE.add(model)
+                payload.pop("response_format", None)
+                return _post(payload)
+            raise
+
+    payload = {
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "think": False,
@@ -487,19 +574,14 @@ def llm_ready(settings) -> bool:
 
 def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
               json_mode: bool = False) -> Optional[str]:
-    """Quality-first routing with a local safety net.
+    """Route local-first when configured, with cloud fallback.
 
-    This used to prefer the free local model for everything, which is how a
-    qwen3:8b ended up as the brain's live perception layer while discarding 57%
-    of what it read (see scripts/audit_live_tagger.py). Reading the world is the
-    one job worth paying for, so the cloud goes first: Anthropic > BytePlus >
-    DeepSeek, with `tier` ('fast'|'smart') picking the BytePlus model.
-
-    The local model remains as a FALLBACK, not a preference. If the API is down
-    or the key is exhausted, a degraded brain still beats a blind one — and the
-    engine is expected to survive unattended, so it must never depend on a
-    network it cannot guarantee. Set LLM_PREFER_LOCAL=true to invert this and go
-    back to local-first (free, materially worse).
+    ``LLM_PREFER_LOCAL=true`` makes the local gateway the primary provider.
+    If it is unavailable or errors, the configured BytePlus SMART access point
+    (the live DeepSeek-V3.2 endpoint) is tried first as the requested backup,
+    followed by other configured providers. A direct DeepSeek key, when set,
+    is tried before that access point. Setting it false retains the prior
+    Anthropic > BytePlus > DeepSeek cloud-first behavior.
     """
     def _local():
         if not local_llm_available(settings):
@@ -514,21 +596,33 @@ def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
         out = _local()
         if out:
             return out
-    try:
-        if settings.anthropic_api_key:
-            out = _call_claude(prompt, settings, max_tokens)
-            if out:
-                return out
-        if settings.byteplus_api_key:
-            out = _call_byteplus_chain(prompt, settings, tier, max_tokens, json_mode)
-            if out:
-                return out
-        if settings.deepseek_api_key:
-            out = _call_deepseek(prompt, settings, max_tokens)
-            if out:
-                return out
-    except Exception:
-        pass
+    providers = []
+    if settings.llm_prefer_local:
+        providers = [
+            (settings.deepseek_api_key, lambda: _call_deepseek(prompt, settings, max_tokens)),
+            (settings.byteplus_api_key,
+             # BYTEPLUS_LLM_SMART is the configured DeepSeek-V3.2 endpoint.
+             # Use its chain even for fast tasks so the requested DeepSeek
+             # backup is deterministic rather than silently using Dola first.
+             lambda: _call_byteplus_chain(prompt, settings, "smart", max_tokens, json_mode)),
+            (settings.anthropic_api_key, lambda: _call_claude(prompt, settings, max_tokens)),
+        ]
+    else:
+        providers = [
+            (settings.anthropic_api_key, lambda: _call_claude(prompt, settings, max_tokens)),
+            (settings.byteplus_api_key,
+             lambda: _call_byteplus_chain(prompt, settings, tier, max_tokens, json_mode)),
+            (settings.deepseek_api_key, lambda: _call_deepseek(prompt, settings, max_tokens)),
+        ]
+    for enabled, call in providers:
+        if not enabled:
+            continue
+        try:
+            out = call()
+        except Exception:
+            continue
+        if out:
+            return out
     # cloud unreachable: degraded is better than blind
     return None if settings.llm_prefer_local else _local()
 

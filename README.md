@@ -80,7 +80,7 @@ Then add real data + a global briefing:
 ```bash
 python3 ../scripts/env_template.py > ../.env   # blank template; then edit
 pip install -r requirements.txt   # optional: real data / live brokers
-python3 -m ai_investing.main --briefing         # AI world briefing (needs DEEPSEEK_API_KEY, BYTEPLUS_API_KEY, or ANTHROPIC_API_KEY)
+python3 -m ai_investing.main --briefing         # AI world briefing (uses local gateway first; DeepSeek remains fallback)
 python3 -m ai_investing.main                     # autonomous loop (fully automated)
 ```
 
@@ -99,7 +99,12 @@ Everything is in `.env` (create with `python3 scripts/env_template.py > .env`). 
 | `DATA_PROVIDER` | `synthetic` | `synthetic` \| `stooq` \| `yfinance` \| `ccxt` |
 | `STOCK_BROKER` | `paper` | `paper` \| `longbridge` \| `moomoo` |
 | `CRYPTO_EXCHANGE` | `coinbase` | any ccxt id: `coinbase`/`gemini`/`binance`/`kraken` |
-| `DEEPSEEK_API_KEY` | – | enables news sentiment, hype detection, briefing (lowest-priority provider) |
+| `LOCAL_LLM_URL` | `http://localhost:11434` | Ollama or the local OpenAI-compatible gateway URL |
+| `LOCAL_LLM_API_KEY` | – | gateway credential; required for the authenticated Mac mini endpoint |
+| `LOCAL_LLM_MODEL` | `qwen3.5:27b` | smart-tier local model |
+| `LOCAL_LLM_MODEL_FAST` | `qwen3.5:9b` | fast per-cycle local model |
+| `LLM_PREFER_LOCAL` | `true` | local-first; cloud chain, including DeepSeek, remains fallback |
+| `DEEPSEEK_API_KEY` | – | optional direct DeepSeek backup; ProDesk uses BytePlus's configured DeepSeek-V3.2 endpoint |
 | `BYTEPLUS_API_KEY` | – | same, via BytePlus ModelArk (FAST model for scoring, SMART model for briefing); takes priority over DeepSeek |
 | `ANTHROPIC_API_KEY` | – | upgrades sentiment/briefing to Claude when set (takes priority over BytePlus and DeepSeek) |
 | `RISK_*` | see file | the guardrails (stops, drawdown kill switch, caps) |
@@ -338,7 +343,7 @@ credentials in a form that's only safe over an encrypted connection.
 engine/ai_investing/
   config.py  models.py  indicators.py  runner.py  main.py
   signals/   momentum · mean_reversion · sentiment · political_hype
-  data/      providers (synthetic/stooq/yfinance/ccxt) · news (RSS + DeepSeek/BytePlus/Claude)
+  data/      providers (synthetic/stooq/yfinance/ccxt) · news (RSS + local gateway/DeepSeek/BytePlus/Claude)
   brokers/   base · paper · live (ccxt/longbridge/moomoo)
   strategy/  decision · risk
   storage/   journal (SQLite)

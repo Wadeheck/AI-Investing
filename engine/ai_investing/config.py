@@ -405,10 +405,14 @@ class Settings:
     anthropic_model: str = field(default_factory=lambda: _get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"))
     deepseek_api_key: str = field(default_factory=lambda: _get("DEEPSEEK_API_KEY", ""))
     deepseek_model: str = field(default_factory=lambda: _get("DEEPSEEK_MODEL", "deepseek-chat"))
-    # Local open-source LLM (Ollama / OpenAI-compatible). FREE — preferred when up.
+    # Local open-source LLM (native Ollama or the authenticated OpenAI-compatible
+    # gateway). FREE — preferred when up. In gateway mode LOCAL_LLM_URL may be
+    # either the service root or a URL ending in /v1.
     local_llm_url: str = field(default_factory=lambda: _get("LOCAL_LLM_URL", "http://localhost:11434"))
-    local_llm_model: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL", "qwen3.6:27b"))          # smart tier
-    local_llm_model_fast: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL_FAST", "qwen3:8b"))   # per-cycle volume
+    local_llm_api_key: str = field(default_factory=lambda: _get("LOCAL_LLM_API_KEY", ""))
+    local_llm_mode: str = field(default_factory=lambda: _get("LOCAL_LLM_MODE", "auto"))
+    local_llm_model: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL", "qwen3.5:27b"))          # smart tier
+    local_llm_model_fast: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL_FAST", "qwen3.5:9b"))   # per-cycle volume
     llm_prefer_local: bool = field(default_factory=lambda: _get_bool("LLM_PREFER_LOCAL", True))
     byteplus_api_key: str = field(default_factory=lambda: _get("BYTEPLUS_API_KEY", ""))
     byteplus_model_smart: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_SMART", "seed-2-0-pro-260328"))

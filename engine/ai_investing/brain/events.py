@@ -56,10 +56,10 @@ CURATED_SOURCES = ("user_curated",)
 # choice became "cut real analysis" or "raise the number". Cutting analysis to
 # fit a guess is the 400-char bug again with a bigger constant.
 #
-# 20k is ~5k tokens — comfortable for the cloud models that run FIRST
-# (Anthropic > BytePlus > DeepSeek). The local qwen3:8b fallback is the only
-# context-constrained reader, it is a degraded path already, and it is reached
-# only when every cloud key is exhausted.
+# 20k is ~5k tokens — comfortable for the configured local gateway models and
+# the cloud fallback chain (Anthropic > BytePlus > DeepSeek). The fast local
+# model is the high-volume reader; a failed local call still falls through to
+# the cloud chain.
 #
 # The TOTAL is what actually protects the prompt: one long piece is fine, but
 # forty dropped at once would not be. Per-item alone cannot bound that, and the
