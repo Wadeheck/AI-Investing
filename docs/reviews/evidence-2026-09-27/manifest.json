@@ -1,0 +1,19 @@
+{
+  "host": "eugene-HP-ProDesk-400-G6-Desktop-Mini-PC",
+  "address": "100.64.113.103",
+  "remote_repo": "/home/eugene/Projects/AI-Investing",
+  "head": "4774d2e",
+  "date": "2026-09-27",
+  "snapshot_note": "Selected files read during live operation around 14:28-14:31 Asia/Kuala_Lumpur; file set is not an atomic database snapshot. No services or remote configuration changed.",
+  "source_sha256": {
+    "engine/ai_investing/learning/outcome_ledger.py": "e96636187463cc78bbbd9318d5d4cfda1502592d224145186d5990f4b327a449",
+    "engine/ai_investing/learning/nn_v4.py": "1ec99cf1d4b8852a8c2cd8a664e8fd6a5e3b97424442342dfbae053d0cfa3298",
+    "engine/ai_investing/learning/nn_v4_live.py": "b3eca3c89f827e131d959e25a2ac5d20d1e0faf5d5aa4eb9393f514ba3c08963",
+    "engine/ai_investing/learning/nn_v5.py": "12342a6f653e3d4abea60ecb5b6d4b7dff7070188800b46febd9f48f36f1aace",
+    "engine/ai_investing/learning/nn_v5_live.py": "367a3ec46e4c167211ae09b90732acf7772b212d0903effab959365e3b0699f5",
+    "engine/ai_investing/learning/nn_v5_runner.py": "d5e96316576bf51f01fd032e29219fbb69d3d83b9e50586fd750cf033ecf99a2",
+    "engine/ai_investing/backtest/engine.py": "bfac01670e77cdbbde82ffde0f956f85ea11f74a59f5fc707f09a7e9e9c8f02d",
+    "engine/ai_investing/learning/nn_shadow.py": "7c35e5326fc951f9766db7b2d92a5e15709170ac19119b0a3e4b99858c9cba33",
+    "scripts/brain_audit.py": "d1ca08e9275419511873138583734cf7d1f4e693de68e543cf33656968579e69"
+  }
+}

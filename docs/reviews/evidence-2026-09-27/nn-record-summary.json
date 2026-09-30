@@ -1,0 +1,150 @@
+{
+  "nn_shadow": {
+    "rows": 881762,
+    "bad": 0,
+    "primaries": 10168,
+    "duplicate_primaries": 0,
+    "decision_days": 37,
+    "start": "2026-08-22",
+    "last": "2026-09-27",
+    "directions": {
+      "LONG": 4838,
+      "FLAT": 908,
+      "SHORT": 4422
+    },
+    "settled": 0,
+    "settled_days": 0,
+    "settled_start": null,
+    "settled_end": null,
+    "ledger_hit": null,
+    "latest_direction": {
+      "SHORT": 179,
+      "LONG": 76,
+      "FLAT": 20
+    }
+  },
+  "nn_v3": {
+    "rows": 655747,
+    "bad": 0,
+    "primaries": 8518,
+    "duplicate_primaries": 0,
+    "decision_days": 31,
+    "start": "2026-08-28",
+    "last": "2026-09-27",
+    "directions": {
+      "FLAT": 1207,
+      "LONG": 3076,
+      "SHORT": 4235
+    },
+    "settled": 6870,
+    "settled_days": 25,
+    "settled_start": "2026-08-29",
+    "settled_end": "2026-09-22",
+    "ledger_hit": 0.49561699258260283,
+    "latest_direction": {
+      "SHORT": 124,
+      "LONG": 122,
+      "FLAT": 29
+    },
+    "weight_mismatch": 0,
+    "corrected_direction_hit": 0.49763991908294,
+    "paired_n": 3272,
+    "paired_signed_excess": -0.006460036556503736
+  },
+  "nn_v4": {
+    "rows": 643647,
+    "bad": 0,
+    "primaries": 8518,
+    "duplicate_primaries": 0,
+    "decision_days": 31,
+    "start": "2026-08-28",
+    "last": "2026-09-27",
+    "directions": {
+      "LONG": 5489,
+      "SHORT": 2636,
+      "FLAT": 393
+    },
+    "settled": 6870,
+    "settled_days": 25,
+    "settled_start": "2026-08-29",
+    "settled_end": "2026-09-22",
+    "ledger_hit": 0.4968726163234172,
+    "latest_direction": {
+      "LONG": 187,
+      "SHORT": 75,
+      "FLAT": 13
+    },
+    "weight_mismatch": 0,
+    "corrected_direction_hit": 0.4983981693363844,
+    "paired_n": 3379,
+    "paired_signed_excess": 0.0017642992529175502,
+    "probability_range": [
+      0.47871,
+      0.55194
+    ],
+    "latest_probability_range": [
+      0.54653,
+      0.55169
+    ],
+    "latest_ood_zero": 13,
+    "latest_ood_below_half": 85,
+    "brier": 0.2527620449184425,
+    "brier_constant_base": 0.2499964192563495
+  },
+  "nn_v5": {
+    "rows": 287837,
+    "bad": 0,
+    "primaries": 2473,
+    "duplicate_primaries": 0,
+    "decision_days": 9,
+    "start": "2026-09-19",
+    "last": "2026-09-27",
+    "directions": {
+      "LONG": 449,
+      "SHORT": 1033,
+      "FLAT": 991
+    },
+    "settled": 1100,
+    "settled_days": 4,
+    "settled_start": "2026-09-19",
+    "settled_end": "2026-09-22",
+    "ledger_hit": 0.43944636678200694,
+    "latest_direction": {
+      "FLAT": 122,
+      "SHORT": 111,
+      "LONG": 42
+    },
+    "weight_mismatch": 792,
+    "corrected_direction_hit": 0.4353120243531202,
+    "paired_n": 443,
+    "paired_signed_excess": -0.0021822419444342193
+  },
+  "linear_brain": {
+    "rows": 8518,
+    "bad": 0,
+    "primaries": 8518,
+    "duplicate_primaries": 0,
+    "decision_days": 31,
+    "start": "2026-08-28",
+    "last": "2026-09-27",
+    "directions": {
+      "FLAT": 4134,
+      "SHORT": 1283,
+      "LONG": 3101
+    },
+    "settled": 7145,
+    "settled_days": 26,
+    "settled_start": "2026-08-28",
+    "settled_end": "2026-09-22",
+    "ledger_hit": 0.5060532687651331,
+    "latest_direction": {
+      "LONG": 79,
+      "FLAT": 150,
+      "SHORT": 46
+    },
+    "weight_mismatch": 0,
+    "corrected_direction_hit": 0.5065913370998116,
+    "paired_n": 3717,
+    "paired_signed_excess": 0.0
+  }
+}

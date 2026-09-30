@@ -1,0 +1,726 @@
+{
+ "generated": "2026-09-27T06:33:42.692802+00:00",
+ "horizon_days": 5,
+ "brain_db_path": "/home/eugene/Projects/AI-Investing/data/brain.db",
+ "graph_path": "/home/eugene/Projects/AI-Investing/data/knowledge_graph.json",
+ "counting_unit": {
+  "rows": 101734,
+  "observations": 1738,
+  "replication": 58.5,
+  "labelled_primary": 1738,
+  "label_agrees": true,
+  "gradable_observations": 1552,
+  "lost_to_deadband": 186,
+  "note": "deadband losses are dropped, never back-filled from a re-issue"
+ },
+ "directional": {
+  "avoid/conv=0": {
+   "n": 383,
+   "hits": 178,
+   "hit": 0.465,
+   "p": 0.1839,
+   "n_effective": 76,
+   "p_effective": 0.5666,
+   "avg_excess_pct": 2.93
+  },
+  "avoid/conv=1": {
+   "n": 531,
+   "hits": 285,
+   "hit": 0.537,
+   "p": 0.099,
+   "n_effective": 106,
+   "p_effective": 0.4968,
+   "avg_excess_pct": 0.81
+  },
+  "long/conv=0": {
+   "n": 240,
+   "hits": 123,
+   "hit": 0.512,
+   "p": 0.747,
+   "n_effective": 48,
+   "p_effective": 0.8854,
+   "avg_excess_pct": 1.11
+  },
+  "long/conv=1": {
+   "n": 263,
+   "hits": 127,
+   "hit": 0.483,
+   "p": 0.6219,
+   "n_effective": 52,
+   "p_effective": 0.8899,
+   "avg_excess_pct": 0.69
+  },
+  "short_or_avoid/conv=0": {
+   "n": 67,
+   "hits": 33,
+   "hit": 0.493,
+   "p": 1.0,
+   "n_effective": 13,
+   "p_effective": 1.0,
+   "avg_excess_pct": 1.67
+  },
+  "short_or_avoid/conv=1": {
+   "n": 47,
+   "hits": 18,
+   "hit": 0.383,
+   "p": 0.1439,
+   "n_effective": 9,
+   "p_effective": 0.5078,
+   "avg_excess_pct": 3.12
+  }
+ },
+ "symbols": {
+  "pairs_examined": 217,
+  "bar": ">= 8 distinct days and binomial p <= 0.05",
+  "significantly_right": [
+   {
+    "symbol": "JKS",
+    "call": "avoid",
+    "days": 41,
+    "avg_excess_pct": -4.23,
+    "n": 41,
+    "hits": 32,
+    "hit": 0.78,
+    "p": 0.0004,
+    "n_effective": 8,
+    "p_effective": 0.2891
+   },
+   {
+    "symbol": "DEO",
+    "call": "avoid",
+    "days": 24,
+    "avg_excess_pct": -0.88,
+    "n": 24,
+    "hits": 20,
+    "hit": 0.833,
+    "p": 0.0015,
+    "n_effective": 4,
+    "p_effective": 0.625
+   },
+   {
+    "symbol": "COST",
+    "call": "avoid",
+    "days": 9,
+    "avg_excess_pct": -1.61,
+    "n": 9,
+    "hits": 9,
+    "hit": 1.0,
+    "p": 0.0039,
+    "n_effective": 1,
+    "p_effective": 1.0
+   },
+   {
+    "symbol": "LINK/USD",
+    "call": "long",
+    "days": 16,
+    "avg_excess_pct": 4.02,
+    "n": 16,
+    "hits": 13,
+    "hit": 0.812,
+    "p": 0.0213,
+    "n_effective": 3,
+    "p_effective": 1.0
+   },
+   {
+    "symbol": "SOL/USD",
+    "call": "long",
+    "days": 16,
+    "avg_excess_pct": 2.53,
+    "n": 16,
+    "hits": 13,
+    "hit": 0.812,
+    "p": 0.0213,
+    "n_effective": 3,
+    "p_effective": 1.0
+   }
+  ],
+  "significantly_wrong": [
+   {
+    "symbol": "META",
+    "call": "avoid",
+    "days": 14,
+    "avg_excess_pct": 5.16,
+    "n": 14,
+    "hits": 1,
+    "hit": 0.071,
+    "p": 0.0018,
+    "n_effective": 2,
+    "p_effective": 0.5
+   },
+   {
+    "symbol": "2097.HK",
+    "call": "long",
+    "days": 11,
+    "avg_excess_pct": -2.04,
+    "n": 11,
+    "hits": 1,
+    "hit": 0.091,
+    "p": 0.0117,
+    "n_effective": 2,
+    "p_effective": 0.5
+   },
+   {
+    "symbol": "SOL/USD",
+    "call": "avoid",
+    "days": 21,
+    "avg_excess_pct": 2.47,
+    "n": 21,
+    "hits": 5,
+    "hit": 0.238,
+    "p": 0.0266,
+    "n_effective": 4,
+    "p_effective": 0.625
+   },
+   {
+    "symbol": "HYPE/USD",
+    "call": "avoid",
+    "days": 23,
+    "avg_excess_pct": 3.67,
+    "n": 23,
+    "hits": 6,
+    "hit": 0.261,
+    "p": 0.0347,
+    "n_effective": 4,
+    "p_effective": 0.625
+   },
+   {
+    "symbol": "UNI/USD",
+    "call": "long",
+    "days": 12,
+    "avg_excess_pct": -5.35,
+    "n": 12,
+    "hits": 2,
+    "hit": 0.167,
+    "p": 0.0386,
+    "n_effective": 2,
+    "p_effective": 0.5
+   }
+  ]
+ },
+ "events": {
+  "by_sign": {
+   "sign=-1/noise=0": {
+    "n": 1908,
+    "hit": 0.501
+   },
+   "sign=-1/noise=1": {
+    "n": 848,
+    "hit": 0.407
+   },
+   "sign=+1/noise=0": {
+    "n": 4521,
+    "hit": 0.565
+   },
+   "sign=+1/noise=1": {
+    "n": 3600,
+    "hit": 0.598
+   }
+  },
+  "by_emotion": {
+   "fear": {
+    "n": 4017,
+    "hit": 0.557
+   },
+   "greed": {
+    "n": 1959,
+    "hit": 0.607
+   },
+   "hope": {
+    "n": 1643,
+    "hit": 0.529
+   },
+   "neutral": {
+    "n": 1555,
+    "hit": 0.523
+   },
+   "euphoria": {
+    "n": 849,
+    "hit": 0.548
+   },
+   "complacency": {
+    "n": 359,
+    "hit": 0.538
+   },
+   "panic": {
+    "n": 268,
+    "hit": 0.455
+   },
+   "anger": {
+    "n": 227,
+    "hit": 0.52
+   }
+  },
+  "grading_basis": {
+   "absolute": 78162,
+   "excess": 7697
+  },
+  "rows_with_benchmark": 7697,
+  "warning": null
+ },
+ "graph": {
+  "nodes": 806,
+  "edges": 1287,
+  "assets": 658,
+  "origins_probed": 89,
+  "distinct_signatures": 207,
+  "resolution_pct": 31.5,
+  "inert_assets": 389,
+  "assets_duplicating_a_peer": 104,
+  "llm_edges": 452,
+  "llm_share_pct": 35.1,
+  "llm_proposed_last_7d": 40,
+  "daily_proposal_budget": 6,
+  "unreviewed_llm_edges": 452,
+  "placeholder_nodes": [],
+  "orphan_llm_nodes": 130,
+  "user_edges": 33,
+  "user_share_pct": 2.6,
+  "user_nodes": 8,
+  "user_sources": [
+   "3-5 year GPU economic life mismatched against 24 year financ",
+   "Absence of marginal long-end treasury buyers is the definiti",
+   "All residual value loss on obsolete compute collateral falls",
+   "Announced financing regimes reprice datacenter buildout them",
+   "Apollo becomes residual claimant once Athene capital buffer ",
+   "Athene holds $227bn of debt originated by its parent Apollo;",
+   "Athene holds concentrated sponsor-originated compute paper w",
+   "Blackrock earns market convening and administration fees on ",
+   "Blue Owl originates compute securitisation paper; revenue is",
+   "Capex buildout creates collateral that backs securitised pap"
+  ],
+  "example_crypto_liquidity_shock": {
+   "assets_touched": 63,
+   "of_which_indistinguishable": 49
+  }
+ },
+ "learning": {
+  "formula": {
+   "written": "2026-09-22T08:07:13.999301+00:00",
+   "version": 2,
+   "model_type": "linear",
+   "fitted": false,
+   "features": 10,
+   "feature_names": [
+    "bias",
+    "momentum",
+    "mean_reversion",
+    "sentiment",
+    "political_hype",
+    "macro_linkage",
+    "consensus",
+    "mom_lowvol",
+    "trend_zscore",
+    "regime_persistence"
+   ],
+   "rls_samples": 10,
+   "rls_theta_moved_from_prior": true,
+   "alive": true,
+   "outcomes_rows": 11,
+   "param_versions": 2
+  },
+  "edge_calibration": {
+   "generated": "2026-09-27T06:18:26.604541+00:00",
+   "scored": 363,
+   "paths_scored": 319,
+   "supported": 0,
+   "contradicted": 0,
+   "unproven": 363,
+   "gain": 2.0,
+   "gain_saturated": true,
+   "alive": false
+  },
+  "expected_move": {
+   "n_settled": 59,
+   "median_observed_ratio": 7.9,
+   "median_noise_ratio": 10.8,
+   "hit_rate": 0.407,
+   "ratio_is_indistinguishable_from_noise": true,
+   "claims_with_the_2pct_default_vol": 17,
+   "note": "observed ~= noise means the ratio measures signal-to-noise, NOT that expected_move is too small. Raising `gain` cannot close it and would make the model claim the asset's whole range. The honest lever is bigger IMPACT (graph wiring)."
+  },
+  "reliability": {
+   "symbols": 152,
+   "pinned_at_a_bound": 0,
+   "pinned_pct": 0.0,
+   "neutral": 45,
+   "healthy": true
+  },
+  "emotion_calibration": {
+   "generated": "2026-09-27T06:18:23.245767+00:00",
+   "return_basis": "mixed (7697/12153 excess)",
+   "panic_rebound": {
+    "coef": 0.0,
+    "basis": "measured-contradicted",
+    "n": 3223,
+    "baseline_n": 4051,
+    "lift": -0.00017,
+    "tstat": -0.17
+   },
+   "euphoria_fade": {
+    "coef": 0.0,
+    "basis": "measured-contradicted",
+    "n": 1126,
+    "baseline_n": 6148,
+    "lift": 0.00216,
+    "tstat": 1.67
+   },
+   "has_control_group": true
+  },
+  "adviser_gate": {
+   "checked_at": "2026-09-27T01:35:34.163390+00:00",
+   "eligible": false,
+   "adviser_long": {
+    "n": 263,
+    "hit": 0.4828897338403042,
+    "days": 50
+   },
+   "formula_short": {
+    "n": 2358,
+    "hit": 0.5432569974554707,
+    "days": 54
+   },
+   "threshold": {
+    "adviser_long_hit": 0.6,
+    "formula_short_hit": 0.35,
+    "min_n": 80,
+    "min_days": 30,
+    "effective_n_divisor": 5
+   }
+  }
+ },
+ "reach": {
+  "by_market": {
+   "US": {
+    "n": 141,
+    "n_independent": 28,
+    "hit": 0.482,
+    "p_value": 0.575,
+    "significant": false,
+    "avg_excess_pct": 0.04
+   },
+   "HK": {
+    "n": 62,
+    "n_independent": 12,
+    "hit": 0.355,
+    "p_value": 0.927,
+    "significant": false,
+    "avg_excess_pct": -0.44
+   },
+   "KS": {
+    "n": 23,
+    "n_independent": 5,
+    "hit": 0.696,
+    "p_value": 0.5,
+    "significant": false,
+    "avg_excess_pct": 4.02
+   },
+   "T": {
+    "n": 22,
+    "n_independent": 4,
+    "hit": 0.545,
+    "p_value": 0.688,
+    "significant": false,
+    "avg_excess_pct": 4.53
+   },
+   "SI": {
+    "n": 8,
+    "n_independent": 2,
+    "hit": 0.875,
+    "p_value": 0.25,
+    "significant": false,
+    "avg_excess_pct": 1.86
+   },
+   "AS": {
+    "n": 3,
+    "n_independent": 1,
+    "hit": 0.667,
+    "p_value": 0.5,
+    "significant": false,
+    "avg_excess_pct": -0.03
+   },
+   "SS": {
+    "n": 3,
+    "n_independent": 1,
+    "hit": 0.0,
+    "p_value": 1.0,
+    "significant": false,
+    "avg_excess_pct": -0.85
+   },
+   "PA": {
+    "n": 1,
+    "n_independent": 1,
+    "hit": 0.0,
+    "p_value": 1.0,
+    "significant": false,
+    "avg_excess_pct": -1.76
+   }
+  },
+  "symbols_traded_ever": 71,
+  "horizon_days": 5,
+  "note": "`days` is symbol-days; `n_independent` = days/horizon is what the sample is worth, because daily readings of a forward return overlap. A row with significant=false is NOT a missed opportunity \u2014 it is a coin flip that landed heads. Do not size a trade on one.",
+  "correct_but_never_held": [
+   {
+    "symbol": "MU",
+    "days": 9,
+    "n_independent": 2,
+    "hit": 0.78,
+    "p_value": 0.25,
+    "significant": false,
+    "avg_excess_pct": 3.16
+   },
+   {
+    "symbol": "O39.SI",
+    "days": 7,
+    "n_independent": 1,
+    "hit": 0.86,
+    "p_value": 0.5,
+    "significant": false,
+    "avg_excess_pct": 1.98
+   },
+   {
+    "symbol": "MRVL",
+    "days": 5,
+    "n_independent": 1,
+    "hit": 0.8,
+    "p_value": 0.5,
+    "significant": false,
+    "avg_excess_pct": 1.77
+   },
+   {
+    "symbol": "SMCI",
+    "days": 11,
+    "n_independent": 2,
+    "hit": 0.64,
+    "p_value": 0.75,
+    "significant": false,
+    "avg_excess_pct": 0.28
+   }
+  ]
+ },
+ "books": {
+  "trading": {
+   "equity": 9629.397327136248,
+   "cash": 3709.7427869042986,
+   "positions": 12,
+   "positions_source": "live_book.json (BookLedger)",
+   "idle_pct": 38.5,
+   "cash_is_collateral": false,
+   "basis": "(undeclared)",
+   "ts": "2026-09-27T06:27:35.335111+00:00",
+   "halted": false
+  },
+  "investing": {
+   "equity": 9295.11,
+   "cash": 4917.207519573794,
+   "positions": 4,
+   "positions_source": "invest_state.json",
+   "idle_pct": 52.9,
+   "cash_is_collateral": false,
+   "basis": "BookBroker:book",
+   "ts": null,
+   "halted": null
+  },
+  "event_sleeve": {
+   "equity": 11039.38,
+   "cash": 1218.9777601192727,
+   "positions": 3,
+   "positions_source": "event_state.json",
+   "idle_pct": 11.0,
+   "cash_is_collateral": false,
+   "basis": "BookBroker:book",
+   "ts": "2026-09-27T06:27:03.377946+00:00",
+   "halted": null
+  },
+  "crypto": {
+   "equity": 5616.69,
+   "cash": 4980.73486823,
+   "positions": 3,
+   "positions_source": "crypto_state.json",
+   "idle_pct": null,
+   "cash_is_collateral": true,
+   "basis": "BinanceFuturesBroker:binance_futures",
+   "ts": "2026-09-27T06:27:34.995492+00:00",
+   "halted": null
+  },
+  "crypto_event": {
+   "equity": 3691.07,
+   "cash": 3691.07465214,
+   "positions": 0,
+   "positions_source": "crypto_event_state.json",
+   "idle_pct": null,
+   "cash_is_collateral": true,
+   "basis": "BinanceFuturesBroker:binance_futures",
+   "ts": "2026-09-27T06:27:04.011404+00:00",
+   "halted": null
+  },
+  "_order_flow": {
+   "filled": 73,
+   "buys_filled": 46,
+   "last_fill": "2026-09-25T19:14:31.423846+00:00",
+   "by_status": {
+    "filled": 73,
+    "pending": 46,
+    "rejected": 43
+   }
+  },
+  "_note": "positions 0 AND no recent fill = a frozen book; check the trade floors (\u00a74.41). idle_pct is null for margined books because their cash is collateral, not spending money."
+ },
+ "pnl": {
+  "event_sleeve": {
+   "total_realised": 1177.09,
+   "per_fill": {
+    "n": 18,
+    "mean": 65.3939,
+    "t": 2.23,
+    "p": 0.0393,
+    "significant": true
+   },
+   "per_basket": {
+    "n": 7,
+    "mean": 168.1557,
+    "t": 1.66,
+    "p": 0.1473,
+    "significant": false
+   },
+   "inflation": 2.6,
+   "excess_over_benchmark": {
+    "n_benchmarked": 18,
+    "of_fills": 18,
+    "per_fill": {
+     "n": 18,
+     "mean": 0.0207,
+     "t": 2.42,
+     "p": 0.0273,
+     "significant": true
+    },
+    "per_basket": {
+     "n": 7,
+     "mean": 0.0229,
+     "t": 2.22,
+     "p": 0.0686,
+     "significant": false
+    },
+    "mean_excess_pct": 2.07,
+    "benchmarks": [
+     "2800.HK",
+     "SPY",
+     "TAN",
+     "XLF",
+     "XLK"
+    ],
+    "sector_adjusted_fills": 11
+   },
+   "verdict": "edge not demonstrated"
+  },
+  "crypto": {
+   "total_realised": 33.32,
+   "per_fill": {
+    "n": 9,
+    "mean": 3.7022,
+    "t": 1.57,
+    "p": 0.1546,
+    "significant": false
+   },
+   "per_basket": {
+    "n": 3,
+    "mean": 11.1067,
+    "t": 1.41,
+    "p": null,
+    "significant": false,
+    "note": "n<5: no p-value is meaningful"
+   },
+   "inflation": 3.0,
+   "excess_over_benchmark": {
+    "n_benchmarked": 6,
+    "of_fills": 9,
+    "per_fill": {
+     "n": 6,
+     "mean": 0.0104,
+     "t": 2.09,
+     "p": 0.0913,
+     "significant": false
+    },
+    "per_basket": {
+     "n": 3,
+     "mean": 0.0104,
+     "t": 5.13,
+     "p": null,
+     "significant": false,
+     "note": "n<5: no p-value is meaningful"
+    },
+    "mean_excess_pct": 1.04,
+    "benchmarks": [
+     "BTC/USD"
+    ],
+    "sector_adjusted_fills": 0
+   },
+   "verdict": "edge not demonstrated"
+  },
+  "investing": {
+   "total_realised": -399.24,
+   "per_fill": {
+    "n": 7,
+    "mean": -57.0343,
+    "t": -2.09,
+    "p": 0.0821,
+    "significant": false
+   },
+   "per_basket": {
+    "n": 6,
+    "mean": -66.54,
+    "t": -2.15,
+    "p": 0.0839,
+    "significant": false
+   },
+   "inflation": 1.2,
+   "excess_over_benchmark": {
+    "n_benchmarked": 0,
+    "of_fills": 7
+   },
+   "verdict": "edge not demonstrated"
+  },
+  "crypto_event": {
+   "total_realised": -1193.97,
+   "per_fill": {
+    "n": 43,
+    "mean": -27.7667,
+    "t": -2.98,
+    "p": 0.0048,
+    "significant": true
+   },
+   "per_basket": {
+    "n": 27,
+    "mean": -44.2211,
+    "t": -2.53,
+    "p": 0.0177,
+    "significant": true
+   },
+   "inflation": 1.6,
+   "excess_over_benchmark": {
+    "n_benchmarked": 39,
+    "of_fills": 43,
+    "per_fill": {
+     "n": 39,
+     "mean": -0.0243,
+     "t": -2.93,
+     "p": 0.0057,
+     "significant": true
+    },
+    "per_basket": {
+     "n": 27,
+     "mean": -0.0221,
+     "t": -2.53,
+     "p": 0.0179,
+     "significant": true
+    },
+    "mean_excess_pct": -2.43,
+    "benchmarks": [
+     "BTC/USD"
+    ],
+    "sector_adjusted_fills": 0
+   },
+   "verdict": "UNDERPERFORMS its benchmark significantly"
+  },
+  "_note": "`per_fill` counts tickers; `per_basket` counts DAYS a bet was taken off. A book that is significant per_fill and not per_basket has not shown edge \u2014 it has shown that it holds correlated positions. `excess_over_benchmark` is the measure that can see skill: raw P&L in a rising sector is beta (\u00a74.6), and raw is also NOISIER, because the market factor it carries swamps the residual. Read `per_basket` under excess. TWO CAVEATS THAT ARE NOT OPTIONAL: (1) the benchmark is a broad index, so excess for a high-beta sector name still contains a SECTOR factor \u2014 SPY is not the right yardstick for a semis basket, and the honest benchmark would be SOXX. (2) four books are tested here; one p~0.03 among them is roughly what chance produces, so a single significant book is a reason to keep measuring, never a reason to size up."
+ }
+}
