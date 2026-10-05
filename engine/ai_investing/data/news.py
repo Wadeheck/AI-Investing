@@ -334,7 +334,7 @@ def _byteplus_chain(settings, tier: str) -> list[str]:
 
 
 def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
-                         json_mode: bool) -> Optional[str]:
+                         json_mode: bool, free_only: bool = False) -> Optional[str]:
     """Try each authorized endpoint until one answers.
 
     An endpoint that just failed is skipped for a few minutes rather than
@@ -373,7 +373,13 @@ def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
             # live engine cycle and a scheduled digest can therefore not both
             # approve the same remaining allowance concurrently.
             with _usage_lock(settings):
-                if _at_free_cap(settings, model, reserve):
+                # Queue drains deliberately rotate to local inference at 90%.
+                # They must not enter the 90%-100% band, even though the normal
+                # cloud path may still use that band while it remains free.
+                if free_only:
+                    if _spent(settings, model, _FREE_BUDGET_USE, reserve) is not False:
+                        continue
+                elif _at_free_cap(settings, model, reserve):
                     continue
                 _reserve_usage(settings, model, reserve)
                 out = _call_byteplus(prompt, settings, model, max_tokens,
@@ -394,6 +400,30 @@ def _call_byteplus_chain(prompt: str, settings, tier: str, max_tokens: int,
         return None
     if last_exc is not None:
         raise last_exc
+    return None
+
+
+def _call_llm_queue_uncached(prompt: str, settings, max_tokens: int = 1500,
+                             tier: str = "fast", json_mode: bool = False) -> Optional[str]:
+    """Provider order for scheduled queue work.
+
+    BytePlus/DeepSeek gets first use of the free daily allowance. Once every
+    configured endpoint reaches the 90% rotation threshold, queue work moves
+    to the local Ollama gateway. The normal cloud fallback chain is deliberately
+    not used here: it could turn a free-budget pause into an untracked charge.
+    The existing usage meter compares the stored UTC day, so BytePlus resumes
+    automatically at the next UTC midnight (08:00 SGT).
+    """
+    if getattr(settings, "byteplus_api_key", ""):
+        out = _call_byteplus_chain(prompt, settings, tier, max_tokens, json_mode,
+                                   free_only=True)
+        if out:
+            return out
+    try:
+        if local_llm_available(settings):
+            return _call_local(prompt, settings, max_tokens, tier, json_mode)
+    except Exception:
+        _local_probe.update(ts=time.time(), ok=False)
     return None
 
 

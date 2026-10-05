@@ -13,13 +13,13 @@ import json
 
 from ai_investing.config import settings
 from ai_investing.data.inference_control import DeferredInference, InferenceControl
-from ai_investing.data.news import _call_llm_uncached, llm_fingerprint
+from ai_investing.data.news import _call_llm_queue_uncached, llm_fingerprint
 from ai_investing.brain import events as events_mod
 from ai_investing.brain.graph import KnowledgeGraph
 
 
 def _run_job(job: dict):
-    return _call_llm_uncached(
+    return _call_llm_queue_uncached(
         job["prompt"], settings,
         max_tokens=int(job["max_tokens"]),
         tier=job["tier"],

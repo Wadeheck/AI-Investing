@@ -29,6 +29,20 @@ The queue is therefore serial by design. “Batching” refers to keeping severa
 headlines in one prompt and keeping the model resident across a drain; it does
 not mean sending many simultaneous requests.
 
+### Provider budget routing
+
+Scheduled queue jobs use the configured BytePlus DeepSeek endpoints first. The
+metered free allowance is currently 5,000,000 tokens per endpoint per UTC day.
+When every endpoint reaches 90% of that allowance, the queue stops using
+BytePlus and sends subsequent work to the local Ollama gateway instead. This is
+a strict queue-drain cutoff, not merely a preference: the queue never enters the
+90%-100% band where a provider charge could begin.
+
+The usage meter compares its stored day with the current UTC date. BytePlus
+therefore becomes eligible again automatically at 00:00 UTC, which is 08:00
+Singapore/Kuala Lumpur time. If the local gateway is unavailable during the
+fallback period, the job remains durable and is retried at the next release.
+
 ## Schedule and power-off behavior
 
 `deploy/systemd/ai-investing-llm-queue.timer` releases the queue at:
