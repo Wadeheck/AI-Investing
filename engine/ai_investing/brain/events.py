@@ -23,12 +23,19 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ai_investing.data.news import _call_llm, _extract_json, llm_ready
+from ai_investing.data.inference_control import DeferredInference
 
 EVENT_TYPES = ["monetary_policy", "fiscal_policy", "trade_policy", "regulation",
                "geopolitics", "earnings", "supply_chain", "commodity", "technology",
                "market_flow", "rumor_hype", "other"]
 
 EMOTIONS = ["fear", "greed", "euphoria", "panic", "anger", "hope", "complacency", "neutral"]
+
+
+class DeferredEvents(list):
+    """Extraction result whose LLM work was persisted but not sent yet."""
+
+    deferred = True
 
 # --- the curated tier ------------------------------------------------------
 #
@@ -633,7 +640,9 @@ genuinely unrelated to its quantity, still answer, and set "weak": true.
 
 Return ONLY JSON: {{"signs": [{{"n": <number>, "direction": "more"|"less", "weak": <bool>}}]}}"""
             raw = _call_llm(prompt, settings, max_tokens=1200, tier="smart",
-                            json_mode=True)
+                            json_mode=True, task="event_sign_resolution")
+            if isinstance(raw, DeferredInference):
+                return DeferredEvents()
             parsed = _extract_json(raw or "") or {}
             for rec in (parsed.get("signs") or []):
                 try:
@@ -659,6 +668,14 @@ Return ONLY JSON: {{"signs": [{{"n": <number>, "direction": "more"|"less", "weak
             else:
                 ev["unsigned"] = True     # counted by scripts/daily_status.py
     return events
+
+
+def _skipped_indices(parsed, count):
+    """Explicit no-event judgments satisfy coverage; omissions do not."""
+    skipped = (parsed or {}).get("skipped", [])
+    if not isinstance(skipped, list):
+        return set()
+    return {n for n in skipped if type(n) is int and 1 <= n <= count}
 
 
 def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
@@ -688,7 +705,9 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
         for i in range(0, len(headlines), _BATCH):
             chunk = headlines[i:i + _BATCH]
             raw = _call_llm(_prompt(chunk, node_ids, graph), settings, max_tokens=6000,
-                            tier="fast", json_mode=True)
+                            tier="fast", json_mode=True, task="event_extraction")
+            if isinstance(raw, DeferredInference):
+                return DeferredEvents()
             parsed = _extract_json(raw or "")
             got = (_attach_headline(parsed["events"], chunk)
                    if parsed and isinstance(parsed.get("events"), list) else [])
@@ -699,7 +718,7 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
             # skipped ones are exactly the boring-looking stories the
             # noise-rescue loop needs scored (source_learning.py): a story can
             # be JUDGED noise, but it must never be silently unjudged.
-            covered = set()
+            covered = _skipped_indices(parsed, len(chunk))
             for ev in got:
                 try:
                     covered.add(int(ev.get("n", 0)))
@@ -708,12 +727,14 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
             missing = [h for j, h in enumerate(chunk, 1) if j not in covered]
             if missing:                      # one focused retry on just the misses
                 raw = _call_llm(_prompt(missing, node_ids, graph), settings,
-                                max_tokens=6000, tier="fast", json_mode=True)
+                                max_tokens=6000, tier="fast", json_mode=True, task="event_extraction")
+                if isinstance(raw, DeferredInference):
+                    return DeferredEvents()
                 parsed = _extract_json(raw or "")
                 got = (_attach_headline(parsed["events"], missing)
                        if parsed and isinstance(parsed.get("events"), list) else [])
                 events.extend(got)
-                covered = set()
+                covered = _skipped_indices(parsed, len(missing))
                 for ev in got:
                     try:
                         covered.add(int(ev.get("n", 0)))
@@ -740,8 +761,6 @@ def extract_events(headlines: list[dict], graph, settings) -> list[dict]:
                             "manipulation_likelihood": 0.2, "emotion": "neutral",
                             "emotion_intensity": 0.1, "coverage_fallback": True,
                         })
-        if not events:
-            events = None
     if events is None:
         events = _fallback_extract(headlines, graph)
     else:

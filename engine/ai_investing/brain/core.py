@@ -60,9 +60,31 @@ class Brain:
         # already known is remembered in brain.db and skipped. Busy cycles cap
         # the batch; the backlog stays undigested and returns next cycle.
         fresh, seen = self.store.filter_new(headlines)
-        new_heads, backlog = fresh[:30], max(0, len(fresh) - 30)
+        from ai_investing.data.inference_control import extraction_due, pending_headlines
+        queued = pending_headlines(self.settings, fresh)
+        fresh, _ = self.store.filter_new(queued)
+        # Another digester may have consumed a queued article in the meantime.
+        from ai_investing.brain.store import article_id
+        fresh_ids = {article_id(h.get("title", ""), h.get("source", "")) for h in fresh}
+        pending_headlines(self.settings, [h for h in queued if article_id(
+            h.get("title", ""), h.get("source", "")) not in fresh_ids], consumed=True)
+        curated = [h for h in fresh if events_mod.is_curated(h.get("source", ""))]
+        due = bool(fresh) and extraction_due(self.settings, curated=bool(curated))
+        new_heads = (curated + [h for h in fresh if h not in curated])[:30] if due else []
+        backlog = max(0, len(fresh) - len(new_heads))
         self.last_new_headlines = new_heads
         events = events_mod.extract_events(new_heads, self.graph, self.settings) if new_heads else []
+        inference_deferred = bool(getattr(events, "deferred", False))
+        if inference_deferred:
+            # The extractor persisted its request but did not send it. Keep the
+            # articles undigested so the next cycle can consume the cached
+            # result after the scheduled queue worker completes. Do not run the
+            # keyword floor, consult, integrity, or graph propagation on a
+            # partially-read batch.
+            new_heads = []
+            self.last_new_headlines = []
+            backlog = len(fresh)
+            events = []
 
         # YOUR VERDICTS, APPLIED BEFORE ANYTHING PROPAGATES (brain/consult.py).
         # A reading you disagreed with sends a damped impulse into the graph, so
@@ -81,7 +103,9 @@ class Brain:
 
         if events:
             self.store.save_events(events)
-        self.store.mark_digested(new_heads)
+        if not inference_deferred:
+            self.store.mark_digested(new_heads)
+            pending_headlines(self.settings, new_heads, consumed=True)
 
         # --- the CURATED lane, and it must run BEFORE propagation ------------
         #

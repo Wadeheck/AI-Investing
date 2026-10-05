@@ -88,6 +88,19 @@ for src in "$UNIT_SRC"/*.service "$UNIT_SRC"/*.timer; do
   fi
   installed=$((installed + 1))
 done
+# Optional drop-ins carry environment and operational overrides without
+# overwriting host-local edits in the primary unit files.
+while IFS= read -r -d '' src; do
+  rel="${src#"$UNIT_SRC/overrides/"}"
+  dst_dir="$UNIT_DST/$(dirname "$rel")"
+  mkdir -p "$dst_dir"
+  if [ "$REPO" = "$CANONICAL_REPO" ]; then
+    cp "$src" "$UNIT_DST/$rel"
+  else
+    sed "s|$CANONICAL_REPO|$REPO|g" "$src" > "$UNIT_DST/$rel"
+  fi
+  installed=$((installed + 1))
+done < <(find "$UNIT_SRC/overrides" -type f -name '*.conf' -print0 2>/dev/null)
 say "Installed $installed unit files into $UNIT_DST"
 [ "$REPO" = "$CANONICAL_REPO" ] || say "Rewrote the repo path from $CANONICAL_REPO to $REPO"
 

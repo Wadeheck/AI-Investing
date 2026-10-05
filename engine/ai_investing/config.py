@@ -414,6 +414,16 @@ class Settings:
     local_llm_model: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL", "qwen3.5:27b"))          # smart tier
     local_llm_model_fast: str = field(default_factory=lambda: _get("LOCAL_LLM_MODEL_FAST", "qwen3.5:9b"))   # per-cycle volume
     llm_prefer_local: bool = field(default_factory=lambda: _get_bool("LLM_PREFER_LOCAL", True))
+    # Queue provider work on the ProDesk and let the scheduled drain worker
+    # release it in controlled bursts. The Mac Mini/Ollama keep-alive policy is
+    # deliberately outside this setting and is configured on that host.
+    llm_queue_enabled: bool = field(default_factory=lambda: _get_bool("LLM_QUEUE_ENABLED", False))
+    llm_queue_lease_seconds: int = field(
+        default_factory=lambda: _get_int("LLM_QUEUE_LEASE_SECONDS", 900))
+    llm_queue_max_jobs: int = field(
+        default_factory=lambda: _get_int("LLM_QUEUE_MAX_JOBS", 0))
+    llm_queue_cache_hours: int = field(
+        default_factory=lambda: _get_int("LLM_QUEUE_CACHE_HOURS", 48))
     byteplus_api_key: str = field(default_factory=lambda: _get("BYTEPLUS_API_KEY", ""))
     byteplus_model_smart: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_SMART", "seed-2-0-pro-260328"))
     byteplus_model_fast: str = field(default_factory=lambda: _get("BYTEPLUS_LLM_FAST", "seed-2-0-mini-260428"))

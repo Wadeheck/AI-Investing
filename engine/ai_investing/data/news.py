@@ -569,10 +569,40 @@ def _call_local(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast
 
 def llm_ready(settings) -> bool:
     """Any brain-capable model reachable — a cloud key OR the free local server."""
+    # Queue mode must not probe the Mac Mini before creating work. The provider
+    # may be asleep or temporarily unavailable; the durable job is still valid
+    # and will be released by the scheduled drain worker.
+    if getattr(settings, "llm_queue_enabled", False):
+        return bool(settings.llm_available or getattr(settings, "local_llm_url", ""))
     return settings.llm_available or local_llm_available(settings)
 
 
+def llm_fingerprint(settings, tier: str, max_tokens: int, json_mode: bool) -> list:
+    """Provider/model settings that make an otherwise identical prompt differ."""
+    return [tier, max_tokens, json_mode] + [str(getattr(settings, k, "")) for k in (
+        "local_llm_url", "local_llm_model", "local_llm_model_fast", "llm_prefer_local",
+        "byteplus_model_fast", "byteplus_model_smart", "deepseek_model", "anthropic_model")]
+
+
 def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
+              json_mode: bool = False, task: str = "general") -> Optional[str]:
+    # Preserve the historical uncached path for ad-hoc/general prompts unless
+    # the scheduled queue is explicitly enabled. Named production tasks use
+    # the cache/gate even outside queue mode.
+    if task == "general" and not getattr(settings, "llm_queue_enabled", False):
+        return _call_llm_uncached(prompt, settings, max_tokens, tier, json_mode)
+    from ai_investing.data.inference_control import InferenceControl
+    control = InferenceControl(settings)
+    fingerprint = llm_fingerprint(settings, tier, max_tokens, json_mode)
+    try:
+        return control.call(task, fingerprint, prompt,
+            lambda: _call_llm_uncached(prompt, settings, max_tokens, tier, json_mode),
+            json_mode, max_tokens=max_tokens, tier=tier, settings=settings)
+    finally:
+        control.close()
+
+
+def _call_llm_uncached(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
               json_mode: bool = False) -> Optional[str]:
     """Route local-first when configured, with cloud fallback.
 
@@ -1400,7 +1430,7 @@ if it has none, it does not belong here at all. Order by market impact, biggest 
 Only include tickers that actually appear in the news. Flag pump-and-dump / meme /
 political-hype dynamics aggressively -- the system uses these to FADE hype."""
     return _extract_json(_call_llm(prompt, settings, max_tokens=1800, tier="fast",
-                                   json_mode=True) or "")
+                                   json_mode=True, task="asset_sentiment") or "")
 
 
 def _load_sentiment_cache(settings) -> dict:
@@ -1458,9 +1488,29 @@ def build_market_context(settings, assets, price_moves: Optional[dict] = None) -
 
     to_score = brain.last_new_headlines if brain is not None else headlines
     cache = _load_sentiment_cache(settings)
-    if to_score:
-        analysis = analyze_with_claude(to_score, symbols, settings)
+    pending = [h for h in cache.get("_pending", [])
+               if h.get("_sentiment_queued_at", time.time()) > time.time() - 86400]
+    from ai_investing.brain.store import article_id
+    known = {article_id(h.get("title", ""), h.get("source", "")) for h in pending}
+    for headline in to_score:
+        identity = article_id(headline.get("title", ""), headline.get("source", ""))
+        if identity not in known:
+            pending.append(dict(headline, _sentiment_queued_at=time.time()))
+            known.add(identity)
+    # Keep pending source text on disk before any request, including failures.
+    cache["_pending"] = pending
+    _save_sentiment_cache(settings, cache)
+    from ai_investing.data.inference_control import InferenceControl
+    control = InferenceControl(settings)
+    try:
+        score_due = bool(pending) and control.claim("asset_sentiment_batch",
+            max(0, float(os.getenv("LLM_SENTIMENT_INTERVAL_SECONDS", "1800"))))
+    finally:
+        control.close()
+    if score_due:
+        analysis = analyze_with_claude(pending[:60], symbols, settings)
         if analysis:
+            cache["_pending"] = pending[60:]
             now = time.time()
             cache["_briefing"] = {"text": analysis.get("briefing", ""), "ts": now}
             for sym, a in (analysis.get("assets") or {}).items():

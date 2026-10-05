@@ -19,6 +19,7 @@ RestartSec=20
 StandardOutput=append:/home/eugene/Projects/AI-Investing/data/chat.log
 StandardError=inherit
 Environment=PYTHONUNBUFFERED=1
+Environment=LLM_QUEUE_ENABLED=true
 
 [Install]
 WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Drain AI-Investing LLM queue at 08:00, 18:00 and 00:00 SGT
+
+[Timer]
+# The ProDesk host is configured for Asia/Singapore. Persistent=true turns a
+# missed window during scheduled power-off into one catch-up drain on boot.
+OnCalendar=*-*-* 08:00:00
+OnCalendar=*-*-* 18:00:00
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+Unit=ai-investing-llm-queue.service
+
+[Install]
+WantedBy=timers.target

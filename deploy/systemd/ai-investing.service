@@ -33,6 +33,7 @@ StartLimitBurst=0
 StandardOutput=append:/home/eugene/Projects/AI-Investing/data/engine.log
 StandardError=inherit
 Environment=PYTHONUNBUFFERED=1
+Environment=LLM_QUEUE_ENABLED=true
 
 [Install]
 WantedBy=default.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=AI-Investing scheduled LLM queue drain
+After=ai-investing.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/eugene/Projects/AI-Investing/engine
+# One request is released at a time by ai_investing.llm_queue. The queue is
+# durable, so a power loss or provider timeout requeues only the current job.
+ExecStart=/home/eugene/Projects/AI-Investing/.venv/bin/python -m ai_investing.llm_queue
+TimeoutStartSec=12h
+# A failed item is persisted for the next window; do not make systemd restart
+# the whole drain and duplicate pressure on the provider.
+SuccessExitStatus=0 1
+StandardOutput=append:/home/eugene/Projects/AI-Investing/data/llm_queue.log
+StandardError=inherit
+Environment=PYTHONUNBUFFERED=1
+Environment=LLM_QUEUE_ENABLED=true
