@@ -1,10 +1,15 @@
 # AI-Investing local LLM integration
 
-Updated: 2026-09-30
+Updated: 2026-10-05
 
 ## Purpose
 
-AI-Investing now uses the Mac mini's local Ollama models as its primary LLM provider. The paid BytePlus/DeepSeek path remains configured as a resilience fallback, so a Mac mini or Tailscale outage degrades the system rather than silently removing all news understanding.
+The Mac mini's local Ollama models remain available as the no-cost fallback,
+while the live ProDesk currently runs in immediate BytePlus-first mode. BytePlus
+is restricted to the metered free allowance; when all configured endpoints
+reach the 90% safety threshold, subsequent calls fall back synchronously to the
+Mac mini. The durable queue and its scheduled timer remain installed for future
+use, but the live engine/chat path is not currently deferred.
 
 The integration is for news sentiment, event tagging, hype detection, and global briefings. It does not replace the trading decision model, risk controls, broker integration, or paper/live-trading safeguards.
 
@@ -13,12 +18,18 @@ The integration is for news sentiment, event tagging, hype detection, and global
 The live ProDesk checkout is configured with these non-secret settings:
 
 ```text
-LLM_PREFER_LOCAL=true
+LLM_PREFER_LOCAL=false
 LOCAL_LLM_MODE=gateway
 LOCAL_LLM_URL=https://selfs-mac-mini.taila9c02b.ts.net
 LOCAL_LLM_MODEL=qwen3.5:27b
 LOCAL_LLM_MODEL_FAST=qwen3.5:9b
+LLM_DAILY_FREE_TOKENS=5000000
 ```
+
+The live engine and chat systemd overrides currently set
+`LLM_QUEUE_ENABLED=false`. The queue worker itself retains
+`LLM_QUEUE_ENABLED=true` so an existing backlog can be drained deliberately.
+The scheduled queue timer is disabled in the current immediate mode.
 
 `LOCAL_LLM_API_KEY` is present in the ProDesk `.env` and is intentionally not recorded here. The ProDesk `.env` is permission-restricted and the key is sent only as a bearer token over the private Tailscale path.
 
@@ -51,19 +62,44 @@ x-local-ai-task: event_tagging | sentiment | briefing
 
 The local provider is probed with a ten-minute cache to avoid unnecessary health traffic. Requests are non-streaming, use a low temperature, and suppress Qwen reasoning output so the useful answer is returned in `message.content`. Structured JSON requests retry without `response_format` if a model rejects that optional field.
 
-With `LLM_PREFER_LOCAL=true`, provider order is:
+In the current immediate mode, provider order is:
 
-1. Mac mini local gateway / Ollama.
-2. Direct DeepSeek, if `DEEPSEEK_API_KEY` is configured.
-3. BytePlus's configured SMART chain, whose live primary endpoint is the DeepSeek-V3.2 deployment, followed by its authorized failover endpoints.
-4. Anthropic, if configured.
-5. Neutral/keyword degradation when no provider is available.
+1. BytePlus's configured endpoint chain, while each request remains below the
+   90% free-budget safety threshold.
+2. Mac mini local gateway / Ollama once all eligible BytePlus endpoints reach
+   that threshold, or when BytePlus is unavailable.
+3. Neutral/keyword degradation when no provider is available.
 
-The ProDesk currently uses the BytePlus DeepSeek-V3.2 endpoint as its paid backup; it does not need a separate direct DeepSeek key. Cloud endpoint usage remains metered against the configured free allowance and is refused rather than allowed to cross the hard cap.
+The ProDesk currently uses the configured BytePlus DeepSeek-V3.2 and Dola-Seed
+endpoints. It does not use a direct DeepSeek key in this path. Cloud usage is
+metered per endpoint and the free-only gate prevents calls from entering the
+potentially billable 90%-100% band.
+
+The newly authorized DeepSeek-V4-Flash endpoint is not part of the live ProDesk
+chain until its generated endpoint ID is added to the configuration.
 
 ## Mac mini queue path
 
-The Mac mini local-ai-system project provides the authenticated gateway and a PostgreSQL-backed queue worker. AI-Investing requests are tagged with the project and task headers above so the gateway can apply the correct routing and audit them.
+The Mac mini local-ai-system project provides the authenticated gateway and a
+PostgreSQL-backed queue worker. AI-Investing requests are tagged with the
+project and task headers above so the gateway can apply the correct routing and
+audit them. In immediate mode, AI-Investing calls this gateway synchronously;
+the ProDesk-side SQLite queue remains available for a later scheduled mode.
+
+## 2026-10-05 operational update
+
+- Changed the live engine/chat path from deferred queue release to immediate
+  inference.
+- Reused the queue's free-only BytePlus gate for immediate calls, with local
+  fallback at the 90% threshold.
+- Started a one-off serial drain for the accumulated queue; it continues in the
+  background while immediate calls remain enabled.
+- Disabled the scheduled queue timer without deleting its service or timer
+  units.
+- Verified new event extraction and sign-resolution calls were recorded as
+  `inferred`, not `queued`.
+- At verification, ProDesk's local usage meter recorded 190,625 DeepSeek-V3.2
+  tokens and 280,684 Dola-Seed tokens for the UTC day.
 
 The verified service layout is:
 

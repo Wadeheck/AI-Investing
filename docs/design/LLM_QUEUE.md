@@ -17,7 +17,7 @@ Mini power policy are intentionally outside this project.
 3. `ai_investing.llm_queue` materializes every pending headline batch before a
    drain. Materialization only writes SQLite rows; it does not contact an LLM.
 4. The worker claims one job at a time, preferring fast-tier work, and sends it
-   through the existing local-first provider chain.
+   through the configured free-budget provider path.
 5. Successful JSON responses are written to the normal inference cache for 48
    hours. A later engine cycle consumes the cached result and marks the source
    headlines digested.
@@ -31,12 +31,20 @@ not mean sending many simultaneous requests.
 
 ### Provider budget routing
 
-Scheduled queue jobs use the configured BytePlus DeepSeek endpoints first. The
-metered free allowance is currently 5,000,000 tokens per endpoint per UTC day.
-When every endpoint reaches 90% of that allowance, the queue stops using
-BytePlus and sends subsequent work to the local Ollama gateway instead. This is
-a strict queue-drain cutoff, not merely a preference: the queue never enters the
-90%-100% band where a provider charge could begin.
+Scheduled queue jobs use the configured BytePlus endpoints first. The metered
+free allowance is currently 5,000,000 tokens per endpoint per UTC day. The
+worker rotates among endpoints that are below 90%; when no endpoint can accept
+the request without entering the 90%-100% band, it sends the work to the local
+Ollama gateway instead. This is a strict cost gate, not merely a preference.
+
+### Immediate/free-flow mode
+
+The queue is also retained as an optional safety net while the live engine runs
+immediately. Set `LLM_QUEUE_ENABLED=false` for the engine and chat services and
+`LLM_PREFER_LOCAL=false`. Immediate calls reuse the same free-only BytePlus
+provider path synchronously, then fall back to local Ollama at the 90% cutoff.
+This avoids deferral and scheduled release without creating a paid 90%-100%
+window. The queue worker remains available for a deliberate backlog drain.
 
 The usage meter compares its stored day with the current UTC date. BytePlus
 therefore becomes eligible again automatically at 00:00 UTC, which is 08:00
@@ -45,7 +53,8 @@ fallback period, the job remains durable and is retried at the next release.
 
 ## Schedule and power-off behavior
 
-`deploy/systemd/ai-investing-llm-queue.timer` releases the queue at:
+When enabled, `deploy/systemd/ai-investing-llm-queue.timer` releases the queue
+at:
 
 - 00:00 SGT
 - 08:00 SGT
@@ -60,6 +69,15 @@ failure.
 There is no per-window job cap by default. `LLM_QUEUE_MAX_JOBS` can be set when
 a deliberately bounded release is needed. The service has a 12-hour timeout;
 unfinished work remains queued for the next release window.
+
+For immediate mode, pause the timer without removing the queue units:
+
+```bash
+systemctl --user disable --now ai-investing-llm-queue.timer
+```
+
+Restore scheduled releases with `systemctl --user enable --now
+ai-investing-llm-queue.timer`.
 
 ## Operations
 
@@ -85,15 +103,20 @@ contacting a provider. The worker log is written to
 
 ## Configuration
 
-- `LLM_QUEUE_ENABLED=true` enables deferred provider work in the engine.
+- `LLM_QUEUE_ENABLED=true` enables deferred provider work in the engine. The
+  deployed queue service keeps this enabled so it can drain an existing
+  backlog; the live engine and chat services may override it to `false` for
+  immediate mode.
+- `LLM_PREFER_LOCAL=false` selects BytePlus-first free-flow routing. The local
+  gateway is used synchronously after the 90% free-budget cutoff.
 - `LLM_QUEUE_LEASE_SECONDS` controls recovery of a running job; the default is
   900 seconds.
 - `LLM_QUEUE_MAX_JOBS=0` means no per-run limit.
 - `LLM_QUEUE_CACHE_HOURS=48` controls the queued-result cache lifetime.
 
-The service unit sets `LLM_QUEUE_ENABLED=true`. Provider credentials and local
-gateway settings continue to come from the project `.env` through the normal
-configuration loader. No credentials or prompts are logged by the queue.
+Provider credentials and local gateway settings continue to come from the
+project `.env` through the normal configuration loader. No credentials or
+prompts are logged by the queue.
 
 ## Verification
 

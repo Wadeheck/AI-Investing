@@ -634,14 +634,16 @@ def _call_llm(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
 
 def _call_llm_uncached(prompt: str, settings, max_tokens: int = 1500, tier: str = "fast",
               json_mode: bool = False) -> Optional[str]:
-    """Route local-first when configured, with cloud fallback.
+    """Route an immediate request through the configured provider policy.
+
+    When queue mode is disabled but local preference is also disabled, reuse
+    the queue provider path synchronously: BytePlus may consume only the free
+    allowance, and local inference takes over at the 90% threshold. This keeps
+    the safety gate identical in free-flowing and scheduled operation.
 
     ``LLM_PREFER_LOCAL=true`` makes the local gateway the primary provider.
-    If it is unavailable or errors, the configured BytePlus SMART access point
-    (the live DeepSeek-V3.2 endpoint) is tried first as the requested backup,
-    followed by other configured providers. A direct DeepSeek key, when set,
-    is tried before that access point. Setting it false retains the prior
-    Anthropic > BytePlus > DeepSeek cloud-first behavior.
+    With it false, immediate calls use the same free-only BytePlus path as the
+    queue and then fall back to local inference at the 90% threshold.
     """
     def _local():
         if not local_llm_available(settings):
@@ -651,6 +653,9 @@ def _call_llm_uncached(prompt: str, settings, max_tokens: int = 1500, tier: str 
         except Exception:
             _local_probe.update(ts=time.time(), ok=False)   # re-probe later
             return None
+
+    if not settings.llm_prefer_local:
+        return _call_llm_queue_uncached(prompt, settings, max_tokens, tier, json_mode)
 
     if settings.llm_prefer_local:
         out = _local()
