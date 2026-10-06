@@ -37,6 +37,16 @@ worker rotates among endpoints that are below 90%; when no endpoint can accept
 the request without entering the 90%-100% band, it sends the work to the local
 Ollama gateway instead. This is a strict cost gate, not merely a preference.
 
+The active ProDesk strategy intentionally contains only two endpoints:
+
+- Fast work: Dola-Seed-2.0-pro, then DeepSeek-V3.2.
+- Smart work: DeepSeek-V3.2, then Dola-Seed-2.0-pro.
+
+Therefore Dola reaching 90% moves fast work to DeepSeek while DeepSeek still
+has free capacity. Local Ollama is used only after both endpoints reach 90% (or
+when both are unavailable). Other authorized BytePlus endpoints are not part of
+this active strategy.
+
 ### Immediate/free-flow mode
 
 The queue is also retained as an optional safety net while the live engine runs

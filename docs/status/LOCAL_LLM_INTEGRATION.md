@@ -70,10 +70,14 @@ In the current immediate mode, provider order is:
    that threshold, or when BytePlus is unavailable.
 3. Neutral/keyword degradation when no provider is available.
 
-The ProDesk currently uses the configured BytePlus DeepSeek-V3.2 and Dola-Seed
-endpoints. It does not use a direct DeepSeek key in this path. Cloud usage is
-metered per endpoint and the free-only gate prevents calls from entering the
-potentially billable 90%-100% band.
+The ProDesk currently uses only two configured BytePlus endpoints in this path:
+Dola-Seed-2.0-pro for fast work with DeepSeek-V3.2 as fallback, and
+DeepSeek-V3.2 for smart work with Dola-Seed-2.0-pro as fallback. If one reaches
+90% while the other remains below 90%, routing moves to the remaining endpoint.
+The local gateway is used only after both reach 90% (or both are unavailable).
+It does not use a direct DeepSeek key in this path. Cloud usage is metered per
+endpoint and the free-only gate prevents calls from entering the potentially
+billable 90%-100% band.
 
 The newly authorized DeepSeek-V4-Flash endpoint is not part of the live ProDesk
 chain until its generated endpoint ID is added to the configuration.
