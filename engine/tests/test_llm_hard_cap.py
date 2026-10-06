@@ -132,6 +132,36 @@ def test_preference_order_survives_while_there_is_room():
         assert spy.calls == ["vgxfw"], spy.calls
 
 
+def test_free_only_moves_from_dola_to_deepseek_at_90_percent():
+    """The immediate/queue-safe path uses DeepSeek before local fallback."""
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _Settings(tmp, ("dola", "deepseek"))
+        _meter(tmp, {"dola": 4_500_000, "deepseek": 100_000})
+        spy = _Spy()
+        p = _Patch().attr(news, "_call_byteplus", spy)
+        try:
+            out = news._call_byteplus_chain(
+                "prompt", s, "fast", 1000, False, free_only=True)
+        finally:
+            p.undo()
+        assert out and spy.calls == ["deepseek"], spy.calls
+
+
+def test_free_only_refuses_byteplus_when_both_named_endpoints_reach_90_percent():
+    """Once Dola and DeepSeek are both at 90%, the caller can use local Ollama."""
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _Settings(tmp, ("dola", "deepseek"))
+        _meter(tmp, {"dola": 4_500_000, "deepseek": 4_500_000})
+        spy = _Spy()
+        p = _Patch().attr(news, "_call_byteplus", spy)
+        try:
+            out = news._call_byteplus_chain(
+                "prompt", s, "fast", 1000, False, free_only=True)
+        finally:
+            p.undo()
+        assert out is None and spy.calls == [], spy.calls
+
+
 def test_the_call_that_would_cross_the_line_is_refused():
     """The meter is read BEFORE the call and written AFTER it, so a call must
     not be started that cannot fit inside what is left."""
