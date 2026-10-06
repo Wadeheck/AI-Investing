@@ -255,7 +255,26 @@ def extraction_due(settings, curated=False):
         return True
     control = InferenceControl(settings)
     try:
-        due = control.claim("feed_extraction", max(0, float(os.getenv("LLM_FEED_INTERVAL_SECONDS", "1200"))))
+        interval = max(0, float(os.getenv("LLM_FEED_INTERVAL_SECONDS", "1200")))
+        # A completed queue drain only fills the inference cache; the live brain
+        # still has to consume the durable headline rows. When immediate mode is
+        # active, let that consumer catch up at the engine cadence rather than
+        # leaving a multi-day backlog behind a normal 20-minute gate. The batch
+        # size remains capped by Brain.think(), and extraction is still claimed
+        # by SQLite, so this is serial bounded catch-up, not a request burst.
+        if not control.queue_enabled(settings):
+            try:
+                backlog = int(control.db.execute(
+                    "SELECT count(*) FROM pending_news").fetchone()[0])
+                threshold = max(1, int(float(os.getenv(
+                    "LLM_BACKLOG_CATCHUP_THRESHOLD", "120"))))
+                catchup = max(1.0, float(os.getenv(
+                    "LLM_BACKLOG_INTERVAL_SECONDS", "300")))
+                if backlog >= threshold:
+                    interval = min(interval, catchup)
+            except (sqlite3.Error, TypeError, ValueError):
+                pass
+        due = control.claim("feed_extraction", interval)
         if not due:
             control.record("feed_extraction", "deferred")
         return due

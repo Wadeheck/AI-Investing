@@ -1554,6 +1554,12 @@ class Runner:
                                                            ms.adv if ms else None, ms.vol if ms else None)
         filled = self.book.submit(order, eff)
         self._submitted.add(cid)
+        if filled.metadata.get("liquidity_cooldown"):
+            # The first venue rejection is journalled below. Subsequent cycles
+            # are local cooldown suppressions, not new venue attempts; do not
+            # manufacture a stream of duplicate rejection records.
+            print(f"  SKIP     {order.asset.symbol} — {filled.reason}")
+            return filled
         self.journal.record_order(filled, self.settings.live)
 
         slip = (eff / mid - 1) * 100 if mid else 0.0

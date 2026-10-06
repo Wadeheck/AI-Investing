@@ -605,10 +605,30 @@ def main() -> int:
             # overspend is `_over_free_budget`, which rotates an endpoint away on
             # 90% ACTUAL use and does not extrapolate at all.
             why = _why_not_paging(basis)
-            ok &= row("LLM free allowance", proj < 100 or why is not None,
+            # Immediate production routing is deliberately free-only: each
+            # endpoint is rotated away at 90%, and local inference takes over
+            # once both free endpoints reach that guard. A raw EOD projection
+            # above 100% therefore describes demand, not a paid overrun, when
+            # the local fallback is configured and reachable. Keep warning if
+            # the fallback is unavailable, because then the same forecast is a
+            # real continuity risk.
+            protected = False
+            if proj >= 100 and why is None:
+                try:
+                    from ai_investing.data.news import local_llm_available
+                    _cfg = _S() if "_S" in locals() else None
+                    protected = bool(_cfg and not _cfg.llm_prefer_local
+                                     and local_llm_available(_cfg))
+                except Exception:
+                    protected = False
+            allowance_ok = proj < 100 or why is not None or protected
+            protection_note = ("; free-only 90% gate -> local (gateway healthy)"
+                               if protected else "")
+            ok &= row("LLM free allowance", allowance_ok,
                       f"{', '.join(parts) or 'unused'} of {cap // 1_000_000}M/day each"
                       f" — busiest projects to {proj:.0f}% by day end ({basis}"
-                      f"{'' if why is None else ', not alerting: ' + why})")
+                      f"{'' if why is None else ', not alerting: ' + why})"
+                      f"{protection_note}")
             # A REFUSAL IS THE CAP WORKING — and the brain going blind at the
             # same time. The row above reports SPEND; this one reports what the
             # cap cost: calls the chain turned away rather than bill for, after

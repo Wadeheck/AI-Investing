@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from datetime import datetime, timezone
 
 from ai_investing.brokers.base import BrokerAdapter
@@ -97,6 +98,18 @@ SHORTS_REFUSED = ("shared account: stock shorts are disabled — a short is "
 # threshold, not a timeout: nothing is ever abandoned on age alone, because an
 # abandoned claim is exactly the permanent drift this machinery exists to stop.
 PENDING_WARN_SECONDS = float(os.environ.get("SHARED_PENDING_WARN_SECONDS", "7200"))
+# Longbridge code 603059 means the venue has no opposing liquidity for a market
+# order. Retrying the same exit every five-minute cycle cannot create a buyer;
+# it only fills the logs and repeatedly asks the venue to reject it. Keep the
+# position and thesis intact, but suppress external retries for a bounded period.
+LIQUIDITY_REJECT_COOLDOWN_SECONDS = float(
+    os.environ.get("ILLIQUID_SELL_COOLDOWN_SECONDS", "3600"))
+
+
+def _is_liquidity_rejection(reason: str) -> bool:
+    text = str(reason or "").lower()
+    return ("603059" in text or "counterpart liquidity" in text
+            or "market orders are not supported" in text)
 
 
 def routes_to_venue(asset, base_currency: str = "USD", lots=None) -> bool:
@@ -194,6 +207,7 @@ class BookBroker(BrokerAdapter):
         # against an account holding none, and halted the engine. Simulated-ness
         # is a fact about how a position was filled, not about its market today.
         self.sim_keys: set[str] = set(sim_keys or [])
+        self._liquidity_cooldowns: dict[str, float] = {}
 
     # -- the BrokerAdapter surface ------------------------------------------
     def get_positions(self) -> dict[str, Position]:
@@ -275,6 +289,7 @@ class BookBroker(BrokerAdapter):
         return {k: p for k, p in self.get_positions().items() if k not in self.sim_keys}
 
     def submit(self, order: Order, price: float) -> Order:
+        key = order.asset.key
         if order.qty <= 0 or price <= 0 or not math.isfinite(price):
             order.status = OrderStatus.REJECTED
             order.reason = (order.reason + " | invalid price/qty").strip(" |")
@@ -296,7 +311,20 @@ class BookBroker(BrokerAdapter):
                 or not routes_to_venue(order.asset, self.base_currency, self.lots)
                 or closing_simulated):
             return self._simulate(order, price)
-        return self._submit_stock(order, price)
+        if order.side is Side.SELL:
+            until = self._liquidity_cooldowns.get(key, 0.0)
+            if until > time.time():
+                order.status = OrderStatus.REJECTED
+                order.reason = (order.reason + " | venue liquidity cooldown until "
+                                + datetime.fromtimestamp(until, timezone.utc).isoformat()).strip(" |")
+                order.metadata["liquidity_cooldown"] = True
+                return order
+            self._liquidity_cooldowns.pop(key, None)
+        result = self._submit_stock(order, price)
+        if result.status is OrderStatus.REJECTED and _is_liquidity_rejection(result.reason):
+            self._liquidity_cooldowns[key] = time.time() + max(
+                60.0, LIQUIDITY_REJECT_COOLDOWN_SECONDS)
+        return result
 
     # -- stocks: the real, shared venue -------------------------------------
     def _submit_stock(self, order: Order, price: float) -> Order:

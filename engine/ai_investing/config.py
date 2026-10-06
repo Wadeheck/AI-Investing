@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def _running_under_test() -> bool:
@@ -556,6 +557,27 @@ class Settings:
     breaker_path: str = field(default_factory=lambda: _get("BREAKER_PATH", str(PROJECT_ROOT / "data" / "breaker.json")))
     heartbeat_path: str = field(default_factory=lambda: _get("HEARTBEAT_PATH", str(PROJECT_ROOT / "data" / "heartbeat.json")))
     user_views_path: str = field(default_factory=lambda: _get("USER_VIEWS_PATH", str(PROJECT_ROOT / "data" / "views.json")))
+
+    def __post_init__(self) -> None:
+        """Remove explicitly retired sources from both polling and health checks.
+
+        A source that still answers HTTP but has stopped publishing cannot be
+        repaired by retrying it. Keeping it configured replays its old cache,
+        consumes a slot in the round-robin feed window, and produces the same
+        warning forever. Operators can retire one by host or exact URL without
+        replacing the whole NEWS_RSS list.
+        """
+        disabled = {item.strip().lower().rstrip("/")
+                    for item in _get_list("NEWS_RSS_DISABLED", [])}
+        if not disabled:
+            return
+
+        def active(feed: str) -> bool:
+            raw = str(feed).strip()
+            host = (urlsplit(raw).hostname or "").lower().removeprefix("www.")
+            return raw.lower().rstrip("/") not in disabled and host not in disabled
+
+        self.news_rss = [feed for feed in self.news_rss if active(feed)]
 
     @property
     def llm_available(self) -> bool:
